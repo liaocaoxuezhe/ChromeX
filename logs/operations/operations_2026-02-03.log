@@ -1,0 +1,1004 @@
+[2026-02-03 11:15:17.982] CONNECTION: SERVER_START | ws://localhost:8765
+[2026-02-03 11:15:35.599] CONNECTION: CONNECT | 地址: ('::1', 60094, 0, 0)
+[2026-02-03 11:15:40.974] CONNECTION: CONNECT | 地址: ('::1', 60147, 0, 0)
+[2026-02-03 11:17:24.449] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095699,1827095718, targetTabId=null)
+------------------------------------------------------------
+[2026-02-03 11:17:29.226] OPERATION: browser_manage_tab
+  Arguments: {'action': 'new', 'url': 'https://www.apple.com'}
+  Result: 已创建新标签页 (ID: 1827095724)
+------------------------------------------------------------
+[2026-02-03 11:17:34.023] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 11:17:37.896] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095724,1827095699,1827095718,1827095721, targetTabId=null)
+------------------------------------------------------------
+[2026-02-03 11:17:44.876] OPERATION: browser_wait
+  Arguments: {'seconds': 3}
+  Result: 已等待 3 秒
+------------------------------------------------------------
+[2026-02-03 11:17:51.926] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095724,1827095699,1827095718,1827095721, targetTabId=null)
+------------------------------------------------------------
+[2026-02-03 11:17:54.861] OPERATION: browser_get_tabs
+  Arguments: {}
+  Result: 共 6 个标签页，1 个窗口:
+------------------------------------------------------------
+[2026-02-03 11:17:58.205] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 11:18:05.863] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://www.apple.com/iphone/'}
+  Result: 已导航到: https://www.apple.com/iphone/ (状态: complete)
+------------------------------------------------------------
+[2026-02-03 11:18:08.319] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095724,1827095699,1827095718,1827095721, targetTabId=null)
+------------------------------------------------------------
+[2026-02-03 11:18:11.243] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 11:18:14.764] OPERATION: browser_manage_tab
+  Arguments: {'action': 'close', 'tab_index': 5}
+  Result: 已关闭标签页
+------------------------------------------------------------
+[2026-02-03 11:18:18.085] OPERATION: browser_manage_tab
+  Arguments: {'action': 'new', 'url': 'https://www.apple.com/iphone/'}
+  Result: 已创建新标签页 (ID: 1827095728)
+------------------------------------------------------------
+[2026-02-03 11:18:23.795] OPERATION: browser_wait
+  Arguments: {'seconds': 3}
+  Result: 已等待 3 秒
+------------------------------------------------------------
+[2026-02-03 11:18:26.283] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 11:18:34.492] OPERATION: browser_wait
+  Arguments: {'seconds': 5}
+  Result: 已等待 5 秒
+------------------------------------------------------------
+[2026-02-03 11:18:38.715] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 11:18:41.639] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095728,1827095699,1827095718,1827095721, targetTabId=null)
+------------------------------------------------------------
+[2026-02-03 11:18:44.453] OPERATION: browser_manage_tab
+  Arguments: {'action': 'switch', 'tab_index': 1}
+  Result: 已切换到标签页 [1]
+------------------------------------------------------------
+[2026-02-03 11:18:47.268] OPERATION: browser_get_tabs
+  Arguments: {}
+  Result: 共 6 个标签页，1 个窗口:
+------------------------------------------------------------
+[2026-02-03 11:18:50.577] OPERATION: browser_manage_tab
+  Arguments: {'action': 'switch', 'tab_index': 5}
+  Result: 已切换到标签页 [5]
+------------------------------------------------------------
+[2026-02-03 11:18:52.772] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 11:18:57.785] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://www.apple.com/iphone/'}
+  Result: 已导航到: https://www.apple.com/iphone/ (状态: complete)
+------------------------------------------------------------
+[2026-02-03 11:19:00.109] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 11:19:02.886] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095728,1827095699,1827095718,1827095721, targetTabId=null)
+------------------------------------------------------------
+[2026-02-03 11:26:14.120] CONNECTION: CONNECT | 地址: ('::1', 51263, 0, 0)
+[2026-02-03 11:26:24.532] CONNECTION: SERVER_START | ws://localhost:8765
+[2026-02-03 11:26:25.034] CONNECTION: CONNECT | 地址: ('::1', 51429, 0, 0)
+[2026-02-03 11:26:43.866] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://www.apple.com'}
+  Result: 已导航到: https://www.apple.com (状态: complete)
+------------------------------------------------------------
+[2026-02-03 11:26:50.163] OPERATION: browser_get_state
+  Arguments: {'include_screenshot': True, 'include_dom': True}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095699,1827095718,1827095721, targetTabId=null, 总共 5 个标签页)
+------------------------------------------------------------
+[2026-02-03 11:26:56.453] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://www.apple.com/iphone/'}
+  Result: 已导航到: https://www.apple.com/iphone/ (状态: complete)
+------------------------------------------------------------
+[2026-02-03 11:26:59.933] OPERATION: browser_get_state
+  Arguments: {'include_screenshot': True, 'include_dom': True}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095699,1827095718,1827095721, targetTabId=null, 总共 5 个标签页)
+------------------------------------------------------------
+[2026-02-03 11:27:03.874] OPERATION: browser_action_vision
+  Arguments: {'instruction': '点击页面上的 iPhone 17 Pro 链接或按钮'}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095699,1827095718,1827095721, targetTabId=null, 总共 5 个标签页)
+------------------------------------------------------------
+[2026-02-03 11:27:06.734] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 11:27:10.652] OPERATION: browser_get_tabs
+  Arguments: {}
+  Result: 共 5 个标签页，1 个窗口:
+------------------------------------------------------------
+[2026-02-03 11:27:23.768] OPERATION: browser_manage_tab
+  Arguments: {'action': 'switch', 'tab_index': 1}
+  Result: 已切换到标签页 [1]
+------------------------------------------------------------
+[2026-02-03 11:27:27.823] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095699,1827095718,1827095721, targetTabId=null, 总共 5 个标签页)
+------------------------------------------------------------
+[2026-02-03 11:28:05.013] CONNECTION: CONNECT | 地址: ('::1', 52651, 0, 0)
+[2026-02-03 11:37:19.224] CONNECTION: CONNECT | 地址: ('::1', 61334, 0, 0)
+[2026-02-03 11:37:20.036] CONNECTION: CONNECT | 地址: ('::1', 61362, 0, 0)
+[2026-02-03 11:37:36.814] CONNECTION: SERVER_START | ws://localhost:8765
+[2026-02-03 11:37:37.305] CONNECTION: CONNECT | 地址: ('::1', 61678, 0, 0)
+[2026-02-03 11:38:03.103] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://www.apple.com'}
+  Result: 已导航到: https://www.apple.com (状态: complete)
+------------------------------------------------------------
+[2026-02-03 11:38:13.160] OPERATION: browser_action_vision
+  Arguments: {'instruction': '点击 iPhone 菜单或链接，进入 iPhone 产品页面'}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095704,1827095699,1827095718,1827095721, targetTabId=null, 总共 5 个标签页)
+------------------------------------------------------------
+[2026-02-03 11:38:29.589] OPERATION: browser_get_state
+  Arguments: {'include_screenshot': True, 'include_dom': True}
+  ERROR: 执行出错: Extension 执行失败: 没有找到可调试的标签页 (excluded=1827095704,1827095699,1827095718,1827095721, targetTabId=null, 总共 5 个标签页)
+------------------------------------------------------------
+[2026-02-03 11:38:33.674] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 12:47:39.552] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 调试器附加失败: 尝试了 5 个标签页均不可调试。失败 IDs: [1827095699, 1827095718, 1827095721, 1827095753, 1827095737]
+------------------------------------------------------------
+[2026-02-03 12:47:56.380] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://www.apple.com.cn'}
+  Result: 已导航到: https://www.apple.com.cn (状态: complete)
+------------------------------------------------------------
+[2026-02-03 12:48:06.634] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 调试器附加失败: 尝试了 5 个标签页均不可调试。失败 IDs: [1827095699, 1827095718, 1827095721, 1827095753, 1827095737]
+------------------------------------------------------------
+[2026-02-03 12:48:09.040] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 12:48:11.434] OPERATION: browser_manage_tab
+  Arguments: {'action': 'switch', 'tab_index': 1}
+  Result: 已切换到标签页 [1]
+------------------------------------------------------------
+[2026-02-03 12:48:13.458] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 调试器附加失败: 尝试了 5 个标签页均不可调试。失败 IDs: [1827095699, 1827095718, 1827095721, 1827095753, 1827095737]
+------------------------------------------------------------
+[2026-02-03 12:48:16.507] OPERATION: browser_action_vision
+  Arguments: {'instruction': '点击页面上的 iPhone 菜单或链接，进入 iPhone 产品页面'}
+  ERROR: 执行出错: Extension 执行失败: 调试器附加失败: 尝试了 5 个标签页均不可调试。失败 IDs: [1827095699, 1827095718, 1827095721, 1827095753, 1827095737]
+------------------------------------------------------------
+[2026-02-03 12:48:26.861] OPERATION: browser_get_tabs
+  Arguments: {}
+  Result: 共 7 个标签页，1 个窗口:
+------------------------------------------------------------
+[2026-02-03 12:48:29.487] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 调试器附加失败: 尝试了 5 个标签页均不可调试。失败 IDs: [1827095699, 1827095718, 1827095721, 1827095753, 1827095737]
+------------------------------------------------------------
+[2026-02-03 12:48:31.758] OPERATION: browser_manage_tab
+  Arguments: {'action': 'close', 'tab_index': 5}
+  Result: 已关闭标签页
+------------------------------------------------------------
+[2026-02-03 12:48:33.544] OPERATION: browser_get_state
+  Arguments: {}
+  ERROR: 执行出错: Extension 执行失败: 调试器附加失败: 尝试了 5 个标签页均不可调试。失败 IDs: [1827095699, 1827095718, 1827095721, 1827095753, 1827095737]
+------------------------------------------------------------
+[2026-02-03 12:48:36.306] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 12:50:12.532] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 61678, 0, 0)
+[2026-02-03 12:50:12.533] CONNECTION: CONNECT | 地址: ('::1', 55137, 0, 0)
+[2026-02-03 12:50:13.546] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 55137, 0, 0)
+[2026-02-03 12:50:13.548] CONNECTION: CONNECT | 地址: ('::1', 55158, 0, 0)
+[2026-02-03 12:50:14.554] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 55158, 0, 0)
+[2026-02-03 12:50:14.556] CONNECTION: CONNECT | 地址: ('::1', 55192, 0, 0)
+[2026-02-03 12:50:15.563] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 55192, 0, 0)
+[2026-02-03 12:50:15.564] CONNECTION: CONNECT | 地址: ('::1', 55197, 0, 0)
+[2026-02-03 12:50:16.573] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 55197, 0, 0)
+[2026-02-03 12:50:16.605] CONNECTION: CONNECT | 地址: ('::1', 55227, 0, 0)
+[2026-02-03 12:50:17.612] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 55227, 0, 0)
+[2026-02-03 12:50:17.613] CONNECTION: CONNECT | 地址: ('::1', 55232, 0, 0)
+[2026-02-03 12:50:18.618] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 55232, 0, 0)
+[2026-02-03 12:50:18.618] CONNECTION: CONNECT | 地址: ('::1', 55261, 0, 0)
+[2026-02-03 12:50:19.622] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 55261, 0, 0)
+[2026-02-03 12:50:19.623] CONNECTION: CONNECT | 地址: ('::1', 55284, 0, 0)
+[2026-02-03 12:50:20.630] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 55284, 0, 0)
+[2026-02-03 12:50:20.631] CONNECTION: CONNECT | 地址: ('::1', 55323, 0, 0)
+[2026-02-03 12:50:21.637] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 55323, 0, 0)
+[2026-02-03 12:50:21.639] CONNECTION: CONNECT | 地址: ('::1', 55330, 0, 0)
+[2026-02-03 12:50:22.646] CONNECTION: CONNECTION_REPLACE | 旧连接: ('::1', 55330, 0, 0)
+[2026-02-03 12:50:22.647] CONNECTION: CONNECT | 地址: ('::1', 55362, 0, 0)
+[2026-02-03 12:50:45.521] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://www.apple.com'}
+  Result: 已导航到: https://www.apple.com (状态: complete)
+------------------------------------------------------------
+[2026-02-03 12:50:48.124] OPERATION: browser_get_state
+  Arguments: {}
+  Result: URL: https://www.apple.com/ | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 12:51:05.812] OPERATION: browser_action_vision
+  Arguments: {'instruction': '点击 "Shop iPhone" 按钮'}
+  Result: 视觉分析: 在页面的iPhone板块区域，找到了“Shop iPhone”按钮，点击该按钮的中心点位置。
+------------------------------------------------------------
+[2026-02-03 12:51:22.771] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 12:51:26.023] OPERATION: browser_get_state
+  Arguments: {}
+  Result: URL: https://www.apple.com/ | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 12:51:38.896] OPERATION: browser_click
+  Arguments: {'x': 1346, 'y': 942}
+  Result: 已点击坐标 (1346, 942)
+------------------------------------------------------------
+[2026-02-03 12:51:48.970] OPERATION: browser_wait
+  Arguments: {'seconds': 3}
+  Result: 已等待 3 秒
+------------------------------------------------------------
+[2026-02-03 12:51:52.575] OPERATION: browser_get_state
+  Arguments: {}
+  Result: URL: https://www.apple.com/shop/buy-iphone | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 12:52:10.024] OPERATION: browser_action_vision
+  Arguments: {'instruction': '点击 iPhone 17 Pro & iPhone 17 Pro Max 卡片的 "Buy" 按钮'}
+  Result: 视觉分析: 在页面第一个卡片（iPhone 17 Pro & iPhone 17 Pro Max）中找到蓝色的Buy按钮，点击该按钮的中心点。
+------------------------------------------------------------
+[2026-02-03 12:52:25.020] OPERATION: browser_wait
+  Arguments: {'seconds': 3}
+  Result: 已等待 3 秒
+------------------------------------------------------------
+[2026-02-03 12:52:29.443] OPERATION: browser_get_state
+  Arguments: {}
+  Result: URL: https://www.apple.com/shop/buy-iphone | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 12:52:48.084] OPERATION: browser_action_vision
+  Arguments: {'instruction': '点击 "iPhone 17 Pro Max" 选项卡'}
+  Result: 视觉分析: 在弹窗的顶部选项卡中找到“iPhone 17 Pro Max”，点击该选项卡的中心点
+------------------------------------------------------------
+[2026-02-03 12:53:02.468] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 12:53:27.905] OPERATION: browser_get_state
+  Arguments: {'include_dom': False}
+  Result: URL: https://www.apple.com/shop/buy-iphone | [图片]
+------------------------------------------------------------
+[2026-02-03 12:54:37.616] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://x.com/vista8'}
+  Result: 已导航到: https://x.com/vista8 (状态: complete)
+------------------------------------------------------------
+[2026-02-03 12:54:40.218] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  ERROR: 执行出错: Extension 执行失败: Debugger attach 失败 (tab=1827095846, url=https://x.com/vista8): Another debugger is already attached to the tab with id: 1827095846.
+------------------------------------------------------------
+[2026-02-03 12:54:42.849] OPERATION: browser_action_vision
+  Arguments: {'instruction': '滚动页面，查看当前加载的所有推文内容，记录每条推文的发布时间（注意日期显示格式，如"1月30日"或相对时间"X小时前"）。请返回看到的推文数量和大致日期范围。'}
+  ERROR: 执行出错: Extension 执行失败: Debugger attach 失败 (tab=1827095846, url=https://x.com/vista8): Another debugger is already attached to the tab with id: 1827095846.
+------------------------------------------------------------
+[2026-02-03 12:54:45.458] OPERATION: browser_manage_tab
+  Arguments: {'action': 'close', 'tab_index': 0}
+  Result: 已关闭标签页
+------------------------------------------------------------
+[2026-02-03 12:54:47.101] OPERATION: browser_manage_tab
+  Arguments: {'action': 'new', 'url': 'https://x.com/vista8'}
+  ERROR: 浏览器未连接: Chrome Extension 未连接。请确保扩展已加载并启用。
+------------------------------------------------------------
+[2026-02-03 12:54:48.988] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 12:55:23.603] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://x.com/vista8'}
+  ERROR: 浏览器未连接: Chrome Extension 未连接。请确保扩展已加载并启用。
+------------------------------------------------------------
+[2026-02-03 12:55:25.226] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 12:55:28.645] CONNECTION: CONNECT | 地址: ('::1', 61347, 0, 0)
+[2026-02-03 12:55:46.187] CONNECTION: SERVER_START | ws://localhost:8765
+[2026-02-03 12:55:46.673] CONNECTION: CONNECT | 地址: ('::1', 61681, 0, 0)
+[2026-02-03 12:55:59.281] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://x.com/vista8'}
+  Result: 已导航到: https://x.com/vista8 (状态: complete)
+------------------------------------------------------------
+[2026-02-03 12:56:01.353] OPERATION: browser_get_state
+  Arguments: {}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 12:56:09.306] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page1.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page1.md
+------------------------------------------------------------
+[2026-02-03 12:56:14.850] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 12:56:17.736] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page2.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page2.md
+------------------------------------------------------------
+[2026-02-03 12:56:20.227] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 12:56:22.998] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page3.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page3.md
+------------------------------------------------------------
+[2026-02-03 12:56:25.382] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 12:56:28.179] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page4.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page4.md
+------------------------------------------------------------
+[2026-02-03 12:56:30.954] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 12:56:33.429] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page5.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page5.md
+------------------------------------------------------------
+[2026-02-03 12:56:35.814] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 12:56:38.754] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page6.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page6.md
+------------------------------------------------------------
+[2026-02-03 12:56:41.237] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 12:56:43.784] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page7.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page7.md
+------------------------------------------------------------
+[2026-02-03 12:56:46.460] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 12:56:48.923] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page8.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page8.md
+------------------------------------------------------------
+[2026-02-03 12:56:51.338] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 12:56:54.607] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page9.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page9.md
+------------------------------------------------------------
+[2026-02-03 12:56:57.156] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 12:56:59.966] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page10.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page10.md
+------------------------------------------------------------
+[2026-02-03 12:57:02.815] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 1000}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 12:57:05.336] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page11.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page11.md
+------------------------------------------------------------
+[2026-02-03 12:57:07.991] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 1000}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 12:57:10.890] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page12.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page12.md
+------------------------------------------------------------
+[2026-02-03 12:57:12.957] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 1000}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 12:57:15.553] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page13.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page13.md
+------------------------------------------------------------
+[2026-02-03 12:57:18.297] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 1200}
+  Result: 已向下滚动 1200 像素
+------------------------------------------------------------
+[2026-02-03 12:57:20.804] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page14.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page14.md
+------------------------------------------------------------
+[2026-02-03 12:57:23.786] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 1200}
+  Result: 已向下滚动 1200 像素
+------------------------------------------------------------
+[2026-02-03 12:57:26.500] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page15.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page15.md
+------------------------------------------------------------
+[2026-02-03 12:57:29.507] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 1500}
+  Result: 已向下滚动 1500 像素
+------------------------------------------------------------
+[2026-02-03 12:57:32.182] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page16.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page16.md
+------------------------------------------------------------
+[2026-02-03 12:57:34.481] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 1500}
+  Result: 已向下滚动 1500 像素
+------------------------------------------------------------
+[2026-02-03 12:57:37.023] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page17.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page17.md
+------------------------------------------------------------
+[2026-02-03 12:57:39.676] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 1500}
+  Result: 已向下滚动 1500 像素
+------------------------------------------------------------
+[2026-02-03 12:57:42.325] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page18.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page18.md
+------------------------------------------------------------
+[2026-02-03 12:57:44.841] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 1500}
+  Result: 已向下滚动 1500 像素
+------------------------------------------------------------
+[2026-02-03 12:57:47.574] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page19.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page19.md
+------------------------------------------------------------
+[2026-02-03 12:57:49.993] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 2000}
+  Result: 已向下滚动 2000 像素
+------------------------------------------------------------
+[2026-02-03 12:57:53.114] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page20.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page20.md
+------------------------------------------------------------
+[2026-02-03 12:57:55.422] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 2000}
+  Result: 已向下滚动 2000 像素
+------------------------------------------------------------
+[2026-02-03 12:57:58.135] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page21.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page21.md
+------------------------------------------------------------
+[2026-02-03 12:58:00.476] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 2000}
+  Result: 已向下滚动 2000 像素
+------------------------------------------------------------
+[2026-02-03 12:58:02.867] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page22.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page22.md
+------------------------------------------------------------
+[2026-02-03 12:58:05.754] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 2000}
+  Result: 已向下滚动 2000 像素
+------------------------------------------------------------
+[2026-02-03 12:58:08.860] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page23.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page23.md
+------------------------------------------------------------
+[2026-02-03 12:58:11.438] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 2000}
+  Result: 已向下滚动 2000 像素
+------------------------------------------------------------
+[2026-02-03 12:58:14.345] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page24.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page24.md
+------------------------------------------------------------
+[2026-02-03 12:58:17.056] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 2000}
+  Result: 已向下滚动 2000 像素
+------------------------------------------------------------
+[2026-02-03 12:58:19.777] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page25.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page25.md
+------------------------------------------------------------
+[2026-02-03 12:59:14.609] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 3000}
+  Result: 已向下滚动 3000 像素
+------------------------------------------------------------
+[2026-02-03 12:59:20.799] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page26.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page26.md
+------------------------------------------------------------
+[2026-02-03 13:00:09.766] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://x.com/vista8'}
+  Result: 已导航到: https://x.com/vista8 (状态: complete)
+------------------------------------------------------------
+[2026-02-03 13:00:12.139] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  ERROR: 执行出错: Extension 执行失败: Debugger attach 失败 (tab=1827095886, url=https://x.com/vista8): Another debugger is already attached to the tab with id: 1827095886.
+------------------------------------------------------------
+[2026-02-03 13:00:14.235] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 13:00:15.911] OPERATION: browser_get_tabs
+  Arguments: {}
+  Result: 共 2 个标签页，1 个窗口:
+------------------------------------------------------------
+[2026-02-03 13:00:18.149] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  ERROR: 执行出错: Extension 执行失败: Debugger attach 失败 (tab=1827095886, url=https://x.com/vista8): Another debugger is already attached to the tab with id: 1827095886.
+------------------------------------------------------------
+[2026-02-03 13:00:20.248] OPERATION: browser_manage_tab
+  Arguments: {'action': 'close', 'tab_index': 1}
+  Result: 已关闭标签页
+------------------------------------------------------------
+[2026-02-03 13:00:23.408] OPERATION: browser_manage_tab
+  Arguments: {'action': 'new', 'url': 'https://x.com/vista8'}
+  Result: 已创建新标签页 (ID: 1827095888)
+------------------------------------------------------------
+[2026-02-03 13:00:28.111] OPERATION: browser_wait
+  Arguments: {'seconds': 3}
+  Result: 已等待 3 秒
+------------------------------------------------------------
+[2026-02-03 13:00:30.073] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:00:37.186] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page1.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page1.md
+------------------------------------------------------------
+[2026-02-03 13:00:40.388] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 13:00:44.774] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 13:00:47.412] OPERATION: browser_get_state
+  Arguments: {'include_screenshot': True, 'include_dom': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:00:52.607] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page2.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page2.md
+------------------------------------------------------------
+[2026-02-03 13:00:55.295] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 13:01:00.116] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 13:01:06.983] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:01:14.926] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page3.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page3.md
+------------------------------------------------------------
+[2026-02-03 13:01:18.418] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 13:01:27.487] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 13:01:31.045] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:01:38.590] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page4.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page4.md
+------------------------------------------------------------
+[2026-02-03 13:01:42.327] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 13:01:48.816] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 13:01:52.600] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:02:02.272] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page5.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page5.md
+------------------------------------------------------------
+[2026-02-03 13:02:06.327] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 13:02:14.294] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 13:02:18.742] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:02:25.427] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page6.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page6.md
+------------------------------------------------------------
+[2026-02-03 13:02:30.238] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 13:02:38.539] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 13:02:43.243] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:02:50.803] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page7.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page7.md
+------------------------------------------------------------
+[2026-02-03 13:02:55.976] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 13:03:06.757] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 13:03:13.779] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:03:23.624] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page8.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page8.md
+------------------------------------------------------------
+[2026-02-03 13:03:31.289] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 13:03:39.170] OPERATION: browser_wait
+  Arguments: {'seconds': 2}
+  Result: 已等待 2 秒
+------------------------------------------------------------
+[2026-02-03 13:03:45.065] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:03:56.185] OPERATION: browser_extract_content
+  Arguments: {'save_path': '/Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page9.md'}
+  Result: 已保存到: /Users/zhangyu/PycharmProjects/Link2Chrome/test/twitter_vista8_page9.md
+------------------------------------------------------------
+[2026-02-03 13:50:44.572] CONNECTION: SERVER_START | ws://localhost:8765
+[2026-02-03 13:50:47.227] CONNECTION: CONNECT | 地址: ('::1', 60723, 0, 0)
+[2026-02-03 13:51:25.219] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://x.com/vista8'}
+  Result: 已导航到: https://x.com/vista8 (状态: complete)
+------------------------------------------------------------
+[2026-02-03 13:51:27.437] OPERATION: browser_get_state
+  Arguments: {'include_screenshot': True, 'include_dom': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:51:29.970] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 800}
+  Result: 已向下滚动 800 像素
+------------------------------------------------------------
+[2026-02-03 13:51:31.522] OPERATION: browser_get_state
+  Arguments: {'include_screenshot': True, 'include_dom': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:51:33.317] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:51:35.523] OPERATION: browser_action_scroll
+  Arguments: {'direction': 'down', 'amount': 1000}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:37.275] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  Result: URL: https://x.com/vista8 | [图片] | DOM 结构:
+------------------------------------------------------------
+[2026-02-03 13:51:40.251] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:41.714] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:43.220] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:44.825] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:51:46.716] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:48.201] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:49.649] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:51.308] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:51:53.529] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:55.185] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:56.702] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:58.130] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:51:59.876] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:52:01.759] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:03.340] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:05.141] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:06.861] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:08.326] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:52:11.567] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:13.297] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:14.741] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:16.247] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:17.609] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:19.406] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:52:21.634] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:23.181] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:24.742] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:26.303] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:28.231] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:29.996] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:52:31.978] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:33.621] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:35.337] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:37.025] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:38.614] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:52:40.978] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:42.606] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:44.453] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:46.209] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:47.821] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:52:50.047] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:51.775] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:53.763] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:55.411] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:57.190] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:52:59.069] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:00.972] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:53:02.839] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:04.826] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:06.549] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:08.462] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:10.242] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:11.920] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:13.455] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:53:15.446] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:17.203] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:19.076] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:20.903] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:22.811] OPERATION: browser_extract_content
+  Arguments: {}
+  Result: # 向阳乔木 (@vista8) / X
+------------------------------------------------------------
+[2026-02-03 13:53:26.756] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:28.577] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:53:30.619] OPERATION: browser_action_scroll
+  Arguments: {'amount': 1000, 'direction': 'down'}
+  Result: 已向下滚动 1000 像素
+------------------------------------------------------------
+[2026-02-03 13:54:24.990] CONNECTION: SERVER_START | ws://localhost:8765
+[2026-02-03 13:54:36.175] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://x.com/vista8'}
+  ERROR: 浏览器未连接: Chrome Extension 未连接。请确保扩展已加载并启用。
+------------------------------------------------------------
+[2026-02-03 13:54:41.018] OPERATION: browser_diagnose
+  Arguments: {}
+  Result: === Link2Chrome 诊断 ===
+------------------------------------------------------------
+[2026-02-03 13:54:46.375] CONNECTION: CONNECT | 地址: ('::1', 65462, 0, 0)
+[2026-02-03 13:55:41.505] OPERATION: browser_action_navigate
+  Arguments: {'url': 'https://x.com/vista8'}
+  Result: 已导航到: https://x.com/vista8 (状态: complete)
+------------------------------------------------------------
+[2026-02-03 13:55:46.222] OPERATION: browser_wait
+  Arguments: {'seconds': 3}
+  Result: 已等待 3 秒
+------------------------------------------------------------
+[2026-02-03 13:55:48.341] OPERATION: browser_get_state
+  Arguments: {'include_dom': True, 'include_screenshot': True}
+  ERROR: 执行出错: Extension 执行失败: Debugger attach 失败 (tab=1827096032, url=https://x.com/vista8): Another debugger is already attached to the tab with id: 1827096032.
+------------------------------------------------------------
