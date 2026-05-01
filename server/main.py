@@ -1,13 +1,21 @@
 """
 Link2Chrome MCP Server
-通过 StdIO 提供 12 个 Browser Tools 给 Claude Code 使用
+通过 StdIO 提供 Browser Tools 给 Claude Code 使用
+Tool 定义集中在 server/tool_descriptions.py 中维护
 """
 
 import asyncio
-import base64
+import json
 import os
 import re
 import sys
+import time
+
+# 确保项目根目录在 Python 路径中（解决模块导入问题）
+_current_file = os.path.abspath(__file__)
+_project_root = os.path.dirname(os.path.dirname(_current_file))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from dotenv import load_dotenv
 from markdownify import markdownify as md
@@ -15,27 +23,35 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, ImageContent, Tool
 
-from server.ws_manager import WSManager
+from server.hub_client import HubClient
 from server.vision import VisionClient
 from server.dom_compressor import compress_dom
 from server.logger import setup_logging, get_logger, get_operation_logger
+from server.debugger_manager import DebuggerManager
+from server.retry_manager import VisionFallbackHandler, VisionTimeoutError
+from server.script_library import get_script
+from server.tool_descriptions import TOOL_DEFINITIONS
 
 # 加载环境变量
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # 设置日志系统
 log_level = os.getenv("LOG_LEVEL", "INFO")
-setup_logging(log_level=log_level)
+console_enabled = os.getenv("LOG_CONSOLE", "false").lower() in ("true", "1", "yes", "on")
+setup_logging(log_level=log_level, console_enabled=console_enabled)
 logger = get_logger()
 
 # 操作日志记录器
 op_logger = get_operation_logger()
 
 # 全局实例
-ws_manager = WSManager()
+ws_manager = HubClient()
 vision_client = None  # 延迟初始化
+debugger_manager = DebuggerManager(ws_manager=ws_manager)
+vision_fallback_handler = None  # 延迟初始化
 
 app = Server("local-browser")
+LOCAL_STORAGE_ROOT = os.path.join(_project_root, ".agent_browser_storage")
 
 
 def get_vision_client() -> VisionClient:
@@ -46,283 +62,25 @@ def get_vision_client() -> VisionClient:
     return vision_client
 
 
-# ==================== Tool 定义 ====================
+def get_vision_fallback_handler() -> VisionFallbackHandler:
+    """延迟初始化 Vision 降级处理器"""
+    global vision_fallback_handler
+    if vision_fallback_handler is None:
+        vision_fallback_handler = VisionFallbackHandler(ws_manager)
+    return vision_fallback_handler
+
+
+# ==================== Tool 定义（从 tool_descriptions.py 加载） ====================
 
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     return [
         Tool(
-            name="browser_get_state",
-            description=(
-                "获取当前浏览器状态：包括 URL、标题、截图和压缩 DOM 树。"
-                "用于了解用户当前正在浏览的页面内容和结构。"
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "include_screenshot": {
-                        "type": "boolean",
-                        "description": "是否包含截图（base64）。默认 true",
-                        "default": True,
-                    },
-                    "include_dom": {
-                        "type": "boolean",
-                        "description": "是否包含压缩 DOM 树。默认 true",
-                        "default": True,
-                    },
-                },
-            },
-        ),
-        Tool(
-            name="browser_action_vision",
-            description=(
-                "基于视觉模型执行浏览器操作。发送截图给 VLM，由模型分析页面并确定点击坐标。"
-                "适用于：点击按钮/链接、输入文字、与页面元素交互。"
-                "指令示例：'点击搜索框'、'点击登录按钮'、'在输入框中输入 hello'"
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "instruction": {
-                        "type": "string",
-                        "description": "自然语言操作指令，描述要执行的操作",
-                    },
-                },
-                "required": ["instruction"],
-            },
-        ),
-        Tool(
-            name="browser_action_navigate",
-            description="导航到指定 URL。会等待页面加载完成。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "要导航到的 URL",
-                    },
-                },
-                "required": ["url"],
-            },
-        ),
-        Tool(
-            name="browser_action_scroll",
-            description="滚动页面。支持上下滚动。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "direction": {
-                        "type": "string",
-                        "enum": ["up", "down"],
-                        "description": "滚动方向",
-                    },
-                    "amount": {
-                        "type": "integer",
-                        "description": "滚动像素数。默认 500",
-                        "default": 500,
-                    },
-                },
-                "required": ["direction"],
-            },
-        ),
-        Tool(
-            name="browser_manage_tab",
-            description=(
-                "管理浏览器标签页：新建、关闭、切换标签页，以及列出所有标签。"
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["new", "close", "switch", "list"],
-                        "description": "操作类型",
-                    },
-                    "tab_index": {
-                        "type": "integer",
-                        "description": "标签页索引（switch/close 时使用）",
-                    },
-                    "url": {
-                        "type": "string",
-                        "description": "新标签页的 URL（new 时使用，可选）",
-                    },
-                },
-                "required": ["action"],
-            },
-        ),
-        # ========== 新增 Tools ==========
-        Tool(
-            name="browser_click",
-            description=(
-                "直接点击页面上的指定坐标。支持 CSS 选择器定位或直接坐标。"
-                "不经过视觉模型，适用于已知坐标或选择器的场景。"
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "x": {
-                        "type": "number",
-                        "description": "点击的 X 坐标（CSS 像素）",
-                    },
-                    "y": {
-                        "type": "number",
-                        "description": "点击的 Y 坐标（CSS 像素）",
-                    },
-                    "selector": {
-                        "type": "string",
-                        "description": "CSS 选择器，自动定位元素中心并点击（与 x/y 二选一）",
-                    },
-                    "button": {
-                        "type": "string",
-                        "enum": ["left", "right", "middle"],
-                        "description": "鼠标按钮，默认 left",
-                    },
-                    "clickCount": {
-                        "type": "integer",
-                        "description": "点击次数，2 为双击。默认 1",
-                    },
-                },
-            },
-        ),
-        Tool(
-            name="browser_type",
-            description=(
-                "在当前聚焦的元素或指定选择器的元素中输入文本。"
-                "可先点击选择器定位，再输入。支持 clearFirst 清空已有内容。"
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": "要输入的文本内容",
-                    },
-                    "selector": {
-                        "type": "string",
-                        "description": "目标输入框的 CSS 选择器（可选，不填则输入到当前焦点元素）",
-                    },
-                    "clearFirst": {
-                        "type": "boolean",
-                        "description": "输入前是否先清空已有内容。默认 false",
-                    },
-                    "pressEnter": {
-                        "type": "boolean",
-                        "description": "输入后是否按回车键。默认 false",
-                    },
-                },
-                "required": ["text"],
-            },
-        ),
-        Tool(
-            name="browser_get_tabs",
-            description=(
-                "获取所有浏览器窗口中打开的全部标签页信息，"
-                "包括 URL、标题、是否活跃、是否固定等。"
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {},
-            },
-        ),
-        Tool(
-            name="browser_go_back",
-            description="浏览器后退到上一个页面（相当于点击后退按钮）。支持 forward 前进。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "forward": {
-                        "type": "boolean",
-                        "description": "设为 true 则前进而非后退。默认 false（后退）",
-                    },
-                },
-            },
-        ),
-        Tool(
-            name="browser_drag",
-            description=(
-                "在页面上执行拖拽操作：从起点坐标拖动到终点坐标。"
-                "适用于拖拽排序、滑块操作、拖放元素等场景。"
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "startX": {
-                        "type": "number",
-                        "description": "起点 X 坐标（CSS 像素）",
-                    },
-                    "startY": {
-                        "type": "number",
-                        "description": "起点 Y 坐标（CSS 像素）",
-                    },
-                    "endX": {
-                        "type": "number",
-                        "description": "终点 X 坐标（CSS 像素）",
-                    },
-                    "endY": {
-                        "type": "number",
-                        "description": "终点 Y 坐标（CSS 像素）",
-                    },
-                    "duration": {
-                        "type": "integer",
-                        "description": "拖拽持续时间（毫秒）。默认 500",
-                    },
-                },
-                "required": ["startX", "startY", "endX", "endY"],
-            },
-        ),
-        Tool(
-            name="browser_wait",
-            description=(
-                "等待指定条件满足：可以等待固定秒数、等待 CSS 选择器出现、"
-                "或等待页面中出现指定文本。"
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "seconds": {
-                        "type": "number",
-                        "description": "等待固定秒数",
-                    },
-                    "selector": {
-                        "type": "string",
-                        "description": "等待此 CSS 选择器的元素出现",
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "等待页面中出现此文本",
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "description": "等待超时时间（毫秒）。默认 10000",
-                    },
-                },
-            },
-        ),
-        Tool(
-            name="browser_extract_content",
-            description=(
-                "使用 @mozilla/readability 提取当前页面的正文内容，"
-                "转换为 Markdown 格式。可选保存到本地文件。"
-                "适用于保存文章、博客、文档等网页内容。"
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "save_path": {
-                        "type": "string",
-                        "description": "保存 Markdown 文件的路径（可选，不填则只返回内容）",
-                    },
-                },
-            },
-        ),
-        Tool(
-            name="browser_diagnose",
-            description="诊断浏览器连接状态：检查 Extension 版本、WS 连接、当前跟踪的标签页等。用于排查问题。",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-            },
-        ),
+            name=td["name"],
+            description=td["description"],
+            inputSchema=td["inputSchema"],
+        )
+        for td in TOOL_DEFINITIONS
     ]
 
 
@@ -332,34 +90,78 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]:
     logger.info(f"调用工具: {name}, 参数: {arguments}")
     try:
-        if name == "browser_get_state":
-            result = await tool_get_state(arguments)
-        elif name == "browser_action_vision":
-            result = await tool_action_vision(arguments)
-        elif name == "browser_action_navigate":
-            result = await tool_action_navigate(arguments)
-        elif name == "browser_action_scroll":
-            result = await tool_action_scroll(arguments)
-        elif name == "browser_manage_tab":
-            result = await tool_manage_tab(arguments)
-        elif name == "browser_click":
-            result = await tool_click(arguments)
-        elif name == "browser_type":
-            result = await tool_type(arguments)
-        elif name == "browser_get_tabs":
-            result = await tool_get_tabs(arguments)
-        elif name == "browser_go_back":
-            result = await tool_go_back(arguments)
-        elif name == "browser_drag":
-            result = await tool_drag(arguments)
-        elif name == "browser_wait":
-            result = await tool_wait(arguments)
-        elif name == "browser_extract_content":
-            result = await tool_extract_content(arguments)
-        elif name == "browser_diagnose":
-            result = await tool_diagnose(arguments)
-        else:
-            result = [TextContent(type="text", text=f"未知工具: {name}")]
+        async with ws_manager.operation(name):
+            if name == "browser_get_state":
+                result = await tool_get_state(arguments)
+            elif name == "browser_get_screenshot":
+                result = await tool_get_screenshot(arguments)
+            elif name == "browser_action_navigate":
+                result = await tool_action_navigate(arguments)
+            elif name == "browser_action_scroll":
+                result = await tool_action_scroll(arguments)
+            elif name == "browser_manage_tab":
+                result = await tool_manage_tab(arguments)
+            elif name == "browser_click":
+                result = await tool_click(arguments)
+            elif name == "browser_type":
+                result = await tool_type(arguments)
+            elif name == "browser_type_at_coord":
+                result = await tool_type_at_coord(arguments)
+            elif name == "browser_get_tabs":
+                result = await tool_get_tabs(arguments)
+            elif name == "browser_go_back":
+                result = await tool_go_back(arguments)
+            elif name == "browser_drag":
+                result = await tool_drag(arguments)
+            elif name == "browser_wait":
+                result = await tool_wait(arguments)
+            elif name == "browser_extract_content":
+                result = await tool_extract_content(arguments)
+            elif name == "browser_diagnose":
+                result = await tool_diagnose(arguments)
+            elif name == "browser_execute_script":
+                result = await tool_execute_script(arguments)
+            elif name == "browser_wait_for_condition":
+                result = await tool_wait_for_condition(arguments)
+            elif name == "browser_detach_debugger":
+                result = await tool_detach_debugger(arguments)
+            elif name == "browser_scroll_until":
+                result = await tool_scroll_until(arguments)
+            elif name == "browser_send_keys":
+                result = await tool_send_keys(arguments)
+            elif name == "browser_find_text":
+                result = await tool_find_text(arguments)
+            elif name == "browser_scrape_with_scroll":
+                result = await tool_scrape_with_scroll(arguments)
+            elif name in {
+                "browser_tabs_list",
+                "browser_tab_info",
+                "browser_tab_switch",
+                "browser_tab_new",
+                "browser_navigate",
+                "browser_screenshot",
+                "browser_wait",
+                "dom_overview",
+                "dom_query",
+                "dom_search",
+                "dom_structured_data",
+                "dom_element_detail",
+                "dom_wait_for",
+                "action_click",
+                "action_type",
+                "action_scroll",
+                "action_select",
+                "action_hover",
+                "action_press_key",
+                "action_fill_form",
+                "script_evaluate",
+                "file_write",
+                "file_read",
+                "file_list",
+            }:
+                result = await tool_agent_first(name, arguments)
+            else:
+                result = _json_content({"ok": False, "error": f"未知工具: {name}"})
 
         # 记录成功操作
         result_summary = _extract_result_summary(result)
@@ -370,17 +172,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
         error_msg = f"浏览器未连接: {e}"
         logger.error(f"Tool {name} 连接错误: {e}")
         op_logger.log_operation(name, arguments, error=error_msg)
-        return [TextContent(type="text", text=f"⚠️ {error_msg}")]
+        return _json_content({"ok": False, "error": error_msg})
     except TimeoutError as e:
         error_msg = f"操作超时: {e}"
         logger.error(f"Tool {name} 超时: {e}")
         op_logger.log_operation(name, arguments, error=error_msg)
-        return [TextContent(type="text", text=f"⚠️ {error_msg}")]
+        return _json_content({"ok": False, "error": error_msg})
     except Exception as e:
         error_msg = f"执行出错: {e}"
         logger.exception(f"Tool {name} 执行异常")
         op_logger.log_operation(name, arguments, error=error_msg)
-        return [TextContent(type="text", text=f"❌ {error_msg}")]
+        return _json_content({"ok": False, "error": error_msg})
 
 
 def _extract_result_summary(result: list) -> str:
@@ -401,9 +203,31 @@ def _extract_result_summary(result: list) -> str:
     return ' | '.join(summaries) if summaries else '执行完成'
 
 
+def _json_content(payload: object) -> list[TextContent]:
+    """Return a compact JSON tool response, matching the PRD's agent-first contract."""
+    return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2))]
+
+
+def _safe_storage_path(path: str) -> str:
+    normalized = os.path.normpath(path.lstrip("/"))
+    if normalized.startswith(".."):
+        raise ValueError("path must stay inside .agent_browser_storage")
+    return os.path.join(LOCAL_STORAGE_ROOT, normalized)
+
+
+def _jmespath_search(query: str, data: object) -> object:
+    try:
+        import jmespath
+    except ImportError as exc:
+        raise RuntimeError(
+            "jmespath is required for this operation. Run: "
+            "server/venv/bin/pip install -r server/requirements.txt"
+        ) from exc
+    return jmespath.search(query, data)
+
+
 async def tool_get_state(args: dict) -> list[TextContent | ImageContent]:
     """获取浏览器状态"""
-    include_screenshot = args.get("include_screenshot", True)
     include_dom = args.get("include_dom", True)
 
     results: list[TextContent | ImageContent] = []
@@ -425,19 +249,6 @@ async def tool_get_state(args: dict) -> list[TextContent | ImageContent]:
 
     results.append(TextContent(type="text", text=info_text))
 
-    # 截图
-    if include_screenshot:
-        screenshot_data = await ws_manager.send_command("screenshot")
-        image_b64 = screenshot_data.get("image", "")
-        if image_b64:
-            results.append(
-                ImageContent(
-                    type="image",
-                    data=image_b64,
-                    mimeType="image/jpeg",
-                )
-            )
-
     # DOM 树
     if include_dom:
         dom_data = await ws_manager.send_command("get_dom")
@@ -448,6 +259,23 @@ async def tool_get_state(args: dict) -> list[TextContent | ImageContent]:
         )
 
     return results
+
+
+async def tool_get_screenshot(args: dict) -> list[TextContent | ImageContent]:
+    """获取当前页面截图"""
+    screenshot_data = await ws_manager.send_command("screenshot")
+    image_b64 = screenshot_data.get("image", "")
+
+    if not image_b64:
+        return [TextContent(type="text", text="无法获取截图")]
+
+    return [
+        ImageContent(
+            type="image",
+            data=image_b64,
+            mimeType="image/jpeg",
+        )
+    ]
 
 
 async def tool_action_vision(args: dict) -> list[TextContent | ImageContent]:
@@ -467,18 +295,45 @@ async def tool_action_vision(args: dict) -> list[TextContent | ImageContent]:
     if not image_b64:
         return [TextContent(type="text", text="无法获取截图")]
 
-    # 2. 调用视觉模型
+    # 2. 调用视觉模型(带降级处理)
     vc = get_vision_client()
+    fallback_handler = get_vision_fallback_handler()
+
     # 截图实际像素尺寸 = client_size * DPR
     screenshot_w = int(client_w * dpr)
     screenshot_h = int(client_h * dpr)
 
-    action = await vc.analyze(
-        screenshot_b64=image_b64,
-        instruction=instruction,
-        viewport_width=screenshot_w,
-        viewport_height=screenshot_h,
-    )
+    try:
+        action = await vc.analyze(
+            screenshot_b64=image_b64,
+            instruction=instruction,
+            viewport_width=screenshot_w,
+            viewport_height=screenshot_h,
+        )
+    except VisionTimeoutError as e:
+        # Vision API 超时,尝试降级策略
+        logger.warning(f"Vision API 超时,尝试降级: {instruction}")
+        try:
+            fallback_result = await fallback_handler.handle_vision_timeout(instruction, e)
+            return [
+                TextContent(
+                    type="text",
+                    text=(
+                        f"⚠️ Vision API 超时,已使用降级策略\n"
+                        f"方法: {fallback_result['method']}\n"
+                        f"选择器: {fallback_result.get('selector', 'N/A')}\n"
+                        f"结果: {fallback_result['result']}"
+                    )
+                )
+            ]
+        except Exception as fallback_error:
+            logger.error(f"降级策略也失败: {fallback_error}")
+            return [
+                TextContent(
+                    type="text",
+                    text=f"❌ Vision API 超时且降级失败: {fallback_error}"
+                )
+            ]
 
     result_parts = [f"视觉分析: {action.reasoning}"]
 
@@ -644,10 +499,8 @@ async def tool_type(args: dict) -> list[TextContent | ImageContent]:
     text = args["text"]
     selector = args.get("selector")
     clear_first = args.get("clearFirst", False)
-    press_enter = args.get("pressEnter", False)
 
-    # Extension 端的 cmdType 已支持 selector / clearFirst / pressEnter
-    params = {"text": text, "clearFirst": clear_first, "pressEnter": press_enter}
+    params = {"text": text, "clearFirst": clear_first}
     if selector:
         params["selector"] = selector
 
@@ -656,8 +509,27 @@ async def tool_type(args: dict) -> list[TextContent | ImageContent]:
     result_text = f"已输入: {text[:50]}{'...' if len(text) > 50 else ''}"
     if selector:
         result_text = f"在 `{selector}` 中" + result_text
-    if press_enter:
-        result_text += " (已按回车)"
+
+    return [TextContent(type="text", text=result_text)]
+
+
+async def tool_type_at_coord(args: dict) -> list[TextContent | ImageContent]:
+    """在指定坐标处输入文本（先点击再输入）"""
+    x = args["x"]
+    y = args["y"]
+    text = args["text"]
+    clear_first = args.get("clearFirst", False)
+
+    params = {
+        "text": text,
+        "x": x,
+        "y": y,
+        "clearFirst": clear_first,
+    }
+
+    await ws_manager.send_command("type", params)
+
+    result_text = f"已在坐标 ({x}, {y}) 输入: {text[:50]}{'...' if len(text) > 50 else ''}"
 
     return [TextContent(type="text", text=result_text)]
 
@@ -718,6 +590,9 @@ async def tool_drag(args: dict) -> list[TextContent | ImageContent]:
 
 async def tool_wait(args: dict) -> list[TextContent | ImageContent]:
     """等待条件"""
+    if "condition" in args:
+        return _json_content(await ws_manager.send_command("agent_browser_wait", args))
+
     params = {}
     if "seconds" in args:
         params["seconds"] = args["seconds"]
@@ -824,8 +699,21 @@ async def tool_diagnose(args: dict) -> list[TextContent | ImageContent]:
     """诊断连接状态"""
     lines = ["=== Link2Chrome 诊断 ===", ""]
 
-    # WS 连接状态
-    lines.append(f"WebSocket 连接: {'已连接' if ws_manager.is_connected else '未连接'}")
+    # Hub / WS 连接状态
+    try:
+        hub_status = await ws_manager.send_command("__hub_status__")
+        lines.append("Browser Hub: 已连接")
+        lines.append(f"Hub ID: {hub_status.get('hub_id', '未知')}")
+        lines.append(f"Adapter 连接数: {hub_status.get('adapter_connections', '未知')}")
+        lines.append(f"操作队列: {'忙碌' if hub_status.get('queue_locked') else '空闲'}")
+        lines.append(
+            f"WebSocket 连接: {'已连接' if hub_status.get('extension_connected') else '未连接'}"
+        )
+        if hub_status.get("extension_startup_error"):
+            lines.append(f"Extension WS 启动错误: {hub_status.get('extension_startup_error')}")
+    except Exception as e:
+        lines.append(f"Browser Hub: 未连接 ({e})")
+        lines.append(f"WebSocket 连接: {'已连接' if ws_manager.is_connected else '未连接'}")
 
     # Extension 版本
     try:
@@ -856,13 +744,402 @@ async def tool_diagnose(args: dict) -> list[TextContent | ImageContent]:
     return [TextContent(type="text", text="\n".join(lines))]
 
 
+# ==================== 第一阶段新增 Tool 实现 ====================
+
+async def tool_execute_script(args: dict) -> list[TextContent]:
+    """执行 JavaScript 脚本"""
+    script = args["script"]
+    await_promise = args.get("awaitPromise", False)
+    timeout = args.get("timeout", 60)
+
+    params = {
+        "script": script,
+        "awaitPromise": await_promise,
+        "timeout": timeout * 1000  # 转换为毫秒
+    }
+
+    result = await ws_manager.send_command("execute_script", params)
+
+    if result.get("success"):
+        return [
+            TextContent(
+                type="text",
+                text=f"脚本执行成功\n结果:\n{json.dumps(result.get('result'), ensure_ascii=False, indent=2)}"
+            )
+        ]
+    else:
+        return [
+            TextContent(
+                type="text",
+                text=f"脚本执行失败: {result.get('error', '未知错误')}"
+            )
+        ]
+
+
+async def tool_wait_for_condition(args: dict) -> list[TextContent]:
+    """智能等待条件满足"""
+    condition_type = args["condition_type"]
+    selector = args.get("selector")
+    script = args.get("script")
+    timeout = args.get("timeout", 10000)
+
+    params = {
+        "condition_type": condition_type,
+        "timeout": timeout
+    }
+
+    if selector:
+        params["selector"] = selector
+    if script:
+        params["script"] = script
+
+    result = await ws_manager.send_command("wait_for_condition", params)
+
+    # 格式化结果
+    if condition_type == "visible":
+        found = result.get("found", False)
+        status = "已出现" if found else "超时未出现"
+        return [
+            TextContent(
+                type="text",
+                text=f"元素可见性等待: {status}\n选择器: {selector}"
+            )
+        ]
+    elif condition_type == "custom":
+        satisfied = result.get("satisfied", False)
+        status = "条件满足" if satisfied else "超时"
+        return [
+            TextContent(
+                type="text",
+                text=f"自定义条件等待: {status}"
+            )
+        ]
+
+    return [TextContent(type="text", text=f"等待完成: {result}")]
+
+
+async def tool_detach_debugger(args: dict) -> list[TextContent]:
+    """主动解除 debugger 附加"""
+    tab_id = args.get("tab_id")
+
+    # 使用 DebuggerManager 执行 detach
+    success = await debugger_manager.detach_debugger(tab_id)
+
+    if success:
+        return [
+            TextContent(
+                type="text",
+                text=f"已成功解除 debugger 附加 (tab_id: {tab_id or '当前标签'})"
+            )
+        ]
+    else:
+        return [
+            TextContent(
+                type="text",
+                text="解除 debugger 失败,可能没有已附加的 debugger"
+            )
+        ]
+
+
+# ==================== 第二阶段新增 Tool 实现 ====================
+
+async def tool_scroll_until(args: dict) -> list[TextContent]:
+    """智能滚动直到满足条件"""
+    condition = args["condition"]
+    selector = args.get("selector")
+    max_scrolls = args.get("max_scrolls", 20)
+    scroll_delay = args.get("scroll_delay", 500)
+
+    params = {
+        "condition": condition,
+        "max_scrolls": max_scrolls,
+        "scroll_delay": scroll_delay
+    }
+
+    if selector:
+        params["selector"] = selector
+
+    result = await ws_manager.send_command("scroll_until", params)
+
+    scrolled = result.get("scrolled", 0)
+    reached = result.get("reached_condition", False)
+
+    if condition == "no_more_content":
+        status = "已到底部" if reached else f"已滚动 {scrolled} 次但未到底"
+    else:  # element_visible
+        status = "元素已可见" if reached else f"滚动 {scrolled} 次后仍未找到元素"
+
+    return [
+        TextContent(
+            type="text",
+            text=f"智能滚动完成\n条件: {condition}\n状态: {status}\n总滚动次数: {scrolled}"
+        )
+    ]
+
+
+async def tool_send_keys(args: dict) -> list[TextContent]:
+    """发送键盘快捷键"""
+    keys = args["keys"]
+    selector = args.get("selector")
+
+    params = {"keys": keys}
+    if selector:
+        params["selector"] = selector
+
+    result = await ws_manager.send_command("send_keys", params)
+
+    if result.get("sent"):
+        text = f"已发送按键: {keys}"
+        if selector:
+            text += f"\n目标元素: {selector}"
+        return [TextContent(type="text", text=text)]
+    else:
+        return [TextContent(type="text", text=f"发送按键失败: {keys}")]
+
+
+async def tool_find_text(args: dict) -> list[TextContent]:
+    """查找页面文本"""
+    text = args["text"]
+    click = args.get("click", False)
+
+    result = await ws_manager.send_command("find_text", {"text": text, "click": click})
+
+    if not result.get("found"):
+        return [
+            TextContent(
+                type="text",
+                text=f"未找到文本: \"{text}\""
+            )
+        ]
+
+    total = result.get("total_found", 0)
+    clicked = result.get("clicked", False)
+
+    response = f"找到 {total} 个包含 \"{text}\" 的元素"
+
+    if clicked:
+        element = result.get("element", {})
+        response += f"\n已点击第一个可见元素: {element.get('tag', 'unknown')} at ({element.get('x', 0)}, {element.get('y', 0)})"
+    else:
+        elements = result.get("elements", [])[:3]  # 只显示前3个
+        if elements:
+            response += "\n前几个元素:"
+            for i, el in enumerate(elements, 1):
+                response += f"\n  {i}. {el.get('tag', 'unknown')}: {el.get('text', '')[:50]}"
+
+    return [TextContent(type="text", text=response)]
+
+
+async def tool_scrape_with_scroll(args: dict) -> list[TextContent]:
+    """批量爬取操作"""
+    extract_script = args["extract_script"]
+    max_items = args.get("max_items", 100)
+    batch_size = args.get("batch_size", 10)
+    scroll_delay = args.get("scroll_delay", 500)
+    dedupe_by = args.get("dedupe_by")
+
+    params = {
+        "extract_script": extract_script,
+        "max_items": max_items,
+        "batch_size": batch_size,
+        "scroll_delay": scroll_delay
+    }
+
+    if dedupe_by:
+        params["dedupe_by"] = dedupe_by
+
+    logger.info(f"开始批量爬取: max_items={max_items}, dedupe_by={dedupe_by}")
+
+    result = await ws_manager.send_command("scrape_with_scroll", params)
+
+    items = result.get("items", [])
+    total = result.get("total", 0)
+    scrolls = result.get("scrolls", 0)
+    reached_end = result.get("reached_end", False)
+
+    # 返回结果
+    response = f"批量爬取完成\n"
+    response += f"提取数据: {total} 条\n"
+    response += f"滚动次数: {scrolls} 次\n"
+    response += f"是否到底: {'是' if reached_end else '否'}"
+
+    if dedupe_by:
+        response += f"\n去重字段: {dedupe_by}"
+
+    # 显示前3条数据示例
+    if items and len(items) > 0:
+        response += f"\n\n前 {min(3, len(items))} 条数据示例:"
+        for i, item in enumerate(items[:3], 1):
+            response += f"\n{i}. {json.dumps(item, ensure_ascii=False)[:100]}..."
+
+    return [TextContent(type="text", text=response)]
+
+
+# ==================== Agent-first PRD Tool 实现 ====================
+
+async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
+    """Dispatch the PRD tool namespace and return JSON-only observations."""
+    if name == "browser_tabs_list":
+        raw = await ws_manager.send_command("get_all_tabs")
+        tabs = []
+        for window_tabs in raw.get("windows", {}).values():
+            for tab in window_tabs:
+                tabs.append(
+                    {
+                        "id": tab.get("id"),
+                        "windowId": tab.get("windowId"),
+                        "active": tab.get("active"),
+                        "url": tab.get("url"),
+                        "title": tab.get("title"),
+                        "status": tab.get("status", "unknown"),
+                        "favicon": tab.get("favIconUrl"),
+                    }
+                )
+        return _json_content({"tabs": tabs, "totalCount": len(tabs)})
+
+    if name == "browser_tab_info":
+        return _json_content(await ws_manager.send_command("agent_browser_tab_info", args))
+
+    if name == "browser_tab_switch":
+        return _json_content(await ws_manager.send_command("agent_browser_tab_switch", args))
+
+    if name == "browser_tab_new":
+        return _json_content(await ws_manager.send_command("agent_browser_tab_new", args))
+
+    if name == "browser_navigate":
+        started = time.monotonic()
+        url = args["url"]
+        if not url.startswith(("http://", "https://", "chrome://", "about:")):
+            url = "https://" + url
+        result = await ws_manager.send_command("navigate", {"url": url})
+        wait_until = args.get("waitUntil", "dom-ready")
+        if wait_until == "dom-ready":
+            try:
+                await ws_manager.send_command("agent_browser_wait", {"condition": "dom-ready", "timeout": 10000})
+            except Exception:
+                pass
+        final_url = result.get("url", url)
+        return _json_content(
+            {
+                "ok": True,
+                "finalUrl": final_url,
+                "redirected": final_url != url,
+                "elapsed": int((time.monotonic() - started) * 1000),
+            }
+        )
+
+    if name == "browser_screenshot":
+        screenshot = await ws_manager.send_command(
+            "screenshot",
+            {
+                "format": args.get("format", "png"),
+                "quality": args.get("quality", 80),
+                "selector": args.get("selector"),
+                "fullPage": args.get("fullPage", False),
+            },
+        )
+        return _json_content(
+            {
+                "format": screenshot.get("format", args.get("format", "png")),
+                "data": screenshot.get("image", ""),
+                "note": "Screenshots are high-token fallback observations; prefer DOM/action tools first.",
+            }
+        )
+
+    if name in {
+        "dom_overview",
+        "dom_query",
+        "dom_search",
+        "dom_structured_data",
+        "dom_element_detail",
+        "dom_wait_for",
+        "action_click",
+        "action_type",
+        "action_scroll",
+        "action_select",
+        "action_hover",
+        "action_press_key",
+        "action_fill_form",
+        "script_evaluate",
+    }:
+        return _json_content(await ws_manager.send_command(name, args))
+
+    if name == "file_write":
+        return _json_content(tool_file_write(args))
+
+    if name == "file_read":
+        return _json_content(tool_file_read_json(args))
+
+    if name == "file_list":
+        return _json_content(tool_file_list(args))
+
+    return _json_content({"ok": False, "error": f"unimplemented tool: {name}"})
+
+
+def tool_file_write(args: dict) -> dict:
+    path = _safe_storage_path(args["path"])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    mode = "a" if args.get("mode") == "append" else "w"
+    content = args.get("content", "")
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False)
+    with open(path, mode, encoding="utf-8") as f:
+        f.write(content)
+    size = os.path.getsize(path)
+    lines = content.count("\n") + (1 if content else 0)
+    return {"ok": True, "path": args["path"], "size": size, "lines": lines}
+
+
+def tool_file_read_json(args: dict) -> dict:
+    path = _safe_storage_path(args["path"])
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    parsed: object
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        lines = content.splitlines()
+        offset = int(args.get("offset", 0) or 0)
+        limit = args.get("limit")
+        if limit is not None:
+            lines = lines[offset: offset + int(limit)]
+        elif offset:
+            lines = lines[offset:]
+        parsed = "\n".join(lines)
+    if args.get("query"):
+        parsed = _jmespath_search(args["query"], parsed)
+    return {"ok": True, "path": args["path"], "content": parsed, "size": os.path.getsize(path)}
+
+
+def tool_file_list(args: dict) -> dict:
+    root = _safe_storage_path(args.get("path", "/"))
+    os.makedirs(root, exist_ok=True)
+    entries = []
+    recursive = args.get("recursive", False)
+    if recursive:
+        for current, dirs, files in os.walk(root):
+            for dirname in dirs:
+                full = os.path.join(current, dirname)
+                entries.append({"name": os.path.relpath(full, root) + "/", "type": "directory"})
+            for filename in files:
+                full = os.path.join(current, filename)
+                entries.append({"name": os.path.relpath(full, root), "type": "file", "size": os.path.getsize(full)})
+    else:
+        for name in sorted(os.listdir(root)):
+            full = os.path.join(root, name)
+            if os.path.isdir(full):
+                entries.append({"name": name + "/", "type": "directory"})
+            else:
+                entries.append({"name": name, "type": "file", "size": os.path.getsize(full)})
+    return {"ok": True, "entries": entries}
+
+
 # ==================== 启动 ====================
 
 async def run():
-    """启动 MCP Server 和 WebSocket Server"""
-    # 启动 WebSocket Server
+    """启动 MCP adapter，并连接/拉起共享 Browser Hub"""
     await ws_manager.start()
-    logger.info("等待 Chrome Extension 连接...")
+    logger.info("MCP adapter 已连接 Browser Hub，等待 Chrome Extension 连接...")
 
     # 启动 MCP StdIO Server
     async with stdio_server() as (read_stream, write_stream):

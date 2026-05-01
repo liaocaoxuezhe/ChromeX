@@ -5,6 +5,7 @@ WebSocket Server + 连接管理 + 心跳
 
 import asyncio
 import json
+import socket
 import uuid
 from typing import Any, Optional
 
@@ -20,6 +21,8 @@ op_logger = get_operation_logger()
 HEARTBEAT_TIMEOUT = 60
 # 请求超时时间(秒)
 REQUEST_TIMEOUT = 30
+# 未连接时等待 Extension 的最长时间(秒)
+CONNECTION_WAIT_TIMEOUT = 10
 
 
 class WSManager:
@@ -32,22 +35,79 @@ class WSManager:
         self._pending_requests: dict[str, asyncio.Future] = {}
         self._server = None
         self._connected_event = asyncio.Event()
+        self._startup_error: str | None = None
 
     @property
     def is_connected(self) -> bool:
         return self._connection is not None
 
+    @property
+    def startup_error(self) -> str | None:
+        return self._startup_error
+
     async def start(self):
         """启动 WebSocket 服务器（非阻塞，在后台运行）"""
-        self._server = await websockets.serve(
-            self._handle_connection,
-            self.host,
-            self.port,
-            ping_interval=30,
-            ping_timeout=HEARTBEAT_TIMEOUT,
-        )
-        logger.info(f"WebSocket Server 已启动: ws://{self.host}:{self.port}")
-        op_logger.log_connection_event("SERVER_START", f"ws://{self.host}:{self.port}")
+        self._startup_error = None
+
+        # 先检查端口是否可用。不要在 MCP 启动时强杀端口占用者：
+        # 多个 MCP 宿主可能会同时尝试启动 Link2Chrome，如果互相 kill -9，
+        # 会造成启动/重连风暴，让 CPU 和风扇压力飙升。
+        if self._is_port_in_use(self.host, self.port):
+            owner = self._describe_process_on_port(self.port)
+            self._startup_error = (
+                f"无法监听 ws://{self.host}:{self.port}: 端口已被占用。"
+                f"{owner}请只保留一个 Link2Chrome MCP 实例，或先停止占用该端口的进程。"
+            )
+            logger.error(self._startup_error)
+            op_logger.log_connection_event("SERVER_START_FAILED", self._startup_error)
+            return
+
+        try:
+            self._server = await websockets.serve(
+                self._handle_connection,
+                self.host,
+                self.port,
+                ping_interval=30,
+                ping_timeout=HEARTBEAT_TIMEOUT,
+            )
+            logger.info(f"WebSocket Server 已启动: ws://{self.host}:{self.port}")
+            op_logger.log_connection_event("SERVER_START", f"ws://{self.host}:{self.port}")
+        except OSError as e:
+            self._server = None
+            self._startup_error = (
+                f"无法监听 ws://{self.host}:{self.port}: {e}. "
+                "当前运行环境可能禁止本地端口监听，请在非沙箱环境运行 Link2Chrome MCP。"
+            )
+            logger.error(self._startup_error)
+            op_logger.log_connection_event("SERVER_START_FAILED", self._startup_error)
+
+    def _is_port_in_use(self, host: str, port: int) -> bool:
+        """检查端口是否被占用"""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind((host, port))
+            return False
+        except OSError:
+            return True
+
+    def _describe_process_on_port(self, port: int) -> str:
+        """返回占用指定端口的进程摘要，用于诊断。"""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["lsof", "-nP", "-iTCP", f":{port}", "-sTCP:LISTEN"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                lines = result.stdout.strip().splitlines()
+                if len(lines) > 1:
+                    return f"占用进程: {lines[1]}. "
+        except Exception as e:
+            logger.warning(f"检查端口占用失败: {e}")
+        return ""
 
     async def stop(self):
         """关闭 WebSocket 服务器"""
@@ -60,8 +120,18 @@ class WSManager:
     async def wait_for_connection(self, timeout: float = 10.0) -> bool:
         """等待 Extension 连接"""
         try:
-            await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
-            return True
+            # 分段等待，每 5 秒输出一次进度
+            remaining = timeout
+            while remaining > 0 and not self._connection:
+                wait_time = min(5.0, remaining)
+                try:
+                    await asyncio.wait_for(self._connected_event.wait(), timeout=wait_time)
+                    return True
+                except asyncio.TimeoutError:
+                    remaining -= wait_time
+                    if remaining > 0:
+                        logger.info(f"仍在等待 Chrome Extension 连接... 剩余 {int(remaining)} 秒")
+            return False
         except asyncio.TimeoutError:
             return False
 
@@ -80,8 +150,15 @@ class WSManager:
             ConnectionError: 未连接到 Extension
             TimeoutError: 等待响应超时
         """
+        # 如果未连接，自动等待 Extension 连接（最多等待 10 秒）
         if not self._connection:
-            raise ConnectionError("Chrome Extension 未连接。请确保扩展已加载并启用。")
+            if self._startup_error:
+                raise ConnectionError(self._startup_error)
+            logger.info("等待 Chrome Extension 连接...")
+            connected = await self.wait_for_connection(timeout=CONNECTION_WAIT_TIMEOUT)
+            if not connected:
+                raise ConnectionError("Chrome Extension 未连接。请确保扩展已加载并启用。")
+            logger.info("Chrome Extension 已连接，继续执行指令")
 
         request_id = str(uuid.uuid4())[:8]
         message = {

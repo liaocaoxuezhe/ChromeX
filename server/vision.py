@@ -3,6 +3,7 @@
 通过 OpenAI 兼容接口，分析截图并返回操作坐标
 """
 
+import asyncio
 import base64
 import json
 import os
@@ -105,14 +106,25 @@ class VisionClient:
         ]
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                max_tokens=1024,
-                temperature=0.1,
+            logger.debug(f"开始调用视觉模型: {self.model}")
+            logger.debug(f"截图尺寸: {viewport_width}x{viewport_height}")
+            logger.debug(f"指令: {instruction}")
+
+            # 从环境变量读取超时配置,默认 30 秒
+            vision_timeout = float(os.getenv("VISION_TIMEOUT", "30.0"))
+
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.client.chat.completions.create,
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_content},
+                    ],
+                    max_tokens=1024,
+                    temperature=0.1,
+                ),
+                timeout=vision_timeout
             )
 
             raw_text = response.choices[0].message.content.strip()
@@ -120,11 +132,19 @@ class VisionClient:
 
             return self._parse_response(raw_text)
 
+        except asyncio.TimeoutError:
+            # Vision API 超时,记录并抛出特定异常
+            logger.warning(f"Vision API 超时 (>{os.getenv('VISION_TIMEOUT', '30')}s): {instruction}")
+            # 导入降级异常类
+            from server.retry_manager import VisionTimeoutError
+            raise VisionTimeoutError(instruction)
+
         except Exception as e:
-            logger.error(f"视觉模型调用失败: {e}")
+            # 打印详细的错误信息和堆栈
+            logger.error(f"视觉模型调用失败: {type(e).__name__}: {e}", exc_info=True)
             return VisionAction(
                 action="none",
-                reasoning=f"模型调用失败: {str(e)}",
+                reasoning=f"模型调用失败: {type(e).__name__}: {str(e)}",
             )
 
     def _parse_response(self, raw_text: str) -> VisionAction:
