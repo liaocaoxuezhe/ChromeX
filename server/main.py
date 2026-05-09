@@ -53,7 +53,6 @@ debugger_manager = DebuggerManager(ws_manager=ws_manager)
 vision_fallback_handler = None  # 延迟初始化
 
 app = Server("local-browser")
-LOCAL_STORAGE_ROOT = os.path.join(_project_root, ".agent_browser_storage")
 
 
 def get_vision_client() -> VisionClient:
@@ -92,6 +91,12 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]:
     logger.info(f"调用工具: {name}, 参数: {arguments}")
     try:
+        if name == "browser_diagnose":
+            result = await tool_diagnose(arguments)
+            result_summary = _extract_result_summary(result)
+            op_logger.log_operation(name, arguments, result_summary=result_summary)
+            return result
+
         async with ws_manager.operation(name):
             if name == "browser_get_state":
                 result = await tool_get_state(arguments)
@@ -150,6 +155,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                 "dom_element_detail",
                 "dom_wait_for",
                 "action_click",
+                "action_drag",
                 "action_type",
                 "action_scroll",
                 "action_select",
@@ -157,9 +163,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                 "action_press_key",
                 "action_fill_form",
                 "script_evaluate",
-                "file_write",
-                "file_read",
-                "file_list",
             }:
                 result = await tool_agent_first(name, arguments)
             else:
@@ -208,24 +211,6 @@ def _extract_result_summary(result: list) -> str:
 def _json_content(payload: object) -> list[TextContent]:
     """Return a compact JSON tool response, matching the PRD's agent-first contract."""
     return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2))]
-
-
-def _safe_storage_path(path: str) -> str:
-    normalized = os.path.normpath(path.lstrip("/"))
-    if normalized.startswith(".."):
-        raise ValueError("path must stay inside .agent_browser_storage")
-    return os.path.join(LOCAL_STORAGE_ROOT, normalized)
-
-
-def _jmespath_search(query: str, data: object) -> object:
-    try:
-        import jmespath
-    except ImportError as exc:
-        raise RuntimeError(
-            "jmespath is required for this operation. Run: "
-            "server/venv/bin/pip install -r server/requirements.txt"
-        ) from exc
-    return jmespath.search(query, data)
 
 
 async def tool_get_state(args: dict) -> list[TextContent | ImageContent]:
@@ -700,14 +685,19 @@ async def tool_extract_content(args: dict) -> list[TextContent | ImageContent]:
 async def tool_diagnose(args: dict) -> list[TextContent | ImageContent]:
     """诊断连接状态"""
     lines = ["=== Link2Chrome 诊断 ===", ""]
+    hub_status = None
 
     # Hub / WS 连接状态
     try:
-        hub_status = await ws_manager.send_command("__hub_status__")
+        hub_status = await ws_manager.send_command("__hub_status__", timeout=3.0)
         lines.append("Browser Hub: 已连接")
         lines.append(f"Hub ID: {hub_status.get('hub_id', '未知')}")
         lines.append(f"Adapter 连接数: {hub_status.get('adapter_connections', '未知')}")
         lines.append(f"操作队列: {'忙碌' if hub_status.get('queue_locked') else '空闲'}")
+        if hub_status.get("lease_name"):
+            lines.append(f"当前 lease: {hub_status.get('lease_name')}")
+        if hub_status.get("lease_age_seconds") is not None:
+            lines.append(f"lease 持续: {hub_status.get('lease_age_seconds')}s")
         lines.append(
             f"WebSocket 连接: {'已连接' if hub_status.get('extension_connected') else '未连接'}"
         )
@@ -716,6 +706,11 @@ async def tool_diagnose(args: dict) -> list[TextContent | ImageContent]:
     except Exception as e:
         lines.append(f"Browser Hub: 未连接 ({e})")
         lines.append(f"WebSocket 连接: {'已连接' if ws_manager.is_connected else '未连接'}")
+
+    if hub_status and hub_status.get("queue_locked"):
+        lines.append("")
+        lines.append("诊断提示: Browser Hub 操作队列忙碌，已跳过需要排队的 Extension 查询。")
+        return [TextContent(type="text", text="\n".join(lines))]
 
     # Extension 版本
     try:
@@ -1013,19 +1008,22 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
         url = args["url"]
         if not url.startswith(("http://", "https://", "chrome://", "about:")):
             url = "https://" + url
-        result = await ws_manager.send_command("navigate", {"url": url})
-        wait_until = args.get("waitUntil", "dom-ready")
-        if wait_until == "dom-ready":
-            try:
-                await ws_manager.send_command("agent_browser_wait", {"condition": "dom-ready", "timeout": 10000})
-            except Exception:
-                pass
+        result = await ws_manager.send_command(
+            "navigate",
+            {
+                "url": url,
+                "waitUntil": args.get("waitUntil", "dom-ready"),
+                "timeout": args.get("timeout", 10000),
+            },
+        )
         final_url = result.get("url", url)
         return _json_content(
             {
                 "ok": True,
                 "finalUrl": final_url,
                 "redirected": final_url != url,
+                "status": result.get("status", "unknown"),
+                "method": result.get("method", "unknown"),
                 "elapsed": int((time.monotonic() - started) * 1000),
             }
         )
@@ -1056,6 +1054,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
         "dom_element_detail",
         "dom_wait_for",
         "action_click",
+        "action_drag",
         "action_type",
         "action_scroll",
         "action_select",
@@ -1066,74 +1065,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
     }:
         return _json_content(await ws_manager.send_command(name, args))
 
-    if name == "file_write":
-        return _json_content(tool_file_write(args))
-
-    if name == "file_read":
-        return _json_content(tool_file_read_json(args))
-
-    if name == "file_list":
-        return _json_content(tool_file_list(args))
-
     return _json_content({"ok": False, "error": f"unimplemented tool: {name}"})
-
-
-def tool_file_write(args: dict) -> dict:
-    path = _safe_storage_path(args["path"])
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    mode = "a" if args.get("mode") == "append" else "w"
-    content = args.get("content", "")
-    if not isinstance(content, str):
-        content = json.dumps(content, ensure_ascii=False)
-    with open(path, mode, encoding="utf-8") as f:
-        f.write(content)
-    size = os.path.getsize(path)
-    lines = content.count("\n") + (1 if content else 0)
-    return {"ok": True, "path": args["path"], "size": size, "lines": lines}
-
-
-def tool_file_read_json(args: dict) -> dict:
-    path = _safe_storage_path(args["path"])
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
-    parsed: object
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        lines = content.splitlines()
-        offset = int(args.get("offset", 0) or 0)
-        limit = args.get("limit")
-        if limit is not None:
-            lines = lines[offset: offset + int(limit)]
-        elif offset:
-            lines = lines[offset:]
-        parsed = "\n".join(lines)
-    if args.get("query"):
-        parsed = _jmespath_search(args["query"], parsed)
-    return {"ok": True, "path": args["path"], "content": parsed, "size": os.path.getsize(path)}
-
-
-def tool_file_list(args: dict) -> dict:
-    root = _safe_storage_path(args.get("path", "/"))
-    os.makedirs(root, exist_ok=True)
-    entries = []
-    recursive = args.get("recursive", False)
-    if recursive:
-        for current, dirs, files in os.walk(root):
-            for dirname in dirs:
-                full = os.path.join(current, dirname)
-                entries.append({"name": os.path.relpath(full, root) + "/", "type": "directory"})
-            for filename in files:
-                full = os.path.join(current, filename)
-                entries.append({"name": os.path.relpath(full, root), "type": "file", "size": os.path.getsize(full)})
-    else:
-        for name in sorted(os.listdir(root)):
-            full = os.path.join(root, name)
-            if os.path.isdir(full):
-                entries.append({"name": name + "/", "type": "directory"})
-            else:
-                entries.append({"name": name, "type": "file", "size": os.path.getsize(full)})
-    return {"ok": True, "entries": entries}
 
 
 # ==================== 启动 ====================

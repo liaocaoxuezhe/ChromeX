@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "local-browser": {
+      "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
+      "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
+      "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+      "env": {
+        "LOG_LEVEL": "INFO",
+        "LOG_CONSOLE": "false"
+      }
+    }
+  }
+}

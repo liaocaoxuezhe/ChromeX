@@ -15,6 +15,7 @@ let reconnectTimer = null;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const WS_URL = "ws://localhost:8765";
 const HEARTBEAT_INTERVAL = 30000;
+const CDP_COMMAND_TIMEOUT = 10000;
 let heartbeatTimer = null;
 
 // 不可调试的 URL 前缀
@@ -294,8 +295,24 @@ async function ensureDebuggerAttached() {
 }
 
 async function sendCDP(method, params = {}) {
-  const tabId = await ensureDebuggerAttached();
-  return chrome.debugger.sendCommand({ tabId }, method, params);
+  const timeout = params.timeout || CDP_COMMAND_TIMEOUT;
+  const tabId = await withTimeout(ensureDebuggerAttached(), timeout, `Debugger attach timeout: ${method}`);
+  return withTimeout(
+    chrome.debugger.sendCommand({ tabId }, method, params),
+    timeout,
+    `CDP command timeout: ${method}`
+  );
+}
+
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), timeoutMs))
+  ]);
 }
 
 function cssEscape(value) {
@@ -423,6 +440,9 @@ async function handleCommand(message) {
         break;
       case "action_click":
         response.data = await cmdActionClick(params);
+        break;
+      case "action_drag":
+        response.data = await cmdActionDrag(params);
         break;
       case "action_type":
         response.data = await cmdActionType(params);
@@ -591,101 +611,168 @@ async function cmdScroll(params) {
 }
 
 // -- navigate --
-async function cmdNavigate(params) {
-  const { url } = params;
+async function waitForNavigationReady(tabId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastUrl = null;
+  let lastReadyState = "loading";
 
-  // 导航前先 detach 已有的 debugger,避免冲突
-  if (attachedTabId !== null) {
+  while (Date.now() < deadline) {
     try {
-      await chrome.debugger.detach({ tabId: attachedTabId });
-      console.log(`[Link2Chrome] 导航前已 detach debugger from tab ${attachedTabId}`);
-    } catch (err) {
-      console.warn(`[Link2Chrome] 导航前 detach 失败: ${err.message}`);
-    }
-    attachedTabId = null;
-  }
-
-  // 优先获取当前活动的标签页，而不是寻找可调试的标签页
-  // 这样可以确保我们在正确的标签页上导航
-  let tabId;
-  let tab;
-
-  // 首先尝试获取当前活动窗口的活动标签页
-  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (activeTab) {
-    tabId = activeTab.id;
-    tab = activeTab;
-    console.log(`[Link2Chrome] 导航: 使用当前活动标签页 ${tabId}, 当前URL: ${activeTab.url}`);
-  } else {
-    // 如果没有活动标签页，尝试使用 targetTabId
-    if (targetTabId) {
-      try {
-        tab = await chrome.tabs.get(targetTabId);
-        tabId = targetTabId;
-        console.log(`[Link2Chrome] 导航: 使用 targetTabId ${tabId}`);
-      } catch (err) {
-        console.log(`[Link2Chrome] targetTabId ${targetTabId} 无效，将创建新标签页`);
-        tabId = null;
+      const tab = await chrome.tabs.get(tabId);
+      lastUrl = tab.url || lastUrl;
+      if (tab.status === "complete") {
+        return { status: "complete", url: lastUrl, readyState: "complete" };
       }
+    } catch (_) {}
+
+    try {
+      const result = await sendCDP("Runtime.evaluate", {
+        expression: "document.readyState",
+        returnByValue: true
+      });
+      lastReadyState = result.result?.value || lastReadyState;
+      if (lastReadyState === "interactive" || lastReadyState === "complete") {
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        return {
+          status: lastReadyState === "complete" ? "complete" : "dom-ready",
+          url: tab?.url || lastUrl,
+          readyState: lastReadyState
+        };
+      }
+    } catch (_) {
+      // Navigation swaps execution contexts; CDP evaluation may briefly fail.
+    }
+
+    await sleep(100);
+  }
+
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  return {
+    status: "timeout",
+    url: tab?.url || lastUrl,
+    readyState: lastReadyState
+  };
+}
+
+async function waitForTabsNavigation(tabId, url, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearInterval(poll);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve(payload);
+    };
+
+    const timeout = setTimeout(() => {
+      targetTabId = tabId;
+      finish({ navigated: true, url, status: "timeout", tabId, method: "tabs" });
+    }, timeoutMs);
+
+    const listener = (updatedTabId, changeInfo, updatedTab) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        targetTabId = tabId;
+        attachedTabId = null;
+        console.log(`[Link2Chrome] tabs 导航完成: ${updatedTab.url}`);
+        finish({ navigated: true, url: updatedTab.url, status: "complete", tabId, method: "tabs" });
+      }
+    };
+
+    const poll = setInterval(async () => {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.status === "complete") {
+          targetTabId = tabId;
+          attachedTabId = null;
+          finish({ navigated: true, url: tab.url || url, status: "complete", tabId, method: "tabs" });
+        }
+      } catch (_) {}
+    }, 100);
+
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function navigateWithTabs(url, timeoutMs) {
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  let tabId = activeTab?.id || null;
+
+  if (!tabId && targetTabId) {
+    try {
+      const tab = await chrome.tabs.get(targetTabId);
+      tabId = tab.id;
+      console.log(`[Link2Chrome] tabs 导航: 使用 targetTabId ${tabId}`);
+    } catch (err) {
+      console.log(`[Link2Chrome] targetTabId ${targetTabId} 无效，将创建新标签页`);
     }
   }
 
-  // 如果没有找到标签页，创建一个新标签页
   if (!tabId) {
-    console.log(`[Link2Chrome] 没有可用标签页，创建新标签页`);
     const newTab = await chrome.tabs.create({ url });
     tabId = newTab.id;
     targetTabId = tabId;
     attachedTabId = null;
-    console.log(`[Link2Chrome] 已创建新标签页 ${tabId} 并导航到 ${url}`);
-
-    // 等待页面加载完成
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve({ navigated: true, url, status: "timeout", tabId });
-      }, 15000);
-
-      const listener = (updatedTabId, changeInfo, updatedTab) => {
-        if (updatedTabId === tabId && changeInfo.status === "complete") {
-          clearTimeout(timeout);
-          chrome.tabs.onUpdated.removeListener(listener);
-          targetTabId = tabId;
-          attachedTabId = null;
-          console.log(`[Link2Chrome] 新标签页导航完成: ${updatedTab.url}`);
-          resolve({ navigated: true, url: updatedTab.url, status: "complete", tabId });
-        }
-      };
-      chrome.tabs.onUpdated.addListener(listener);
-    });
+    console.log(`[Link2Chrome] tabs 导航: 创建新标签页 ${tabId}`);
+    return waitForTabsNavigation(tabId, url, timeoutMs);
   }
 
-  // 更新现有标签页的 URL
   await chrome.tabs.update(tabId, { url });
-  attachedTabId = null; // 重置 attached 状态
-  targetTabId = tabId;  // 立即设置 targetTabId
-  console.log(`[Link2Chrome] 导航: 已更新标签页 ${tabId} 的 URL 为 ${url}`);
+  targetTabId = tabId;
+  attachedTabId = null;
+  console.log(`[Link2Chrome] tabs 导航: 已更新标签页 ${tabId} 的 URL 为 ${url}`);
+  return waitForTabsNavigation(tabId, url, timeoutMs);
+}
 
-  // 等待页面加载完成
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      targetTabId = tabId;
-      resolve({ navigated: true, url, status: "timeout", tabId });
-    }, 15000);
+async function cmdNavigate(params) {
+  const { url, timeout = 10000, waitUntil = "dom-ready", method = "tabs" } = params;
+  const usesStandardWebProtocol = url.startsWith("http://") || url.startsWith("https://");
 
-    const listener = (updatedTabId, changeInfo, updatedTab) => {
-      if (updatedTabId === tabId && changeInfo.status === "complete") {
-        clearTimeout(timeout);
-        chrome.tabs.onUpdated.removeListener(listener);
-        targetTabId = tabId;
-        attachedTabId = null;
-        console.log(`[Link2Chrome] 导航完成: ${updatedTab.url}`);
-        resolve({ navigated: true, url: updatedTab.url, status: "complete", tabId });
-      }
+  if (method !== "cdp" || !usesStandardWebProtocol) {
+    console.log(`[Link2Chrome] tabs 导航: ${url}`);
+    return navigateWithTabs(url, timeout);
+  }
+
+  try {
+    const tabId = await ensureDebuggerAttached();
+    await sendCDP("Page.enable").catch(() => {});
+    const navResult = await sendCDP("Page.navigate", { url });
+    targetTabId = tabId;
+    console.log(`[Link2Chrome] CDP Page.navigate 已发送: tab=${tabId}, url=${url}`);
+
+    if (waitUntil === "commit") {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      return {
+        navigated: true,
+        url: tab?.url || url,
+        status: "committed",
+        readyState: "loading",
+        tabId,
+        method: "cdp",
+        frameId: navResult.frameId,
+        loaderId: navResult.loaderId,
+        errorText: navResult.errorText
+      };
+    }
+
+    const ready = await waitForNavigationReady(tabId, timeout);
+    const finalUrl = ready.url || url;
+    return {
+      navigated: true,
+      url: finalUrl,
+      status: ready.status,
+      readyState: ready.readyState,
+      tabId,
+      method: "cdp",
+      frameId: navResult.frameId,
+      loaderId: navResult.loaderId,
+      errorText: navResult.errorText
     };
-    chrome.tabs.onUpdated.addListener(listener);
-  });
+  } catch (err) {
+    console.warn(`[Link2Chrome] CDP 导航失败，回退 tabs 导航: ${err.message}`);
+    return navigateWithTabs(url, timeout);
+  }
 }
 
 // -- get_dom --
@@ -1919,6 +2006,17 @@ async function cmdDomWaitFor(params) {
 
 async function cmdActionClick(params) {
   const target = params.target || {};
+  if (typeof target.x === "number" && typeof target.y === "number") {
+    const started = Date.now();
+    const result = await cmdClick({
+      x: target.x,
+      y: target.y,
+      button: params.button || "left",
+      clickCount: params.clickCount || 1
+    });
+    if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000 });
+    return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result };
+  }
   let selector = target.selector;
   if (!selector && target.text) {
     const found = await cmdFindText({ text: target.text, click: false });
@@ -1933,6 +2031,70 @@ async function cmdActionClick(params) {
   const result = await cmdClick({ selector, button: params.button || "left", clickCount: params.clickCount || 1 });
   if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000 });
   return { ok: true, target: { ...target, selector }, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result };
+}
+
+async function resolveActionPoint(target) {
+  if (typeof target?.x === "number" && typeof target?.y === "number") {
+    return { x: target.x, y: target.y, source: "coordinate" };
+  }
+
+  if (target?.text) {
+    const found = await cmdFindText({ text: target.text, click: false });
+    const el = found.elements?.find(e => e.visible);
+    if (!el) throw new Error(`No visible element found by text: ${target.text}`);
+    return { x: el.x, y: el.y, source: "text" };
+  }
+
+  let selector = target?.selector;
+  if (!selector && target?.ariaLabel) selector = `[aria-label*="${cssEscape(target.ariaLabel)}"]`;
+  if (!selector) throw new Error("target must include selector, text, ariaLabel, or x/y coordinates");
+
+  const detail = await cmdDomElementDetail({ selector, include: ["position"] });
+  if (!detail.ok) throw new Error(detail.error || `No element found for selector: ${selector}`);
+  return {
+    x: Math.round(detail.position.x + detail.position.width / 2),
+    y: Math.round(detail.position.y + detail.position.height / 2),
+    selector,
+    source: "selector"
+  };
+}
+
+async function cmdActionDrag(params) {
+  const started = Date.now();
+  const start = await resolveActionPoint(params.target || {});
+  let end;
+
+  if (params.to) {
+    end = await resolveActionPoint(params.to);
+  } else if (params.by && (typeof params.by.x === "number" || typeof params.by.y === "number")) {
+    end = {
+      x: start.x + (params.by.x || 0),
+      y: start.y + (params.by.y || 0),
+      source: "offset"
+    };
+  } else {
+    throw new Error("action_drag requires either to or by");
+  }
+
+  const result = await cmdDrag({
+    startX: start.x,
+    startY: start.y,
+    endX: end.x,
+    endY: end.y,
+    duration: params.duration || 500
+  });
+
+  return {
+    ok: true,
+    target: params.target,
+    to: params.to || null,
+    by: params.by || null,
+    start,
+    end,
+    effects: { dragDispatched: true },
+    elapsed: Date.now() - started,
+    ...result
+  };
 }
 
 async function cmdActionType(params) {

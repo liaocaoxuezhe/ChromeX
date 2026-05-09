@@ -685,7 +685,8 @@ TOOL_DEFINITIONS.extend([
         "description": "Navigate the current target tab and return JSON with finalUrl, redirected, and elapsed. Prefer this over screenshot-driven navigation.",
         "inputSchema": _obj_schema({
             "url": {"type": "string", "description": "Destination URL."},
-            "waitUntil": {"type": "string", "enum": ["dom-ready"], "description": "Load wait strategy. Defaults to dom-ready."},
+            "waitUntil": {"type": "string", "enum": ["dom-ready", "commit"], "description": "Load wait strategy. Defaults to dom-ready. Use commit to return after CDP navigation is accepted."},
+            "timeout": {"type": "integer", "description": "Navigation readiness timeout in ms. Defaults to 10000."},
         }, ["url"]),
     },
     {
@@ -747,12 +748,22 @@ TOOL_DEFINITIONS.extend([
     },
     {
         "name": "action_click",
-        "description": "Click an element by selector, visible text, or aria-label. Returns a compact effects summary instead of full page state.",
+        "description": "Click an element by selector, visible text, aria-label, or CSS pixel coordinates. Returns a compact effects summary instead of full page state.",
         "inputSchema": _obj_schema({
-            "target": {"type": "object", "description": "selector, text, or ariaLabel."},
+            "target": {"type": "object", "description": "selector, text, ariaLabel, or x/y CSS pixel coordinates."},
             "method": {"type": "string", "enum": ["js", "cdp"], "description": "Click method hint. Current implementation uses CDP."},
             "waitForNavigation": {"type": "boolean", "description": "Reserved for navigation waits."},
             "waitForSelector": {"type": "string", "description": "Selector to wait for after click."},
+        }, ["target"]),
+    },
+    {
+        "name": "action_drag",
+        "description": "Drag from an element or CSS pixel coordinate to another coordinate/element, useful for slider CAPTCHA and drag-and-drop interactions.",
+        "inputSchema": _obj_schema({
+            "target": {"type": "object", "description": "Drag start: selector, text, ariaLabel, or x/y CSS pixel coordinates."},
+            "to": {"type": "object", "description": "Drag end: selector, text, ariaLabel, or x/y CSS pixel coordinates."},
+            "by": {"type": "object", "description": "Relative offset from start, e.g. {\"x\": 260, \"y\": 0}."},
+            "duration": {"type": "integer", "description": "Drag duration in ms. Defaults to 500."},
         }, ["target"]),
     },
     {
@@ -816,31 +827,46 @@ TOOL_DEFINITIONS.extend([
             "timeout": {"type": "integer", "description": "Timeout in ms. Defaults to 5000."},
         }, ["expression"]),
     },
-    {
-        "name": "file_write",
-        "description": "Write text or JSON to the local agent-browser storage directory. This approximates the PRD OPFS layer from the MCP server side.",
-        "inputSchema": _obj_schema({
-            "path": {"type": "string", "description": "Storage path."},
-            "content": {"description": "Text or JSON content."},
-            "mode": {"type": "string", "enum": ["overwrite", "append"], "description": "Write mode. Defaults to overwrite."},
-        }, ["path", "content"]),
-    },
-    {
-        "name": "file_read",
-        "description": "Read text or JSON from local agent-browser storage. Can apply a JMESPath query to JSON files.",
-        "inputSchema": _obj_schema({
-            "path": {"type": "string", "description": "Storage path."},
-            "query": {"type": "string", "description": "Optional JMESPath query."},
-            "offset": {"type": "integer", "description": "Line offset for text files."},
-            "limit": {"type": "integer", "description": "Line limit for text files."},
-        }, ["path"]),
-    },
-    {
-        "name": "file_list",
-        "description": "List files in local agent-browser storage.",
-        "inputSchema": _obj_schema({
-            "path": {"type": "string", "description": "Storage directory. Defaults to root."},
-            "recursive": {"type": "boolean", "description": "List recursively."},
-        }),
-    },
 ])
+
+
+# Public tool surface exposed to MCP clients.
+#
+# Keep the newer agent-first JSON tools as the default interface, and retain a
+# few mature legacy tools that still provide distinct value. Older duplicate
+# tools remain implemented in main.py for compatibility/internal use, but are
+# hidden from list_tools() to reduce agent tool-selection noise.
+PUBLIC_TOOL_NAMES = {
+    # Browser/tab state
+    "browser_tabs_list",
+    "browser_tab_info",
+    "browser_tab_switch",
+    "browser_tab_new",
+    "browser_navigate",
+    "browser_screenshot",
+    # DOM observations
+    "dom_overview",
+    "dom_query",
+    "dom_search",
+    "dom_structured_data",
+    "dom_element_detail",
+    "dom_wait_for",
+    # Actions: keep the stable core first; richer actions can be re-enabled
+    # after their parameter validation and page-context escaping are hardened.
+    "action_click",
+    "action_drag",
+    "action_type",
+    "action_scroll",
+    "action_press_key",
+    # Script evaluation
+    "script_evaluate",
+    # Legacy tools with unique value
+    "browser_diagnose",
+    "browser_extract_content",
+    "browser_scrape_with_scroll",
+}
+
+TOOL_DEFINITIONS = [
+    tool for tool in TOOL_DEFINITIONS
+    if tool["name"] in PUBLIC_TOOL_NAMES
+]

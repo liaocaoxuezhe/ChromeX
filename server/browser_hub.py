@@ -38,6 +38,7 @@ op_logger = get_operation_logger()
 HUB_HOST = os.getenv("LINK2CHROME_HUB_HOST", "localhost")
 HUB_CONTROL_PORT = int(os.getenv("LINK2CHROME_HUB_CONTROL_PORT", "8766"))
 LEASE_TIMEOUT = float(os.getenv("LINK2CHROME_HUB_LEASE_TIMEOUT", "300"))
+ACQUIRE_WAIT_TIMEOUT = float(os.getenv("LINK2CHROME_HUB_ACQUIRE_TIMEOUT", "30"))
 
 
 class BrowserHub:
@@ -79,7 +80,11 @@ class BrowserHub:
         try:
             async for raw_message in websocket:
                 response = await self._handle_adapter_message(raw_message)
-                await websocket.send(json.dumps(response, ensure_ascii=False))
+                try:
+                    await websocket.send(json.dumps(response, ensure_ascii=False))
+                except Exception:
+                    self._release_undelivered_lease(response)
+                    raise
         except websockets.exceptions.ConnectionClosed:
             pass
         except Exception as exc:
@@ -99,17 +104,7 @@ class BrowserHub:
             if command == "__hub_status__":
                 return self._ok(request_id, self._status())
             if command == "__hub_acquire__":
-                await self._operation_lock.acquire()
-                self._lease_token = str(uuid.uuid4())
-                self._lease_name = params.get("name", "tool_call")
-                self._lease_started_at = time.monotonic()
-                return self._ok(
-                    request_id,
-                    {
-                        "lease_token": self._lease_token,
-                        "lease_name": self._lease_name,
-                    },
-                )
+                return await self._acquire_lease(request_id, params)
             if command == "__hub_release__":
                 token = params.get("lease_token")
                 if token != self._lease_token:
@@ -134,6 +129,9 @@ class BrowserHub:
             }
 
     def _status(self) -> dict[str, Any]:
+        lease_age = None
+        if self._lease_started_at is not None:
+            lease_age = round(time.monotonic() - self._lease_started_at, 3)
         return {
             "hub_id": self._hub_id,
             "adapter_connections": len(self._adapter_connections),
@@ -141,7 +139,37 @@ class BrowserHub:
             "extension_startup_error": self.extension_ws.startup_error,
             "queue_locked": self._operation_lock.locked(),
             "lease_name": self._lease_name,
+            "lease_age_seconds": lease_age,
         }
+
+    async def _acquire_lease(self, request_id: str | None, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            await asyncio.wait_for(self._operation_lock.acquire(), timeout=ACQUIRE_WAIT_TIMEOUT)
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"Browser Hub 操作锁等待超时 ({ACQUIRE_WAIT_TIMEOUT}s), "
+                f"当前 lease={self._lease_name or 'unknown'}"
+            ) from exc
+
+        self._lease_token = str(uuid.uuid4())
+        self._lease_name = params.get("name", "tool_call")
+        self._lease_started_at = time.monotonic()
+        return self._ok(
+            request_id,
+            {
+                "lease_token": self._lease_token,
+                "lease_name": self._lease_name,
+            },
+        )
+
+    def _release_undelivered_lease(self, response: dict[str, Any]) -> None:
+        if not response.get("success"):
+            return
+        data = response.get("data") or {}
+        token = data.get("lease_token")
+        if token and token == self._lease_token:
+            logger.warning(f"客户端断开，释放未送达的 Browser Hub 操作锁: {self._lease_name}")
+            self._release_current_lease()
 
     def _release_current_lease(self):
         self._lease_token = None
