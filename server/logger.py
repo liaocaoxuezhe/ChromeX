@@ -3,6 +3,8 @@
 支持控制台和文件双重输出，自动日志轮转
 """
 
+from __future__ import annotations
+
 import logging
 import logging.handlers
 import os

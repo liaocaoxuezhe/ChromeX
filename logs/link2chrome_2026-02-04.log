@@ -1,9 +1,0 @@
-2026-02-04 11:13:16 [link2chrome] INFO: ============================================================
-2026-02-04 11:13:16 [link2chrome] INFO: Link2Chrome 日志系统已启动
-2026-02-04 11:13:16 [link2chrome] INFO: 日志目录: /Users/zhangyu/PycharmProjects/Link2Chrome/logs
-2026-02-04 11:13:16 [link2chrome] INFO: 主日志文件: /Users/zhangyu/PycharmProjects/Link2Chrome/logs/link2chrome_2026-02-04.log
-2026-02-04 11:13:16 [link2chrome] INFO: 错误日志文件: /Users/zhangyu/PycharmProjects/Link2Chrome/logs/link2chrome_error_2026-02-04.log
-2026-02-04 11:13:16 [link2chrome] INFO: 日志级别: INFO
-2026-02-04 11:13:16 [link2chrome] INFO: ============================================================
-2026-02-04 11:13:16 [link2chrome.ws] INFO: WebSocket Server 已启动: ws://localhost:8765
-2026-02-04 11:13:16 [link2chrome] INFO: 等待 Chrome Extension 连接...

@@ -12,19 +12,40 @@ echo "  Link2Chrome 安装脚本"
 echo "=============================="
 echo ""
 
-# 1. 检测 Python 3.12
-echo "[1/4] 检测 Python 3.12..."
+# 1. 检测 Python 3.10+
+echo "[1/4] 检测 Python 3.10+..."
 if command -v python3.12 &> /dev/null; then
     PYTHON=$(command -v python3.12)
-    echo "  ✓ 找到 Python: $PYTHON"
-    $PYTHON --version
-elif command -v /opt/homebrew/bin/python3.12 &> /dev/null; then
-    PYTHON="/opt/homebrew/bin/python3.12"
-    echo "  ✓ 找到 Python (Homebrew): $PYTHON"
-    $PYTHON --version
+elif command -v python3.11 &> /dev/null; then
+    PYTHON=$(command -v python3.11)
+elif command -v python3.10 &> /dev/null; then
+    PYTHON=$(command -v python3.10)
+elif command -v python3 &> /dev/null; then
+    PYTHON=$(command -v python3)
 else
-    echo "  ✗ 未找到 Python 3.12"
-    echo "  请执行: brew install python@3.12"
+    echo "  ✗ 未找到 Python 3.10+"
+    echo "  当前 MCP 依赖要求 Python 3.10 或更高版本"
+    exit 1
+fi
+
+echo "  ✓ 找到 Python: $PYTHON"
+$PYTHON --version
+
+PY_VERSION=$("$PYTHON" - << 'EOF'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+EOF
+)
+
+if "$PYTHON" - << 'EOF'
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+EOF
+then
+    echo "  ✓ Python 版本满足要求: $PY_VERSION"
+else
+    echo "  ✗ 当前 Python 版本过低: $PY_VERSION"
+    echo "  当前 MCP 依赖要求 Python 3.10 或更高版本；请先安装 python3.10+，脚本会在 server/venv 中隔离安装依赖"
     exit 1
 fi
 

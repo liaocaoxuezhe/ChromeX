@@ -4,6 +4,8 @@ Link2Chrome MCP Server
 Tool 定义集中在 server/tool_descriptions.py 中维护
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os

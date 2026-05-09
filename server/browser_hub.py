@@ -7,6 +7,8 @@ serialized through an asyncio lock so multiple agents can connect without
 trampling each other's in-flight commands.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os

@@ -6,6 +6,8 @@ listen on the Chrome extension WebSocket port directly; they use this client to
 forward browser commands to the singleton hub process instead.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -105,11 +107,17 @@ class HubClient:
             message["lease_token"] = self._lease_token
 
         try:
-            async with websockets.connect(self.control_url) as websocket:
+            async with websockets.connect(self.control_url, proxy=None) as websocket:
                 await websocket.send(json.dumps(message, ensure_ascii=False))
                 raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
         except asyncio.TimeoutError as exc:
             raise TimeoutError(f"等待 Browser Hub 响应超时 ({timeout}s): {command}") from exc
+        except ImportError as exc:
+            self._started = False
+            raise ConnectionError(
+                f"连接 Browser Hub 失败 ({self.control_url}): {exc}. "
+                "本地 Hub 连接已禁用代理；如果仍看到此错误，请检查 websockets 版本。"
+            ) from exc
         except OSError as exc:
             self._started = False
             raise ConnectionError(f"无法连接 Browser Hub ({self.control_url}): {exc}") from exc
@@ -142,8 +150,11 @@ class HubClient:
 
     async def _can_connect(self, timeout: float) -> bool:
         try:
-            async with websockets.connect(self.control_url, open_timeout=timeout):
+            async with websockets.connect(self.control_url, open_timeout=timeout, proxy=None):
                 return True
+        except ImportError as exc:
+            logger.warning(f"Browser Hub 探活连接失败: {exc}")
+            return False
         except Exception:
             return False
 

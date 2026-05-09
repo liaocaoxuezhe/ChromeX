@@ -3,6 +3,8 @@ WebSocket Server + 连接管理 + 心跳
 管理与 Chrome Extension 的单一活跃连接
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import socket
