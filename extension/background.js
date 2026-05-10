@@ -7,6 +7,7 @@
 const BUILD_VERSION = "2025-02-10-sendkeys"; // 用于验证扩展是否加载了新代码（send_keys code 修复）
 let ws = null;
 let wsConnected = false;
+let connectionEnabled = true; // 用户可通过 popup 开关控制
 let attachedTabId = null;
 // 显式跟踪当前工作标签（解决 active tab 返回 chrome-extension:// 页面的问题）
 let targetTabId = null;
@@ -43,6 +44,7 @@ function isDebugableUrl(url) {
 // ==================== WebSocket 管理 ====================
 
 function connectWebSocket() {
+  if (!connectionEnabled) return;
   // 避免 CONNECTING 阶段重复创建连接，导致连接风暴
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
@@ -114,6 +116,7 @@ function connectWebSocket() {
 }
 
 function scheduleReconnect() {
+  if (!connectionEnabled) return;
   if (reconnectTimer) return;
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     console.log("[Link2Chrome] 已达最大重连次数，停止重连");
@@ -1187,16 +1190,57 @@ async function cmdExtractContent(params) {
 function broadcastStatus() {
   chrome.runtime.sendMessage({
     type: "status",
-    connected: wsConnected
+    connected: wsConnected,
+    enabled: connectionEnabled
   }).catch(() => {});
+}
+
+function disableConnection() {
+  connectionEnabled = false;
+  // 停止自动重连
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempts = 0;
+  // 关闭现有连接
+  if (ws) {
+    try { ws.close(1000, "user disabled"); } catch (_) {}
+    ws = null;
+  }
+  wsConnected = false;
+  stopHeartbeat();
+  broadcastStatus();
+  chrome.storage.local.set({ connectionEnabled: false });
+}
+
+function enableConnection() {
+  connectionEnabled = true;
+  reconnectAttempts = 0;
+  chrome.storage.local.set({ connectionEnabled: true });
+  connectWebSocket();
+  broadcastStatus();
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "getStatus") {
-    sendResponse({ connected: wsConnected, targetTabId });
+    sendResponse({ connected: wsConnected, enabled: connectionEnabled, targetTabId });
+    return true;
+  }
+  if (message.type === "setEnabled") {
+    if (message.enabled) {
+      enableConnection();
+    } else {
+      disableConnection();
+    }
+    sendResponse({ ok: true, enabled: connectionEnabled });
     return true;
   }
   if (message.type === "reconnect") {
+    if (!connectionEnabled) {
+      sendResponse({ ok: false, reason: "disabled" });
+      return true;
+    }
     reconnectAttempts = 0;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -2213,5 +2257,11 @@ async function cmdScriptEvaluate(params) {
 }
 
 // ==================== 初始化 ====================
-connectWebSocket();
-console.log("[Link2Chrome] Service Worker 已启动");
+chrome.storage.local.get("connectionEnabled", (result) => {
+  // 未设置过时默认为 true
+  connectionEnabled = result.connectionEnabled !== false;
+  if (connectionEnabled) {
+    connectWebSocket();
+  }
+  console.log(`[Link2Chrome] Service Worker 已启动, enabled=${connectionEnabled}`);
+});

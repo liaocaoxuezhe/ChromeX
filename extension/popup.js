@@ -1,45 +1,96 @@
 const dot = document.getElementById("dot");
 const statusText = document.getElementById("statusText");
+const statusDetail = document.getElementById("statusDetail");
+const statusCard = document.getElementById("statusCard");
 const reconnectBtn = document.getElementById("reconnectBtn");
+const enableToggle = document.getElementById("enableToggle");
+const toggleHint = document.getElementById("toggleHint");
 
-function updateUI(connected) {
+function updateUI(connected, enabled) {
+  // Status card dimmed when disabled
+  statusCard.classList.toggle("dimmed", !enabled);
+
+  if (!enabled) {
+    dot.className = "status-dot";
+    statusText.textContent = "已停用";
+    statusDetail.textContent = "开启开关以建立连接";
+    reconnectBtn.disabled = true;
+    toggleHint.textContent = "MCP 连接已关闭";
+    return;
+  }
+
+  toggleHint.textContent = "允许 MCP 控制浏览器";
+
   if (connected) {
-    dot.className = "dot connected";
+    dot.className = "status-dot connected";
     statusText.textContent = "已连接";
+    statusDetail.textContent = "ws://localhost:8765";
     reconnectBtn.disabled = true;
   } else {
-    dot.className = "dot disconnected";
+    dot.className = "status-dot disconnected";
     statusText.textContent = "未连接";
+    statusDetail.textContent = "ws://localhost:8765";
     reconnectBtn.disabled = false;
   }
 }
 
-// 查询当前状态
+// 初始化：查询当前状态（包含 enabled）
 chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
   if (response) {
-    updateUI(response.connected);
+    enableToggle.checked = response.enabled !== false;
+    updateUI(response.connected, response.enabled !== false);
   } else {
-    updateUI(false);
+    enableToggle.checked = true;
+    updateUI(false, true);
   }
 });
 
-// 监听状态变化
+// 监听来自 background 的状态广播
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "status") {
-    updateUI(message.connected);
+    enableToggle.checked = message.enabled !== false;
+    updateUI(message.connected, message.enabled !== false);
   }
+});
+
+// 开关切换
+enableToggle.addEventListener("change", () => {
+  const enabled = enableToggle.checked;
+
+  // 乐观更新 UI
+  if (!enabled) {
+    updateUI(false, false);
+  } else {
+    dot.className = "status-dot connecting";
+    statusText.textContent = "连接中...";
+    statusDetail.textContent = "ws://localhost:8765";
+    reconnectBtn.disabled = true;
+    statusCard.classList.remove("dimmed");
+    toggleHint.textContent = "允许 MCP 控制浏览器";
+  }
+
+  chrome.runtime.sendMessage({ type: "setEnabled", enabled }, (response) => {
+    // background 会广播新状态，这里不需要额外处理
+    if (chrome.runtime.lastError) {
+      // 连接错误时回退
+      enableToggle.checked = !enabled;
+      updateUI(false, !enabled);
+    }
+  });
 });
 
 // 重连按钮
 reconnectBtn.addEventListener("click", () => {
   reconnectBtn.disabled = true;
+  dot.className = "status-dot connecting";
   statusText.textContent = "连接中...";
+
   chrome.runtime.sendMessage({ type: "reconnect" }, () => {
-    // 2 秒后重新查询状态
     setTimeout(() => {
       chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
         if (response) {
-          updateUI(response.connected);
+          enableToggle.checked = response.enabled !== false;
+          updateUI(response.connected, response.enabled !== false);
         }
       });
     }, 2000);

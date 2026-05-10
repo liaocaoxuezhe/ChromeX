@@ -1,0 +1,19 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background Container for strong presence and consistent size -->
+  <rect x="2" y="2" width="96" height="96" rx="24" fill="#1A1A1A"/>
+  
+  <!-- Centered Modular Link Graphic (Light for Dark Mode) -->
+  <g transform="translate(17, 17) scale(1.32)">
+    <rect x="0" y="0" width="14" height="14" rx="4" fill="#FFFFFF"/>
+    <rect x="18" y="0" width="14" height="14" rx="4" fill="#FFFFFF"/>
+    <rect x="36" y="0" width="14" height="14" rx="4" fill="#FFFFFF"/>
+    <rect x="0" y="18" width="14" height="14" rx="4" fill="#FFFFFF"/>
+    <rect x="0" y="36" width="14" height="14" rx="4" fill="#FFFFFF"/>
+    <rect x="18" y="36" width="14" height="14" rx="4" fill="#FFFFFF"/>
+    <rect x="36" y="36" width="14" height="14" rx="4" fill="#FFFFFF"/>
+    
+    <!-- Link Focus Points (Brand Blue) -->
+    <circle cx="25" cy="25" r="5" fill="#00A3FF"/>
+    <circle cx="43" cy="25" r="7" fill="#00A3FF" opacity="0.5"/>
+  </g>
+</svg>

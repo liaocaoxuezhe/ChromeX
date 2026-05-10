@@ -1,6 +1,10 @@
-# ChromeX / Link2Chrome
+<p align="center">
+  <img src="extension/icons/readme_logo.png" width="128" alt="Link2Chrome Logo">
+</p>
 
-ChromeX 是一个本地优先的浏览器自动化项目，通过 Chrome 扩展、WebSocket 和 MCP Server 将 Claude Code 与当前 Chrome 浏览器连接起来，让本地 Agent 可以读取页面状态、执行点击输入、滚动、标签页管理和基于视觉的页面操作。
+# Link2Chrome
+
+Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome 扩展、WebSocket 和 MCP Server 将 Claude Code 与当前 Chrome 浏览器连接起来，让本地 Agent 可以读取页面状态、执行点击输入、滚动、标签页管理和基于视觉的页面操作。
 
 ## 功能概览
 
