@@ -798,8 +798,25 @@ TOOL_DEFINITIONS.extend([
     },
     {
         "name": "action_hover",
-        "description": "Move the mouse over an element by selector or visible text.",
-        "inputSchema": _obj_schema({"target": {"type": "object", "description": "selector or text."}}, ["target"]),
+        "description": "Move the mouse over an element by selector, visible text, aria-label, or CSS pixel coordinates.",
+        "inputSchema": _obj_schema({"target": {"type": "object", "description": "selector, text, ariaLabel, or x/y CSS pixel coordinates."}}, ["target"]),
+    },
+    {
+        "name": "upload_file",
+        "description": "Set one or more local files on an <input type=file> element.",
+        "inputSchema": _obj_schema({
+            "selector": {"type": "string", "description": "CSS selector for the file input."},
+            "paths": {"type": "array", "items": {"type": "string"}, "description": "Absolute local file paths to upload."},
+        }, ["selector", "paths"]),
+    },
+    {
+        "name": "handle_dialog",
+        "description": "Accept or dismiss the current JavaScript dialog, optionally supplying prompt text.",
+        "inputSchema": _obj_schema({
+            "action": {"type": "string", "enum": ["accept", "dismiss"], "description": "Dialog action."},
+            "promptText": {"type": "string", "description": "Text for prompt dialogs when accepting."},
+            "timeout": {"type": "integer", "description": "Wait time in ms for a dialog. Defaults to 5000."},
+        }, ["action"]),
     },
     {
         "name": "action_press_key",
@@ -817,6 +834,85 @@ TOOL_DEFINITIONS.extend([
             "fields": {"type": "array", "items": {"type": "object"}, "description": "Fields with name or selector, value, and optional type."},
             "submit": {"type": "boolean", "description": "Submit after filling."},
         }, ["fields"]),
+    },
+    {
+        "name": "network_capture",
+        "description": "Start, stop, clear, or inspect in-memory CDP network request capture for the target tab.",
+        "inputSchema": _obj_schema({
+            "action": {"type": "string", "enum": ["start", "stop", "status", "clear"], "description": "Capture control action."},
+            "includeResponseBody": {"type": "boolean", "description": "When starting capture, store response bodies when CDP allows it. Defaults to false."},
+            "maxEntries": {"type": "integer", "description": "Maximum retained request entries. Defaults to 500."},
+        }, ["action"]),
+    },
+    {
+        "name": "network_list",
+        "description": "List recent captured network requests with compact request/response metadata.",
+        "inputSchema": _obj_schema({
+            "limit": {"type": "integer", "description": "Maximum results. Defaults to 50."},
+            "resourceType": {"type": "string", "description": "Optional CDP resource type filter."},
+            "status": {"type": "integer", "description": "Optional HTTP status filter."},
+            "method": {"type": "string", "description": "Optional request method filter."},
+        }),
+    },
+    {
+        "name": "network_query",
+        "description": "Filter captured network requests by URL, method, status, resource type, and body availability.",
+        "inputSchema": _obj_schema({
+            "urlContains": {"type": "string", "description": "Substring that must appear in the request URL."},
+            "method": {"type": "string", "description": "Request method filter."},
+            "status": {"type": "integer", "description": "HTTP status filter."},
+            "resourceType": {"type": "string", "description": "CDP resource type filter."},
+            "hasResponseBody": {"type": "boolean", "description": "Filter by captured response body presence."},
+            "includeBody": {"type": "boolean", "description": "Include captured request/response bodies in results."},
+            "limit": {"type": "integer", "description": "Maximum results. Defaults to 50."},
+        }),
+    },
+    {
+        "name": "network_fetch",
+        "description": "Perform a background fetch from the extension context, bypassing page CORS restrictions.",
+        "inputSchema": _obj_schema({
+            "url": {"type": "string", "description": "URL to fetch."},
+            "method": {"type": "string", "description": "HTTP method. Defaults to GET."},
+            "headers": {"type": "object", "description": "Request headers."},
+            "body": {"type": "string", "description": "Optional request body."},
+            "responseType": {"type": "string", "enum": ["text", "base64"], "description": "Response body format. Defaults to text."},
+        }, ["url"]),
+    },
+    {
+        "name": "network_replay",
+        "description": "Replay a captured request by id or requestId using network_fetch.",
+        "inputSchema": _obj_schema({
+            "id": {"type": "string", "description": "Captured entry id from network_list/query."},
+            "requestId": {"type": "string", "description": "Raw CDP requestId."},
+            "overrideHeaders": {"type": "object", "description": "Headers to merge or override before replay."},
+            "overrideBody": {"type": "string", "description": "Body to use instead of captured postData."},
+        }),
+    },
+    {
+        "name": "console_capture",
+        "description": "Start, stop, clear, or inspect in-memory console/log capture for the target tab.",
+        "inputSchema": _obj_schema({
+            "action": {"type": "string", "enum": ["start", "stop", "status", "clear"], "description": "Capture control action."},
+            "maxEntries": {"type": "integer", "description": "Maximum retained console entries. Defaults to 300."},
+        }, ["action"]),
+    },
+    {
+        "name": "console_list",
+        "description": "List captured console messages with optional type filtering.",
+        "inputSchema": _obj_schema({
+            "types": {"type": "array", "items": {"type": "string"}, "description": "Optional console types such as log, error, warn, info."},
+            "limit": {"type": "integer", "description": "Maximum results. Defaults to 50."},
+        }),
+    },
+    {
+        "name": "console_get",
+        "description": "Get one captured console message by id.",
+        "inputSchema": _obj_schema({"id": {"type": "string", "description": "Console message id."}}, ["id"]),
+    },
+    {
+        "name": "console_clear",
+        "description": "Clear captured console messages for the target tab.",
+        "inputSchema": _obj_schema(),
     },
     {
         "name": "script_evaluate",
@@ -857,7 +953,20 @@ PUBLIC_TOOL_NAMES = {
     "action_drag",
     "action_type",
     "action_scroll",
+    "action_hover",
     "action_press_key",
+    "upload_file",
+    "handle_dialog",
+    # Network and console diagnostics
+    "network_capture",
+    "network_list",
+    "network_query",
+    "network_fetch",
+    "network_replay",
+    "console_capture",
+    "console_list",
+    "console_get",
+    "console_clear",
     # Script evaluation
     "script_evaluate",
     # Legacy tools with unique value

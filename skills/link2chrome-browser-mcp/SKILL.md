@@ -16,7 +16,9 @@ description: Use when controlling Chrome through the Link2Chrome MCP server, ins
 - **导航**：`browser_navigate` 后，用 `browser_tab_info` 或 `dom_overview` 验证。
 - **观察**：先 `dom_overview`；再用 `dom_query`、`dom_search`、`dom_element_detail` 缩小范围；元数据优先 `dom_structured_data`。
 - **等待**：导航或动作之后，用 `dom_wait_for` 等待具体 DOM 状态。
-- **动作**：`action_click`、`action_type`、`action_scroll`、`action_drag`、`action_press_key`。
+- **动作**：`action_click`、`action_type`、`action_scroll`、`action_drag`、`action_hover`、`action_press_key`、`upload_file`、`handle_dialog`。
+- **网络**：`network_capture` 控制捕获；`network_list` / `network_query` 查看请求；`network_fetch` 做扩展端 fetch；`network_replay` 重放已捕获请求。
+- **控制台**：`console_capture` 控制捕获；`console_list` / `console_get` 查看消息；`console_clear` 清空缓存。
 - **提取**：文章用 `browser_extract_content`；无限列表用 `browser_scrape_with_scroll`；精确自定义逻辑才用 `script_evaluate`。
 - **视觉兜底**：DOM 回答不了时，用 `browser_screenshot`。
 
@@ -29,7 +31,7 @@ description: Use when controlling Chrome through the Link2Chrome MCP server, ins
    - 看单个节点：`dom_element_detail`，按需带 `position` 或 `accessibility`。
 2. **思考**：思考你做的事情，看看执行什么工具可以完成任务，争取一次性执行多种 tools 来完成任务。
 3. **操作**：只做一个有意义的动作。
-   - 点击、输入、滚动、拖拽、按键。
+   - 点击、输入、滚动、拖拽、悬停、上传文件、处理弹窗、按键。
    - 立刻用 `dom_wait_for`、`dom_overview`、`dom_query` 或 `browser_tab_info` 验证效果。
 4. **循环**：用新观察继续下一步。不要拿过期 DOM 连续猜测操作。
 

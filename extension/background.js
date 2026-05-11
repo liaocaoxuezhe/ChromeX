@@ -18,6 +18,21 @@ const WS_URL = "ws://localhost:8765";
 const HEARTBEAT_INTERVAL = 30000;
 const CDP_COMMAND_TIMEOUT = 10000;
 let heartbeatTimer = null;
+const networkCaptureState = {
+  enabled: false,
+  includeResponseBody: false,
+  maxEntries: 500,
+  entries: [],
+  byRequestId: new Map()
+};
+const consoleCaptureState = {
+  enabled: false,
+  maxEntries: 300,
+  entries: []
+};
+let currentDialog = null;
+let networkSequence = 0;
+let consoleSequence = 0;
 
 // 不可调试的 URL 前缀
 const UNDEBUGABLE_PREFIXES = [
@@ -276,6 +291,7 @@ async function ensureDebuggerAttached() {
       await chrome.debugger.attach({ tabId }, "1.3");
       attachedTabId = tabId;
       targetTabId = tabId;
+      chrome.debugger.sendCommand({ tabId }, "Page.enable").catch(() => {});
       console.log(`[Link2Chrome] Debugger 已附加到 tab ${tabId} (${tab.url})`);
       return tabId;
     } catch (err) {
@@ -330,6 +346,8 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   }
 });
 
+chrome.debugger.onEvent.addListener(handleDebuggerEvent);
+
 // 监听 tab 关闭，清理 targetTabId
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === targetTabId) {
@@ -339,6 +357,168 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     attachedTabId = null;
   }
 });
+
+function trimCaptureEntries(state) {
+  while (state.entries.length > state.maxEntries) {
+    const removed = state.entries.shift();
+    if (state.byRequestId && removed?.requestId) {
+      state.byRequestId.delete(removed.requestId);
+    }
+  }
+}
+
+function compactHeaders(headers = {}) {
+  const out = {};
+  for (const [key, value] of Object.entries(headers || {})) {
+    out[key] = String(value).slice(0, 2000);
+  }
+  return out;
+}
+
+function compactNetworkEntry(entry, includeBody = false) {
+  const out = {
+    id: entry.id,
+    requestId: entry.requestId,
+    url: entry.url,
+    method: entry.method,
+    resourceType: entry.resourceType,
+    status: entry.status,
+    statusText: entry.statusText,
+    mimeType: entry.mimeType,
+    fromDiskCache: entry.fromDiskCache,
+    encodedDataLength: entry.encodedDataLength,
+    errorText: entry.errorText,
+    startedAt: entry.startedAt,
+    finishedAt: entry.finishedAt,
+    hasRequestBody: !!entry.requestBody,
+    hasResponseBody: !!entry.responseBody
+  };
+  if (includeBody) {
+    out.requestBody = entry.requestBody || null;
+    out.responseBody = entry.responseBody || null;
+    out.responseBodyBase64Encoded = !!entry.responseBodyBase64Encoded;
+  }
+  return out;
+}
+
+function handleDebuggerEvent(source, method, params) {
+  if (source.tabId !== attachedTabId && source.tabId !== targetTabId) return;
+
+  if (networkCaptureState.enabled) {
+    handleNetworkEvent(method, params);
+  }
+
+  if (consoleCaptureState.enabled) {
+    handleConsoleEvent(method, params);
+  }
+
+  if (method === "Page.javascriptDialogOpening") {
+    currentDialog = {
+      tabId: source.tabId,
+      type: params.type,
+      message: params.message,
+      defaultPrompt: params.defaultPrompt || "",
+      url: params.url || "",
+      openedAt: Date.now()
+    };
+  } else if (method === "Page.javascriptDialogClosed") {
+    currentDialog = null;
+  }
+}
+
+function handleNetworkEvent(method, params) {
+  if (method === "Network.requestWillBeSent") {
+    const request = params.request || {};
+    const entry = {
+      id: `net-${++networkSequence}`,
+      requestId: params.requestId,
+      loaderId: params.loaderId,
+      frameId: params.frameId,
+      url: request.url,
+      method: request.method,
+      requestHeaders: compactHeaders(request.headers),
+      requestBody: request.postData || null,
+      resourceType: params.type,
+      initiator: params.initiator?.type || null,
+      startedAt: Date.now(),
+      timestamp: params.timestamp
+    };
+    networkCaptureState.byRequestId.set(params.requestId, entry);
+    networkCaptureState.entries.push(entry);
+    trimCaptureEntries(networkCaptureState);
+  } else if (method === "Network.responseReceived") {
+    const entry = networkCaptureState.byRequestId.get(params.requestId);
+    if (!entry) return;
+    const response = params.response || {};
+    entry.status = response.status;
+    entry.statusText = response.statusText;
+    entry.responseHeaders = compactHeaders(response.headers);
+    entry.mimeType = response.mimeType;
+    entry.protocol = response.protocol;
+    entry.remoteIPAddress = response.remoteIPAddress;
+    entry.fromDiskCache = !!response.fromDiskCache;
+    entry.resourceType = params.type || entry.resourceType;
+  } else if (method === "Network.loadingFinished") {
+    const entry = networkCaptureState.byRequestId.get(params.requestId);
+    if (!entry) return;
+    entry.finishedAt = Date.now();
+    entry.encodedDataLength = params.encodedDataLength;
+    if (networkCaptureState.includeResponseBody) {
+      sendCDP("Network.getResponseBody", { requestId: params.requestId })
+        .then((body) => {
+          entry.responseBody = String(body.body || "").slice(0, 200000);
+          entry.responseBodyBase64Encoded = !!body.base64Encoded;
+        })
+        .catch((err) => {
+          entry.responseBodyError = err.message;
+        });
+    }
+  } else if (method === "Network.loadingFailed") {
+    const entry = networkCaptureState.byRequestId.get(params.requestId);
+    if (!entry) return;
+    entry.finishedAt = Date.now();
+    entry.errorText = params.errorText;
+    entry.canceled = !!params.canceled;
+  }
+}
+
+function remoteObjectPreview(arg) {
+  if (!arg) return null;
+  if ("value" in arg) return arg.value;
+  if (arg.unserializableValue) return arg.unserializableValue;
+  if (arg.description) return arg.description;
+  return arg.type || null;
+}
+
+function handleConsoleEvent(method, params) {
+  let entry = null;
+  if (method === "Runtime.consoleAPICalled") {
+    entry = {
+      id: `console-${++consoleSequence}`,
+      source: "runtime",
+      type: params.type,
+      text: (params.args || []).map(remoteObjectPreview).map(v => String(v)).join(" "),
+      args: (params.args || []).map(remoteObjectPreview),
+      stackTrace: params.stackTrace || null,
+      timestamp: params.timestamp || Date.now()
+    };
+  } else if (method === "Log.entryAdded") {
+    const logEntry = params.entry || {};
+    entry = {
+      id: `console-${++consoleSequence}`,
+      source: logEntry.source || "log",
+      type: logEntry.level || "log",
+      text: logEntry.text || "",
+      url: logEntry.url || "",
+      lineNumber: logEntry.lineNumber,
+      stackTrace: logEntry.stackTrace || null,
+      timestamp: logEntry.timestamp || Date.now()
+    };
+  }
+  if (!entry) return;
+  consoleCaptureState.entries.push(entry);
+  trimCaptureEntries(consoleCaptureState);
+}
 
 // ==================== 指令处理 ====================
 
@@ -459,11 +639,44 @@ async function handleCommand(message) {
       case "action_hover":
         response.data = await cmdActionHover(params);
         break;
+      case "upload_file":
+        response.data = await cmdUploadFile(params);
+        break;
+      case "handle_dialog":
+        response.data = await cmdHandleDialog(params);
+        break;
       case "action_press_key":
         response.data = await cmdActionPressKey(params);
         break;
       case "action_fill_form":
         response.data = await cmdActionFillForm(params);
+        break;
+      case "network_capture":
+        response.data = await cmdNetworkCapture(params);
+        break;
+      case "network_list":
+        response.data = await cmdNetworkList(params);
+        break;
+      case "network_query":
+        response.data = await cmdNetworkQuery(params);
+        break;
+      case "network_fetch":
+        response.data = await cmdNetworkFetch(params);
+        break;
+      case "network_replay":
+        response.data = await cmdNetworkReplay(params);
+        break;
+      case "console_capture":
+        response.data = await cmdConsoleCapture(params);
+        break;
+      case "console_list":
+        response.data = await cmdConsoleList(params);
+        break;
+      case "console_get":
+        response.data = await cmdConsoleGet(params);
+        break;
+      case "console_clear":
+        response.data = await cmdConsoleClear(params);
         break;
       case "script_evaluate":
         response.data = await cmdScriptEvaluate(params);
@@ -2191,18 +2404,9 @@ async function cmdActionSelect(params) {
 
 async function cmdActionHover(params) {
   const target = params.target || {};
-  let selector = target.selector;
-  if (!selector && target.text) {
-    const found = await cmdFindText({ text: target.text, click: false });
-    const el = found.elements?.find(e => e.visible);
-    if (!el) throw new Error(`No visible element found by text: ${target.text}`);
-    await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: el.x, y: el.y });
-    return { ok: true, target, effects: { hoverDispatched: true } };
-  }
-  const detail = await cmdDomElementDetail({ selector, include: ["position"] });
-  if (!detail.ok) return detail;
-  await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: detail.position.x + detail.position.width / 2, y: detail.position.y + detail.position.height / 2 });
-  return { ok: true, target: { ...target, selector }, effects: { hoverDispatched: true } };
+  const point = await resolveActionPoint(target);
+  await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  return { ok: true, target: { ...target, selector: point.selector || target.selector }, point, effects: { hoverDispatched: true } };
 }
 
 async function cmdActionPressKey(params) {
@@ -2238,6 +2442,211 @@ async function cmdActionFillForm(params) {
     }, { formSelector });
   }
   return { ok: failed.length === 0, filled, failed, submitted: !!params.submit };
+}
+
+async function cmdUploadFile(params) {
+  const selector = params.selector;
+  const paths = Array.isArray(params.paths) ? params.paths : [params.paths].filter(Boolean);
+  if (!selector) throw new Error("upload_file requires selector");
+  if (!paths.length) throw new Error("upload_file requires at least one path");
+
+  await sendCDP("DOM.enable").catch(() => {});
+  const documentResult = await sendCDP("DOM.getDocument", { depth: 1, pierce: true });
+  const rootNodeId = documentResult.root?.nodeId;
+  const queryResult = await sendCDP("DOM.querySelector", { nodeId: rootNodeId, selector });
+  if (!queryResult.nodeId) throw new Error(`file input not found: ${selector}`);
+  const describeResult = await sendCDP("DOM.describeNode", { nodeId: queryResult.nodeId });
+  const node = describeResult.node || {};
+  const attrs = node.attributes || [];
+  const attrMap = {};
+  for (let i = 0; i < attrs.length; i += 2) attrMap[attrs[i]] = attrs[i + 1];
+  if (String(node.nodeName || "").toLowerCase() !== "input" || attrMap.type !== "file") {
+    throw new Error(`selector is not an input[type=file]: ${selector}`);
+  }
+  await sendCDP("DOM.setFileInputFiles", { nodeId: queryResult.nodeId, files: paths });
+  return { ok: true, selector, files: paths, count: paths.length };
+}
+
+async function cmdHandleDialog(params) {
+  const action = params.action || "accept";
+  const timeout = params.timeout ?? 5000;
+  await sendCDP("Page.enable").catch(() => {});
+
+  const deadline = Date.now() + timeout;
+  while (!currentDialog && Date.now() < deadline) {
+    await sleep(100);
+  }
+  if (!currentDialog) {
+    return { ok: false, error: "no dialog observed", waited: timeout };
+  }
+
+  const dialog = currentDialog;
+  await sendCDP("Page.handleJavaScriptDialog", {
+    accept: action === "accept",
+    promptText: params.promptText || ""
+  });
+  currentDialog = null;
+  return { ok: true, action, dialog };
+}
+
+async function cmdNetworkCapture(params) {
+  const action = params.action || "status";
+  if (action === "start") {
+    networkCaptureState.enabled = true;
+    networkCaptureState.includeResponseBody = !!params.includeResponseBody;
+    networkCaptureState.maxEntries = Math.max(1, params.maxEntries || 500);
+    await sendCDP("Network.enable", { maxPostDataSize: 200000 }).catch(() => {});
+  } else if (action === "stop") {
+    networkCaptureState.enabled = false;
+    await sendCDP("Network.disable").catch(() => {});
+  } else if (action === "clear") {
+    networkCaptureState.entries = [];
+    networkCaptureState.byRequestId.clear();
+  } else if (action !== "status") {
+    throw new Error(`unknown network_capture action: ${action}`);
+  }
+  return {
+    ok: true,
+    action,
+    enabled: networkCaptureState.enabled,
+    includeResponseBody: networkCaptureState.includeResponseBody,
+    count: networkCaptureState.entries.length,
+    maxEntries: networkCaptureState.maxEntries
+  };
+}
+
+function filterNetworkEntries(params = {}) {
+  const limit = Math.max(1, params.limit || 50);
+  let entries = [...networkCaptureState.entries];
+  if (params.urlContains) entries = entries.filter(e => (e.url || "").includes(params.urlContains));
+  if (params.method) entries = entries.filter(e => String(e.method || "").toUpperCase() === String(params.method).toUpperCase());
+  if (params.status !== undefined) entries = entries.filter(e => e.status === params.status);
+  if (params.resourceType) entries = entries.filter(e => e.resourceType === params.resourceType);
+  if (params.hasResponseBody !== undefined) entries = entries.filter(e => !!e.responseBody === !!params.hasResponseBody);
+  return entries.slice(-limit).reverse();
+}
+
+async function cmdNetworkList(params) {
+  const entries = filterNetworkEntries(params).map(e => compactNetworkEntry(e, false));
+  return { ok: true, enabled: networkCaptureState.enabled, count: entries.length, requests: entries };
+}
+
+async function cmdNetworkQuery(params) {
+  const entries = filterNetworkEntries(params).map(e => compactNetworkEntry(e, !!params.includeBody));
+  return { ok: true, enabled: networkCaptureState.enabled, count: entries.length, requests: entries };
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function cmdNetworkFetch(params) {
+  const started = Date.now();
+  const method = params.method || "GET";
+  const responseType = params.responseType || "text";
+  const init = {
+    method,
+    headers: params.headers || {},
+    credentials: params.credentials || "include"
+  };
+  if (params.body !== undefined && method.toUpperCase() !== "GET" && method.toUpperCase() !== "HEAD") {
+    init.body = params.body;
+  }
+  const response = await fetch(params.url, init);
+  const headers = {};
+  response.headers.forEach((value, key) => { headers[key] = value; });
+  let body;
+  let base64Encoded = false;
+  if (responseType === "base64") {
+    body = arrayBufferToBase64(await response.arrayBuffer());
+    base64Encoded = true;
+  } else {
+    body = await response.text();
+  }
+  return {
+    ok: true,
+    url: response.url,
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+    body: String(body).slice(0, 500000),
+    base64Encoded,
+    elapsed: Date.now() - started
+  };
+}
+
+async function cmdNetworkReplay(params) {
+  const entry = networkCaptureState.entries.find(e =>
+    (params.id && e.id === params.id) || (params.requestId && e.requestId === params.requestId)
+  );
+  if (!entry) return { ok: false, error: "captured request not found" };
+  const headers = { ...(entry.requestHeaders || {}), ...(params.overrideHeaders || {}) };
+  return cmdNetworkFetch({
+    url: entry.url,
+    method: entry.method || "GET",
+    headers,
+    body: params.overrideBody !== undefined ? params.overrideBody : entry.requestBody,
+    responseType: params.responseType || "text"
+  });
+}
+
+async function cmdConsoleCapture(params) {
+  const action = params.action || "status";
+  if (action === "start") {
+    consoleCaptureState.enabled = true;
+    consoleCaptureState.maxEntries = Math.max(1, params.maxEntries || 300);
+    await sendCDP("Runtime.enable").catch(() => {});
+    await sendCDP("Log.enable").catch(() => {});
+  } else if (action === "stop") {
+    consoleCaptureState.enabled = false;
+    await sendCDP("Log.disable").catch(() => {});
+  } else if (action === "clear") {
+    consoleCaptureState.entries = [];
+  } else if (action !== "status") {
+    throw new Error(`unknown console_capture action: ${action}`);
+  }
+  return {
+    ok: true,
+    action,
+    enabled: consoleCaptureState.enabled,
+    count: consoleCaptureState.entries.length,
+    maxEntries: consoleCaptureState.maxEntries
+  };
+}
+
+function filterConsoleEntries(params = {}) {
+  const limit = Math.max(1, params.limit || 50);
+  let entries = [...consoleCaptureState.entries];
+  if (Array.isArray(params.types) && params.types.length) {
+    const allowed = new Set(params.types.map(t => String(t).toLowerCase()));
+    entries = entries.filter(e => allowed.has(String(e.type || "").toLowerCase()));
+  }
+  return entries.slice(-limit).reverse();
+}
+
+async function cmdConsoleList(params) {
+  const messages = filterConsoleEntries(params).map(({ stackTrace, args, ...entry }) => ({
+    ...entry,
+    text: String(entry.text || "").slice(0, 1000)
+  }));
+  return { ok: true, enabled: consoleCaptureState.enabled, count: messages.length, messages };
+}
+
+async function cmdConsoleGet(params) {
+  const entry = consoleCaptureState.entries.find(e => e.id === params.id);
+  if (!entry) return { ok: false, error: "console message not found", id: params.id };
+  return { ok: true, message: entry };
+}
+
+async function cmdConsoleClear(params) {
+  consoleCaptureState.entries = [];
+  return { ok: true, cleared: true };
 }
 
 async function cmdScriptEvaluate(params) {
