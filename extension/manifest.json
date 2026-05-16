@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Link2Chrome - Local Browser MCP",
+  "name": "ChromeX - Local Browser MCP",
   "version": "1.0.0",
   "description": "通过 WebSocket 桥接 MCP Server 与 Chrome DevTools Protocol",
   "permissions": [
@@ -23,7 +23,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Link2Chrome"
+    "default_title": "ChromeX"
   },
   "web_accessible_resources": [
     {

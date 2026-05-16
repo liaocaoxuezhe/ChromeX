@@ -7,29 +7,28 @@ const enableToggle = document.getElementById("enableToggle");
 const toggleHint = document.getElementById("toggleHint");
 
 function updateUI(connected, enabled) {
-  // Status card dimmed when disabled
   statusCard.classList.toggle("dimmed", !enabled);
 
   if (!enabled) {
     dot.className = "status-dot";
     statusText.textContent = "已停用";
-    statusDetail.textContent = "开启开关以建立连接";
+    statusDetail.textContent = "";
     reconnectBtn.disabled = true;
-    toggleHint.textContent = "MCP 连接已关闭";
+    toggleHint.textContent = "已关闭";
     return;
   }
 
-  toggleHint.textContent = "允许 MCP 控制浏览器";
+  toggleHint.textContent = "启用连接";
 
   if (connected) {
     dot.className = "status-dot connected";
     statusText.textContent = "已连接";
-    statusDetail.textContent = "ws://localhost:8765";
+    statusDetail.textContent = ":8765";
     reconnectBtn.disabled = true;
   } else {
     dot.className = "status-dot disconnected";
     statusText.textContent = "未连接";
-    statusDetail.textContent = "ws://localhost:8765";
+    statusDetail.textContent = ":8765";
     reconnectBtn.disabled = false;
   }
 }
