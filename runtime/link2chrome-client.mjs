@@ -59,7 +59,27 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
   };
   client.localEnvironment = new LocalEnvironmentSurface({ localEnvironment, client });
   client.scripts = new ScriptSurface({ client });
+  client.tasks = new TaskSurface({ client });
   return client;
+}
+
+class TaskSurface {
+  constructor({ client }) {
+    this._client = client;
+  }
+
+  async run(name, script, options = {}) {
+    const launch = await this._client.localEnvironment.openAndWait(options);
+    const result = await this._client.scripts.run(script, {
+      ...options.scriptOptions,
+      sessionName: options.sessionName || name,
+    });
+    return {
+      launch: launch.launch,
+      readiness: launch.readiness,
+      result,
+    };
+  }
 }
 
 class ScriptSurface {
@@ -358,6 +378,11 @@ function runtimeCapabilities() {
       scriptsRun: true,
       acceptsFunction: true,
       acceptsSourceString: true,
+      exclusiveSession: true,
+    },
+    tasks: {
+      run: true,
+      preparesBrowser: true,
       exclusiveSession: true,
     },
     nativeMessaging: false,

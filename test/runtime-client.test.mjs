@@ -381,6 +381,56 @@ test("scripts.run executes source code and can wrap it in an exclusive browser s
   ]);
 });
 
+test("tasks.run opens a ready browser session and executes model-authored code", async () => {
+  const launched = [];
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "__hub_status__") return { extension_connected: true, queue_locked: false };
+      if (name === "browser_tab_info") return { id: 21, active: true, url: "https://task.test" };
+      if (name === "__hub_acquire__") return { lease_token: "lease-task", lease_name: args.name };
+      if (name === "browser_tabs_list") return { tabs: [{ id: 21, active: true, title: "Task" }] };
+      return { ok: true };
+    },
+  };
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    localEnvironment: {
+      inspect: async () => ({
+        ok: true,
+        extensionPackage: { ok: true, path: "/Users/me/Link2Chrome/extension" },
+        browsers: [{
+          id: "chrome",
+          installed: true,
+          executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+          profiles: [{ id: "Default", extensionInstall: { installed: true, enabled: true } }],
+        }],
+      }),
+    },
+  });
+
+  const task = await link2chrome.tasks.run("inspect tabs", `
+const tabs = await browser.tabs.list();
+return { tabIds: tabs.map((tab) => tab.id), lease: lease.lease_token };
+`, {
+    launcher: async (command, args) => {
+      launched.push({ command, args });
+      return { pid: 105 };
+    },
+  });
+
+  assert.equal(task.launch.profileId, "Default");
+  assert.equal(task.readiness.ok, true);
+  assert.deepEqual(task.result, { tabIds: [21], lease: "lease-task" });
+  assert.deepEqual(transport.calls.filter((call) => call.name === "__hub_acquire__" || call.name === "__hub_release__"), [
+    { name: "__hub_acquire__", args: { name: "inspect tabs" } },
+    { name: "__hub_release__", args: { lease_token: "lease-task" } },
+  ]);
+  assert.equal(launched.length, 1);
+});
+
 test("diagnose returns Browser Hub status", async () => {
   const transport = {
     calls: [],
@@ -496,6 +546,11 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
     scriptsRun: true,
     acceptsFunction: true,
     acceptsSourceString: true,
+    exclusiveSession: true,
+  });
+  assert.deepEqual(result.capabilities.tasks, {
+    run: true,
+    preparesBrowser: true,
     exclusiveSession: true,
   });
   assert.deepEqual(result.capabilities.domCua, {
