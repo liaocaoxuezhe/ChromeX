@@ -8,6 +8,10 @@ import {
   decodeNativeMessages,
   encodeNativeMessage,
 } from "../scripts/native-host/native-host.mjs";
+import { checkChromeIsRunning } from "../scripts/diagnostics/chrome-is-running.mjs";
+import { checkExtensionInstalled } from "../scripts/diagnostics/check-extension-installed.mjs";
+import { checkInstalledBrowsers } from "../scripts/diagnostics/installed-browsers.mjs";
+import { checkNativeHostManifest } from "../scripts/diagnostics/check-native-host-manifest.mjs";
 
 export function setupLink2ChromeRuntime({
   globals = globalThis,
@@ -33,11 +37,20 @@ export function setupLink2ChromeRuntime({
   return { agent, link2chrome };
 }
 
-export function createLink2ChromeClient({ transport, confirmAction, localEnvironment, safetyPolicy } = {}) {
+export function createLink2ChromeClient({
+  transport,
+  confirmAction,
+  localEnvironment,
+  safetyPolicy,
+  diagnosticsChecks,
+} = {}) {
   if (!transport || typeof transport.command !== "function") {
     throw new TypeError("createLink2ChromeClient requires a transport with command(name, args)");
   }
   const safety = new SafetyManager({ confirmAction, policy: safetyPolicy });
+  const diagnosticsSurface = new DiagnosticsSurface({ transport, localEnvironment, checks: diagnosticsChecks });
+  const diagnostics = diagnosticsSurface.run.bind(diagnosticsSurface);
+  diagnostics.readiness = diagnosticsSurface.readiness.bind(diagnosticsSurface);
   const client = {
     _transport: transport,
     _safety: safety,
@@ -54,7 +67,7 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
         };
       }
     },
-    diagnostics: new DiagnosticsSurface({ transport, localEnvironment }),
+    diagnostics,
     sessions: new SessionSurface({ transport, safety }),
     browsers: {
       async list() {
@@ -327,9 +340,35 @@ function defaultSleep(ms) {
 }
 
 class DiagnosticsSurface {
-  constructor({ transport, localEnvironment }) {
+  constructor({ transport, localEnvironment, checks }) {
     this._transport = transport;
     this._localEnvironment = localEnvironment;
+    this._checks = checks || {
+      chromeRunning: () => checkChromeIsRunning(),
+      installedBrowsers: () => checkInstalledBrowsers({ inspect: this._inspectLocalEnvironment.bind(this) }),
+      extensionInstalled: () => checkExtensionInstalled({ inspect: this._inspectLocalEnvironment.bind(this) }),
+      nativeHostManifest: () => checkNativeHostManifest(),
+    };
+  }
+
+  async run() {
+    const [
+      chromeRunning,
+      installedBrowsers,
+      extensionInstalled,
+      nativeHostManifest,
+    ] = await Promise.all([
+      this._checks.chromeRunning(),
+      this._checks.installedBrowsers(),
+      this._checks.extensionInstalled(),
+      this._checks.nativeHostManifest(),
+    ]);
+    return {
+      chromeRunning,
+      installedBrowsers,
+      extensionInstalled,
+      nativeHostManifest,
+    };
   }
 
   async readiness() {
@@ -380,16 +419,20 @@ class DiagnosticsSurface {
 
   async _checkLocalEnvironment() {
     try {
-      if (this._localEnvironment?.inspect) {
-        return await this._localEnvironment.inspect();
-      }
-      return await discoverLocalBrowserEnvironment();
+      return await this._inspectLocalEnvironment();
     } catch (error) {
       return {
         ok: false,
         error: String(error?.message || error),
       };
     }
+  }
+
+  async _inspectLocalEnvironment() {
+    if (this._localEnvironment?.inspect) {
+      return this._localEnvironment.inspect();
+    }
+    return discoverLocalBrowserEnvironment();
   }
 }
 
