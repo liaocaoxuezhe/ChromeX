@@ -191,6 +191,9 @@ async function diagnoseExtensionPackage(extensionDir) {
     const permissions = manifest.permissions || [];
     const hostPermissions = manifest.host_permissions || [];
     const backgroundServiceWorker = manifest.background?.service_worker || null;
+    const backgroundDiagnostics = backgroundServiceWorker
+      ? await diagnoseBackgroundServiceWorker(join(extensionDir, backgroundServiceWorker))
+      : missingBackgroundDiagnostics();
     const missingPermissions = REQUIRED_EXTENSION_PERMISSIONS.filter((permission) => !permissions.includes(permission));
     const missingHostPermissions = REQUIRED_HOST_PERMISSIONS.filter((permission) => !hostPermissions.includes(permission));
     return {
@@ -199,6 +202,7 @@ async function diagnoseExtensionPackage(extensionDir) {
         && Boolean(backgroundServiceWorker)
         && missingPermissions.length === 0
         && missingHostPermissions.length === 0
+        && backgroundDiagnostics.keepalive.ok
       ),
       path: extensionDir,
       manifestVersion: manifest.manifest_version || null,
@@ -206,6 +210,8 @@ async function diagnoseExtensionPackage(extensionDir) {
       backgroundServiceWorker,
       missingPermissions,
       missingHostPermissions,
+      websocketUrl: backgroundDiagnostics.websocketUrl,
+      keepalive: backgroundDiagnostics.keepalive,
     };
   } catch (error) {
     return {
@@ -217,8 +223,49 @@ async function diagnoseExtensionPackage(extensionDir) {
       backgroundServiceWorker: null,
       missingPermissions: REQUIRED_EXTENSION_PERMISSIONS,
       missingHostPermissions: REQUIRED_HOST_PERMISSIONS,
+      websocketUrl: null,
+      keepalive: missingBackgroundDiagnostics().keepalive,
     };
   }
+}
+
+async function diagnoseBackgroundServiceWorker(path) {
+  try {
+    const source = await readFile(path, "utf8");
+    const hasAlarmsApi = /chrome\.alarms\.(create|onAlarm)/.test(source);
+    const hasRuntimeLifecycleListener = /chrome\.runtime\.(onStartup|onInstalled|onSuspend|onConnect|onMessage)\.addListener/.test(source);
+    const missingSignals = [];
+    if (!hasAlarmsApi) missingSignals.push("chrome.alarms");
+    if (!hasRuntimeLifecycleListener) missingSignals.push("chrome.runtime lifecycle listener");
+    return {
+      websocketUrl: extractWebSocketUrl(source),
+      keepalive: {
+        ok: missingSignals.length === 0,
+        hasAlarmsApi,
+        hasRuntimeLifecycleListener,
+        missingSignals,
+      },
+    };
+  } catch {
+    return missingBackgroundDiagnostics();
+  }
+}
+
+function missingBackgroundDiagnostics() {
+  return {
+    websocketUrl: null,
+    keepalive: {
+      ok: false,
+      hasAlarmsApi: false,
+      hasRuntimeLifecycleListener: false,
+      missingSignals: ["chrome.alarms", "chrome.runtime lifecycle listener"],
+    },
+  };
+}
+
+function extractWebSocketUrl(source) {
+  const match = source.match(/wss?:\/\/[^"'`\s)]+/);
+  return match ? match[0] : null;
 }
 
 function isProcessRunning(processes, processNames) {

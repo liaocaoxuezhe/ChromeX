@@ -115,7 +115,11 @@ test("diagnoses a loadable Link2Chrome extension package", async () => {
     }),
     "utf8"
   );
-  await writeFile(join(root, "background.js"), "", "utf8");
+  await writeFile(
+    join(root, "background.js"),
+    'const WS_URL = "ws://localhost:8765"; chrome.alarms.create("keepalive", { periodInMinutes: 0.4 }); chrome.runtime.onStartup.addListener(() => {});',
+    "utf8"
+  );
 
   const env = await discoverLocalBrowserEnvironment({
     candidates: [],
@@ -131,7 +135,55 @@ test("diagnoses a loadable Link2Chrome extension package", async () => {
     backgroundServiceWorker: "background.js",
     missingPermissions: [],
     missingHostPermissions: [],
+    websocketUrl: "ws://localhost:8765",
+    keepalive: {
+      ok: true,
+      hasAlarmsApi: true,
+      hasRuntimeLifecycleListener: true,
+      missingSignals: [],
+    },
   });
+});
+
+test("reports missing Link2Chrome keepalive signals", async () => {
+  const root = await mkdtemp(join(tmpdir(), "link2chrome-extension-no-keepalive-"));
+  await writeFile(
+    join(root, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "No Keepalive",
+      permissions: [
+        "debugger",
+        "activeTab",
+        "scripting",
+        "tabs",
+        "storage",
+        "history",
+        "tabGroups",
+        "clipboardRead",
+        "clipboardWrite",
+      ],
+      host_permissions: ["<all_urls>"],
+      background: { service_worker: "background.js" },
+    }),
+    "utf8"
+  );
+  await writeFile(join(root, "background.js"), 'const WS_URL = "ws://localhost:8765";', "utf8");
+
+  const env = await discoverLocalBrowserEnvironment({
+    candidates: [],
+    processes: [],
+    extensionDir: root,
+  });
+
+  assert.equal(env.extensionPackage.ok, false);
+  assert.deepEqual(env.extensionPackage.keepalive, {
+    ok: false,
+    hasAlarmsApi: false,
+    hasRuntimeLifecycleListener: false,
+    missingSignals: ["chrome.alarms", "chrome.runtime lifecycle listener"],
+  });
+  assert.equal(env.extensionPackage.websocketUrl, "ws://localhost:8765");
 });
 
 test("reports missing Link2Chrome extension package permissions", async () => {
