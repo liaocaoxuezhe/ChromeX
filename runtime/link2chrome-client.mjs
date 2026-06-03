@@ -69,22 +69,26 @@ class TaskSurface {
   }
 
   async run(name, script, options = {}) {
-    const launch = await this._client.localEnvironment.openAndWait(options);
-    const result = await this._client.scripts.run(script, {
-      ...options.scriptOptions,
-      sessionName: options.sessionName || name,
-      context: {
-        ...options.scriptOptions?.context,
-        task: { name },
+    const sessionName = options.sessionName || name;
+    return this._client.sessions.runExclusive(sessionName, async ({ browser, lease }) => {
+      const launch = await this._client.localEnvironment.openAndWait(options);
+      const result = await this._client.scripts.run(script, {
+        ...options.scriptOptions,
+        browser,
+        lease,
+        context: {
+          ...options.scriptOptions?.context,
+          task: { name },
+          launch: launch.launch,
+          readiness: launch.readiness,
+        },
+      });
+      return {
         launch: launch.launch,
         readiness: launch.readiness,
-      },
+        result,
+      };
     });
-    return {
-      launch: launch.launch,
-      readiness: launch.readiness,
-      result,
-    };
   }
 }
 
@@ -94,7 +98,7 @@ class ScriptSurface {
   }
 
   async run(script, options = {}) {
-    const execute = async ({ browser, lease } = {}) => {
+    const execute = async ({ browser = options.browser, lease = options.lease } = {}) => {
       const runtimeBrowser = browser || await this._client.browsers.get(options.browser || "extension");
       const context = {
         agent: { browsers: this._client.browsers },

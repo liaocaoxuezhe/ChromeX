@@ -436,6 +436,7 @@ return {
     launchProfile: "Default",
     readyTabId: 21,
   });
+  assert.equal(transport.calls[0].name, "__hub_acquire__");
   assert.deepEqual(transport.calls.filter((call) => call.name === "__hub_acquire__" || call.name === "__hub_release__"), [
     { name: "__hub_acquire__", args: { name: "inspect tabs" } },
     { name: "__hub_release__", args: { lease_token: "lease-task" } },
