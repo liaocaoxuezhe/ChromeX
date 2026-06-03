@@ -135,7 +135,8 @@ test("native host command handler starts Browser Hub and reports status", async 
     {
       cwd: "/repo/Link2Chrome",
       env: { ...process.env, LOG_CONSOLE: "false" },
-      stdio: ["ignore", "ignore", "pipe"],
+      detached: true,
+      stdio: ["ignore", "ignore", "ignore"],
     },
   ]);
   assert.deepEqual(hubStatusCalls, [

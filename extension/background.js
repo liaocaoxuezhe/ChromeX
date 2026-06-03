@@ -10,6 +10,7 @@ let wsConnected = false;
 let nativePort = null;
 let nativeConnected = false;
 let nativeStatus = null;
+let nativeHubStarted = false;
 let connectionEnabled = true; // 用户可通过 popup 开关控制
 let attachedTabId = null;
 // 显式跟踪当前工作标签（解决 active tab 返回 chrome-extension:// 页面的问题）
@@ -111,6 +112,7 @@ function connectNativeBootstrap() {
           result: message.result || null,
           error: message.error || null
         };
+        nativeHubStarted = Boolean(nativeStatus.ok);
         if (!settled) {
           settled = true;
           resolve(nativeStatus);
@@ -121,10 +123,19 @@ function connectNativeBootstrap() {
       port.onDisconnect.addListener(() => {
         nativeConnected = false;
         nativePort = null;
-        nativeStatus = {
-          ok: false,
-          error: chrome.runtime.lastError?.message || "native host disconnected"
-        };
+        const lastError = chrome.runtime.lastError?.message || "";
+        if (nativeHubStarted && nativeStatus?.ok) {
+          nativeStatus = {
+            ...nativeStatus,
+            state: "bootstrap_disconnected",
+            lastDisconnect: lastError || "native host disconnected after bootstrap"
+          };
+        } else {
+          nativeStatus = {
+            ok: false,
+            error: lastError || "native host disconnected"
+          };
+        }
         broadcastStatus();
       });
 
@@ -138,6 +149,7 @@ function connectNativeBootstrap() {
     } catch (err) {
       nativeConnected = false;
       nativePort = null;
+      nativeHubStarted = false;
       nativeStatus = { ok: false, error: err.message || String(err) };
       resolve(nativeStatus);
     }
@@ -1545,15 +1557,21 @@ async function cmdExtractContent(params) {
 // ==================== 状态广播 ====================
 
 function broadcastStatus() {
-  chrome.runtime.sendMessage({
+  chrome.runtime.sendMessage(getConnectionStatus()).catch(() => {});
+}
+
+function getConnectionStatus() {
+  const nativeReady = Boolean(nativeConnected || nativeHubStarted || nativeStatus?.ok);
+  return {
     type: "status",
     connected: wsConnected,
     wsConnected,
     nativeConnected,
+    nativeReady,
     nativeStatus,
-    transport: nativeConnected ? "native+websocket" : "websocket",
+    transport: wsConnected ? "websocket" : (nativeReady ? "native-bootstrap" : "websocket"),
     enabled: connectionEnabled
-  }).catch(() => {});
+  };
 }
 
 function disableConnection() {
@@ -1571,6 +1589,7 @@ function disableConnection() {
   }
   wsConnected = false;
   nativeConnected = false;
+  nativeHubStarted = false;
   nativeStatus = null;
   if (nativePort) {
     try { nativePort.disconnect(); } catch (_) {}
@@ -1594,12 +1613,7 @@ function enableConnection() {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "getStatus") {
     sendResponse({
-      connected: wsConnected,
-      wsConnected,
-      nativeConnected,
-      nativeStatus,
-      transport: nativeConnected ? "native+websocket" : "websocket",
-      enabled: connectionEnabled,
+      ...getConnectionStatus(),
       targetTabId
     });
     return true;
@@ -2154,6 +2168,7 @@ async function cmdAgentBrowserTabInfo(params) {
   const tabId = params.tabId || await findUsableTabId();
   const tab = await chrome.tabs.get(tabId);
   let pageState = {};
+  let pageStateError = null;
   if (isDebugableUrl(tab.url)) {
     const oldTarget = targetTabId;
     targetTabId = tabId;
@@ -2169,6 +2184,9 @@ async function cmdAgentBrowserTabInfo(params) {
         returnByValue: true
       });
       pageState = JSON.parse(result.result.value || "{}");
+    } catch (err) {
+      pageStateError = err.message || String(err);
+      console.warn(`[Link2Chrome] tab info pageState 获取失败: ${pageStateError}`);
     } finally {
       targetTabId = oldTarget || targetTabId;
     }
@@ -2181,6 +2199,7 @@ async function cmdAgentBrowserTabInfo(params) {
     title: tab.title,
     status: tab.status,
     canGoForward: false,
+    ...(pageStateError ? { pageStateError } : {}),
     ...pageState
   };
 }

@@ -25,6 +25,26 @@ HEARTBEAT_TIMEOUT = 60
 REQUEST_TIMEOUT = 30
 # 未连接时等待 Extension 的最长时间(秒)
 CONNECTION_WAIT_TIMEOUT = 10
+READONLY_RETRY_COMMANDS = {
+    "ping_version",
+    "get_info",
+    "get_dom",
+    "get_all_tabs",
+    "extract_content",
+    "screenshot",
+    "agent_browser_tab_info",
+    "agent_browser_history",
+    "dom_overview",
+    "dom_query",
+    "dom_search",
+    "dom_structured_data",
+    "dom_element_detail",
+    "network_list",
+    "network_query",
+    "console_list",
+    "console_get",
+    "clipboard_read",
+}
 
 
 class WSManager:
@@ -38,6 +58,7 @@ class WSManager:
         self._server = None
         self._connected_event = asyncio.Event()
         self._startup_error: str | None = None
+        self._duplicate_connection_count = 0
 
     @property
     def is_connected(self) -> bool:
@@ -152,6 +173,27 @@ class WSManager:
             ConnectionError: 未连接到 Extension
             TimeoutError: 等待响应超时
         """
+        retry_on_disconnect = command in READONLY_RETRY_COMMANDS
+        attempts = 2 if retry_on_disconnect else 1
+        last_error: Exception | None = None
+
+        for attempt in range(attempts):
+            try:
+                return await self._send_command_once(command, params)
+            except ConnectionError as exc:
+                last_error = exc
+                if not retry_on_disconnect or attempt + 1 >= attempts:
+                    raise
+                logger.warning(f"只读指令 {command} 遇到连接切换，等待 Extension 重连后重试一次")
+                connected = await self.wait_for_connection(timeout=CONNECTION_WAIT_TIMEOUT)
+                if not connected:
+                    raise
+
+        if last_error:
+            raise last_error
+        raise ConnectionError("Chrome Extension 未连接。请确保扩展已加载并启用。")
+
+    async def _send_command_once(self, command: str, params: dict = None) -> dict[str, Any]:
         # 如果未连接，自动等待 Extension 连接（最多等待 10 秒）
         if not self._connection:
             if self._startup_error:
@@ -191,22 +233,36 @@ class WSManager:
             raise TimeoutError(
                 f"等待 Extension 响应超时 ({REQUEST_TIMEOUT}s): {command}"
             )
+        except websockets.exceptions.ConnectionClosed as exc:
+            if self._connection is not None and getattr(self._connection, "closed", False):
+                self._connection = None
+                self._connected_event.clear()
+            raise ConnectionError("Extension 连接已断开") from exc
         finally:
             self._pending_requests.pop(request_id, None)
 
     async def _handle_connection(self, websocket: ServerConnection):
         """处理新的 WebSocket 连接"""
-        # 只保留一个活跃连接
+        # 只保留一个活跃连接。多个 Chrome profile / 旧扩展实例同时连接时，
+        # 如果新连接踢旧连接，会触发双方立即重连并形成连接风暴。
         if self._connection is not None:
-            logger.warning("新连接到来，断开旧连接")
-            op_logger.log_connection_event("CONNECTION_REPLACE", f"旧连接: {self._connection.remote_address}")
+            self._duplicate_connection_count += 1
+            if self._duplicate_connection_count <= 3 or self._duplicate_connection_count % 50 == 0:
+                logger.warning(
+                    f"拒绝重复 Extension 连接: {websocket.remote_address}; "
+                    f"当前连接: {self._connection.remote_address}; "
+                    f"重复次数: {self._duplicate_connection_count}"
+                )
+            op_logger.log_connection_event("CONNECTION_DUPLICATE", f"重复连接: {websocket.remote_address}")
             try:
-                await self._connection.close()
+                await websocket.close(code=1008, reason="duplicate Link2Chrome extension connection")
             except Exception:
                 pass
+            return
 
         self._connection = websocket
         self._connected_event.set()
+        self._duplicate_connection_count = 0
         client_addr = websocket.remote_address
         logger.info(f"Chrome Extension 已连接: {client_addr}")
         op_logger.log_connection_event("CONNECT", f"地址: {client_addr}")

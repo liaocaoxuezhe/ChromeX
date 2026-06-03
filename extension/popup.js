@@ -11,7 +11,7 @@ function updateUI(statusOrConnected, enabled) {
     ? statusOrConnected
     : { connected: statusOrConnected, enabled };
   const connected = Boolean(status.connected || status.wsConnected);
-  const nativeConnected = Boolean(status.nativeConnected);
+  const nativeReady = Boolean(status.nativeReady || status.nativeConnected || status.nativeStatus?.ok);
   const nativeError = status.nativeStatus?.error || "";
   enabled = status.enabled !== false;
   statusCard.classList.toggle("dimmed", !enabled);
@@ -38,12 +38,12 @@ function updateUI(statusOrConnected, enabled) {
   if (connected) {
     dot.className = "status-dot connected";
     statusText.textContent = "已连接";
-    statusDetail.textContent = nativeConnected ? "Native Host + :8765" : "WebSocket :8765";
+    statusDetail.textContent = nativeReady ? "Browser Hub :8765" : "WebSocket :8765";
     reconnectBtn.disabled = true;
   } else {
     dot.className = "status-dot disconnected";
-    statusText.textContent = nativeConnected ? "Hub 未连接" : "未连接";
-    statusDetail.textContent = nativeConnected ? "Native Host 已连接" : "Native Host / :8765";
+    statusText.textContent = nativeReady ? "Hub 等待连接" : "未连接";
+    statusDetail.textContent = nativeReady ? "等待 WebSocket :8765" : "Native Host / :8765";
     reconnectBtn.disabled = false;
   }
 }

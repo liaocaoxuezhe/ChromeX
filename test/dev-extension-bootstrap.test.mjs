@@ -31,12 +31,31 @@ test("background service worker reuses an existing native host port during recon
   assert.match(source, /return Promise\.resolve\(nativeStatus \|\| \{ ok: true, state: "connected" \}\)/);
 });
 
+test("background treats native host as bootstrap and websocket as runtime connection", () => {
+  const source = fs.readFileSync(path.join(root, "extension/background.js"), "utf8");
+  const popup = fs.readFileSync(path.join(root, "extension/popup.js"), "utf8");
+
+  assert.match(source, /nativeHubStarted/);
+  assert.match(source, /state: "bootstrap_disconnected"/);
+  assert.match(source, /nativeReady/);
+  assert.match(source, /transport: wsConnected \? "websocket" : \(nativeReady \? "native-bootstrap" : "websocket"\)/);
+  assert.match(popup, /Browser Hub :8765/);
+  assert.doesNotMatch(popup, /Native Host \+ :8765/);
+});
+
 test("background service worker refuses to connect when loaded with a stale extension id", () => {
   const source = fs.readFileSync(path.join(root, "extension/background.js"), "utf8");
 
   assert.match(source, /EXPECTED_EXTENSION_ID = "gfmbcnhkhgdlpcdhmolaefigfapbamcg"/);
   assert.match(source, /isExpectedExtensionId\(\)/);
   assert.match(source, /extension_id_mismatch/);
+});
+
+test("tab info keeps the extension connection stable when debugger attach is busy", () => {
+  const source = fs.readFileSync(path.join(root, "extension/background.js"), "utf8");
+
+  assert.match(source, /pageStateError/);
+  assert.match(source, /tab info pageState 获取失败/);
 });
 
 test("dev extension install plan derives extension id from manifest key", () => {

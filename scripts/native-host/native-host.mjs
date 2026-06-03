@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 export function encodeNativeMessage(message) {
@@ -51,11 +52,13 @@ export function createNativeHostRuntime({ commandHandler }) {
 
 export function createNativeHostCommandHandler({
   projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
-  pythonBin = process.env.PYTHON_BIN || "python3",
+  pythonBin,
   spawnImpl = spawn,
   hubCommand,
 } = {}) {
   let hubProcess = null;
+  const venvPython = path.join(projectRoot, "server", "venv", "bin", "python");
+  const resolvedPythonBin = pythonBin || process.env.PYTHON_BIN || (existsSync(venvPython) ? venvPython : "python3");
   const commandHub = hubCommand || ((name, args = {}) => sendHubCommand({
     url: process.env.LINK2CHROME_WS_URL || "ws://localhost:8766",
     name,
@@ -74,10 +77,11 @@ export function createNativeHostCommandHandler({
     if (isHubProcessRunning()) {
       return { ok: true, alreadyRunning: true, pid: hubProcess.pid };
     }
-    hubProcess = spawnImpl(pythonBin, [path.join(projectRoot, "server", "browser_hub.py")], {
+    hubProcess = spawnImpl(resolvedPythonBin, [path.join(projectRoot, "server", "browser_hub.py")], {
       cwd: projectRoot,
       env: { ...process.env, LOG_CONSOLE: "false" },
-      stdio: ["ignore", "ignore", "pipe"],
+      detached: true,
+      stdio: ["ignore", "ignore", "ignore"],
     });
     hubProcess.unref?.();
     return { ok: true, alreadyRunning: false, pid: hubProcess.pid };
