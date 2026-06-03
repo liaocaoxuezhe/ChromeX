@@ -1077,6 +1077,16 @@ class Locator {
     });
     return Boolean(detail.ok && detail.position?.visible && detail.accessibility?.focusable);
   }
+
+  async boundingBox() {
+    const detail = await this._transport.command("dom_element_detail", {
+      selector: this.target.selector,
+      include: ["position"],
+    });
+    if (!detail.ok || !detail.position?.visible) return null;
+    const { x, y, width, height } = detail.position;
+    return { x, y, width, height };
+  }
 }
 
 function locatorElements(raw = {}) {

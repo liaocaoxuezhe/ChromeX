@@ -1159,6 +1159,32 @@ test("locator visibility helpers read DOM element detail", async () => {
   ]);
 });
 
+test("locator boundingBox reads element position detail", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "dom_element_detail") {
+        return {
+          ok: true,
+          position: { x: 10, y: 20, width: 120, height: 32, visible: true },
+        };
+      }
+      return { tabs: [{ id: 7, active: true }] };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const box = await tab.playwright.locator("button.submit").boundingBox();
+
+  assert.deepEqual(box, { x: 10, y: 20, width: 120, height: 32 });
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "dom_element_detail",
+    args: { selector: "button.submit", include: ["position"] },
+  });
+});
+
 test("locator setFiles maps to upload_file", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
