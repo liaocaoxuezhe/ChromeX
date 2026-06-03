@@ -230,6 +230,47 @@ test("locator fill maps to browser.dom.type", async () => {
   });
 });
 
+test("locator setFiles maps to upload_file", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.playwright.locator("input[type='file']").setFiles(["/tmp/a.txt", "/tmp/b.txt"]);
+
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "upload_file",
+    args: {
+      selector: "input[type='file']",
+      paths: ["/tmp/a.txt", "/tmp/b.txt"],
+    },
+  });
+});
+
+test("locator setFiles can require safety confirmation", async () => {
+  const confirmations = [];
+  const transport = fakeTransport();
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    confirmAction: async (action) => {
+      confirmations.push(action);
+      return false;
+    },
+  });
+  const browser = await link2chrome.browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await assert.rejects(
+    () => tab.playwright.locator("input[type='file']").setFiles("/tmp/secret.txt", {
+      safety: { level: "always-confirm", reason: "upload local file" },
+    }),
+    /Action was not confirmed/
+  );
+
+  assert.equal(confirmations[0].type, "filechooser.setFiles");
+  assert.deepEqual(confirmations[0].paths, ["/tmp/secret.txt"]);
+  assert.notEqual(transport.calls.at(-1)?.name, "upload_file");
+});
+
 test("getByText count maps to browser.dom.search", async () => {
   const transport = {
     calls: [],
@@ -398,6 +439,20 @@ test("clipboard write can require safety confirmation", async () => {
   assert.equal(confirmations[0].type, "clipboard.writeText");
   assert.equal(confirmations[0].text, "secret");
   assert.notEqual(transport.calls.at(-1)?.name, "browser.clipboard.writeText");
+});
+
+test("dialog surface maps accept and dismiss to handle_dialog", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.dialog.accept({ promptText: "yes", timeout: 1000 });
+  await tab.dialog.dismiss();
+
+  assert.deepEqual(transport.calls.slice(-2), [
+    { name: "handle_dialog", args: { action: "accept", promptText: "yes", timeout: 1000 } },
+    { name: "handle_dialog", args: { action: "dismiss" } },
+  ]);
 });
 
 test("createWebSocketTransport exports a command transport", () => {

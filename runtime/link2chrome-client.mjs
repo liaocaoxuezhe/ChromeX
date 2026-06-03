@@ -327,6 +327,7 @@ class Tab {
     this.dom_cua = new DomCuaSurface({ tab: this, transport });
     this.dev = new DevSurface({ tab: this, transport });
     this.clipboard = new ClipboardSurface({ tab: this, transport, safety });
+    this.dialog = new DialogSurface({ tab: this, transport, safety });
   }
 
   async goto(url) {
@@ -417,6 +418,22 @@ class Locator {
       target: this.target,
       text,
       clearFirst: options.clearFirst ?? true,
+    });
+  }
+
+  async setFiles(paths, options = {}) {
+    const normalizedPaths = Array.isArray(paths) ? paths : [paths];
+    await this._safety?.confirm({
+      type: "filechooser.setFiles",
+      target: this.target,
+      paths: normalizedPaths,
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("upload_file", {
+      selector: this.target.selector,
+      paths: normalizedPaths,
+      ...commandOptions,
     });
   }
 
@@ -511,6 +528,32 @@ class ClipboardSurface {
     });
     const { safety, ...commandOptions } = options;
     return this._transport.command("browser.clipboard.writeText", { text, ...commandOptions });
+  }
+}
+
+class DialogSurface {
+  constructor({ tab, transport, safety }) {
+    this._tab = tab;
+    this._transport = transport;
+    this._safety = safety;
+  }
+
+  async accept(options = {}) {
+    await this._safety?.confirm({
+      type: "dialog.accept",
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("handle_dialog", { action: "accept", ...commandOptions });
+  }
+
+  async dismiss(options = {}) {
+    await this._safety?.confirm({
+      type: "dialog.dismiss",
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("handle_dialog", { action: "dismiss", ...commandOptions });
   }
 }
 
