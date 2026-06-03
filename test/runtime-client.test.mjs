@@ -121,6 +121,81 @@ test("runtime localEnvironment openBrowser passes extension launch options", asy
   ]);
 });
 
+test("runtime localEnvironment openBrowser prefers a profile with Link2Chrome enabled", async () => {
+  const launched = [];
+  const link2chrome = createLink2ChromeClient({
+    transport: fakeTransport(),
+    localEnvironment: {
+      inspect: async () => ({
+        ok: true,
+        extensionPackage: { ok: true, path: "/Users/me/Link2Chrome/extension" },
+        browsers: [{
+          id: "chrome",
+          installed: true,
+          executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+          profiles: [
+            { id: "Profile 1", extensionInstall: { installed: false, enabled: false } },
+            { id: "Profile 3", extensionInstall: { installed: true, enabled: true } },
+          ],
+        }],
+      }),
+    },
+  });
+
+  const result = await link2chrome.localEnvironment.openBrowser({
+    browserId: "chrome",
+    launcher: async (command, args) => {
+      launched.push({ command, args });
+      return { pid: 101 };
+    },
+  });
+
+  assert.equal(result.profileId, "Profile 3");
+  assert.deepEqual(launched[0].args, [
+    "--profile-directory=Profile 3",
+    "--user-data-dir=/Users/me/Library/Application Support/Google/Chrome",
+  ]);
+});
+
+test("runtime localEnvironment openBrowser loads the unpacked extension when no profile has it enabled", async () => {
+  const launched = [];
+  const link2chrome = createLink2ChromeClient({
+    transport: fakeTransport(),
+    localEnvironment: {
+      inspect: async () => ({
+        ok: true,
+        extensionPackage: { ok: true, path: "/Users/me/Link2Chrome/extension" },
+        browsers: [{
+          id: "chrome",
+          installed: true,
+          executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+          profiles: [
+            { id: "Default", extensionInstall: { installed: false, enabled: false } },
+          ],
+        }],
+      }),
+    },
+  });
+
+  const result = await link2chrome.localEnvironment.openBrowser({
+    browserId: "chrome",
+    launcher: async (command, args) => {
+      launched.push({ command, args });
+      return { pid: 102 };
+    },
+  });
+
+  assert.equal(result.profileId, "Default");
+  assert.equal(result.extensionDir, "/Users/me/Link2Chrome/extension");
+  assert.deepEqual(launched[0].args, [
+    "--profile-directory=Default",
+    "--user-data-dir=/Users/me/Library/Application Support/Google/Chrome",
+    "--load-extension=/Users/me/Link2Chrome/extension",
+  ]);
+});
+
 test("sessions.runExclusive acquires and releases a browser hub lease", async () => {
   const transport = {
     calls: [],

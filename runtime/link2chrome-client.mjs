@@ -153,11 +153,12 @@ class LocalEnvironmentSurface {
     }
     const environment = options.environment || await this.inspect(options.inspect || {});
     const browser = findBrowserForOpen(environment, options);
+    const launchTarget = selectLaunchTarget(environment, browser, options);
     return openLocalBrowserWindow({
       browser,
-      profileId: options.profileId,
+      profileId: launchTarget.profileId,
       url: options.url,
-      extensionDir: options.extensionDir,
+      extensionDir: launchTarget.extensionDir,
       onlyExtension: options.onlyExtension,
       launcher: options.launcher,
     });
@@ -171,6 +172,32 @@ function findBrowserForOpen(environment, options) {
     return browsers.find((browser) => browser.id === options.browserId);
   }
   return browsers.find((browser) => browser.installed) || browsers[0];
+}
+
+function selectLaunchTarget(environment, browser, options) {
+  const explicitProfileId = options.profileId || null;
+  const explicitExtensionDir = options.extensionDir || null;
+  if (explicitProfileId || explicitExtensionDir) {
+    return {
+      profileId: explicitProfileId,
+      extensionDir: explicitExtensionDir,
+    };
+  }
+
+  const profiles = browser?.profiles || [];
+  const enabledProfile = profiles.find((profile) => profile.extensionInstall?.installed && profile.extensionInstall?.enabled);
+  if (enabledProfile) {
+    return {
+      profileId: enabledProfile.id,
+      extensionDir: null,
+    };
+  }
+
+  const fallbackProfile = profiles[0] || null;
+  return {
+    profileId: fallbackProfile?.id || null,
+    extensionDir: environment?.extensionPackage?.ok ? environment.extensionPackage.path : null,
+  };
 }
 
 class DiagnosticsSurface {
