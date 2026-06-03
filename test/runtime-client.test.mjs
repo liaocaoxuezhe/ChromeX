@@ -89,7 +89,14 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
       return { ok: true };
     },
   };
-  const link2chrome = createLink2ChromeClient({ transport });
+  const localEnvironment = {
+    inspect: async () => ({
+      ok: true,
+      summary: { installedCount: 1, runningCount: 1, profileCount: 2 },
+      browsers: [{ id: "chrome", installed: true, running: true, profiles: [{ id: "Default" }, { id: "Profile 1" }] }],
+    }),
+  };
+  const link2chrome = createLink2ChromeClient({ transport, localEnvironment });
 
   const result = await link2chrome.diagnostics.readiness();
 
@@ -102,6 +109,11 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
   assert.deepEqual(result.selectedTab, {
     ok: true,
     tab: { id: 7, active: true, url: "https://ready.test", title: "Ready" },
+  });
+  assert.deepEqual(result.localEnvironment, {
+    ok: true,
+    summary: { installedCount: 1, runningCount: 1, profileCount: 2 },
+    browsers: [{ id: "chrome", installed: true, running: true, profiles: [{ id: "Default" }, { id: "Profile 1" }] }],
   });
   assert.deepEqual(result.capabilities.playwrightStyle, {
     domSnapshot: true,

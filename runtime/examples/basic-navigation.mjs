@@ -4,9 +4,9 @@ const link2chrome = createLink2ChromeClient({
   transport: createWebSocketTransport({ url: process.env.LINK2CHROME_WS_URL || "ws://localhost:8766" }),
 });
 
-const diagnosis = await link2chrome.diagnose();
-if (!diagnosis.ok || !diagnosis.hub?.extension_connected) {
-  console.error("Link2Chrome is not ready:", diagnosis);
+const readiness = await link2chrome.diagnostics.readiness();
+if (!readiness.ok) {
+  console.error("Link2Chrome is not ready:", readiness);
   process.exitCode = 1;
   process.exit();
 }

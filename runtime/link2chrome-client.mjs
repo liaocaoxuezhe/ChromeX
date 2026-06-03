@@ -1,4 +1,6 @@
-export function createLink2ChromeClient({ transport, confirmAction } = {}) {
+import { discoverLocalBrowserEnvironment } from "./local-environment.mjs";
+
+export function createLink2ChromeClient({ transport, confirmAction, localEnvironment } = {}) {
   if (!transport || typeof transport.command !== "function") {
     throw new TypeError("createLink2ChromeClient requires a transport with command(name, args)");
   }
@@ -18,7 +20,7 @@ export function createLink2ChromeClient({ transport, confirmAction } = {}) {
         };
       }
     },
-    diagnostics: new DiagnosticsSurface({ transport }),
+    diagnostics: new DiagnosticsSurface({ transport, localEnvironment }),
     browsers: {
       async get(kind = "extension") {
         if (kind !== "extension") {
@@ -31,13 +33,15 @@ export function createLink2ChromeClient({ transport, confirmAction } = {}) {
 }
 
 class DiagnosticsSurface {
-  constructor({ transport }) {
+  constructor({ transport, localEnvironment }) {
     this._transport = transport;
+    this._localEnvironment = localEnvironment;
   }
 
   async readiness() {
     const hub = await this._checkHub();
     const selectedTab = await this._checkSelectedTab();
+    const localEnvironment = await this._checkLocalEnvironment();
     const extensionConnected = Boolean(hub.status?.extension_connected);
     return {
       ok: Boolean(hub.ok && extensionConnected && selectedTab.ok),
@@ -47,6 +51,7 @@ class DiagnosticsSurface {
         connected: extensionConnected,
       },
       selectedTab,
+      localEnvironment,
       capabilities: runtimeCapabilities(),
     };
   }
@@ -71,6 +76,20 @@ class DiagnosticsSurface {
         ok: true,
         tab: await this._transport.command("browser_tab_info", {}),
       };
+    } catch (error) {
+      return {
+        ok: false,
+        error: String(error?.message || error),
+      };
+    }
+  }
+
+  async _checkLocalEnvironment() {
+    try {
+      if (this._localEnvironment?.inspect) {
+        return await this._localEnvironment.inspect();
+      }
+      return await discoverLocalBrowserEnvironment();
     } catch (error) {
       return {
         ok: false,
