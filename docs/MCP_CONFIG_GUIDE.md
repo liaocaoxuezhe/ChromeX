@@ -422,3 +422,19 @@ Link2Chrome 现在暴露三组同时存在的命名空间工具，任意 MCP 客
 1. 用 `--remote-debugging-port=9222` 启动 Tabbit/Chrome，或设置 `PLAYWRIGHT_CDP_URL`。
 2. 调用 `browser.pw.start{"mode":"attach","browser":"tabbit"}` 或 `browser.pw.start{"mode":"attach","browser":"chrome"}`。
 3. 调用 `browser.pw.endpoint`，把返回的 URL 传给 `connectOverCDP` 或 browser-use 的 CDP session 配置。
+
+### 真实 Chrome E2E
+
+普通单测不会强制连接真实浏览器。要验证 WebSocket、Extension 和 runtime 三个能力面，请先确认 Chrome/Tabbit 已加载 Link2Chrome extension，然后运行：
+
+```bash
+LINK2CHROME_REAL_CHROME_E2E=1 node --test test/e2e/runtime-real-chrome.test.mjs
+```
+
+该测试会使用 `python3 server/main.py` 拉起 MCP adapter/Browser Hub；本机 Python 3.9 可直接运行。如果你已经手动启动了 server，可加：
+
+```bash
+LINK2CHROME_REAL_CHROME_E2E=1 LINK2CHROME_E2E_START_SERVER=0 node --test test/e2e/runtime-real-chrome.test.mjs
+```
+
+失败时测试会记录 Chrome 是否运行、Extension 是否安装/连接、WebSocket readiness、当前 tab 和 server stderr，便于定位 profile、extension 或 hub 连接问题。
