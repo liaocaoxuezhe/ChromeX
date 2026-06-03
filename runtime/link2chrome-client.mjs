@@ -1047,6 +1047,20 @@ class Locator {
     const first = locatorElements(raw)[0];
     return first?.text || first?.textContent || "";
   }
+
+  async getAttribute(name) {
+    const raw = await this._transport.command("browser.dom.query", {
+      selector: this.target.selector,
+      limit: 1,
+      attributes: [name],
+    });
+    const first = locatorElements(raw)[0];
+    return first?.[name] ?? null;
+  }
+
+  async inputValue() {
+    return this.getAttribute("value");
+  }
 }
 
 function locatorElements(raw = {}) {

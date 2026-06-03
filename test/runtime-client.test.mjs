@@ -1101,6 +1101,34 @@ test("locator textContent reads text from dom_query results", async () => {
   });
 });
 
+test("locator getAttribute and inputValue read dom_query attributes", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser.dom.query" && args.attributes?.[0] === "href") {
+        return { results: [{ href: "/docs" }], count: 1 };
+      }
+      if (name === "browser.dom.query" && args.attributes?.[0] === "value") {
+        return { results: [{ value: "Link2Chrome" }], count: 1 };
+      }
+      return { tabs: [{ id: 7, active: true }] };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const href = await tab.playwright.locator("a.docs").getAttribute("href");
+  const value = await tab.playwright.locator("input[name=q]").inputValue();
+
+  assert.equal(href, "/docs");
+  assert.equal(value, "Link2Chrome");
+  assert.deepEqual(transport.calls.slice(-2), [
+    { name: "browser.dom.query", args: { selector: "a.docs", limit: 1, attributes: ["href"] } },
+    { name: "browser.dom.query", args: { selector: "input[name=q]", limit: 1, attributes: ["value"] } },
+  ]);
+});
+
 test("locator setFiles maps to upload_file", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
