@@ -109,6 +109,11 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
     fileChooser: true,
     dialog: true,
   });
+  assert.deepEqual(result.capabilities.browserState, {
+    openTabs: true,
+    claimTab: true,
+    history: true,
+  });
   assert.deepEqual(transport.calls, [
     { name: "__hub_status__", args: {} },
     { name: "browser_tab_info", args: {} },
@@ -216,14 +221,16 @@ test("user.claimTab with tabId switches and returns selected tab", async () => {
   ]);
 });
 
-test("user.history clearly reports unsupported backend", async () => {
+test("user.history maps to browser user history command", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
 
-  await assert.rejects(
-    () => browser.user.history(),
-    /user.history is not implemented/
-  );
+  await browser.user.history({ text: "docs", maxResults: 5 });
+
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.user.history",
+    args: { text: "docs", maxResults: 5 },
+  });
 });
 
 test("tabs.finalize is a structured no-op for deliverable handoff habits", async () => {
@@ -702,4 +709,38 @@ test("websocket transport maps clipboard commands to extension commands", async 
   assert.deepEqual(sentMessages[0].params, {});
   assert.equal(sentMessages[1].command, "clipboard_write");
   assert.deepEqual(sentMessages[1].params, { text: "hello" });
+});
+
+test("websocket transport maps user history to extension history command", async () => {
+  const sentMessages = [];
+  class FakeWebSocket {
+    constructor() {
+      this.listeners = {};
+      queueMicrotask(() => this.listeners.open?.({}));
+    }
+
+    addEventListener(name, handler) {
+      this.listeners[name] = handler;
+    }
+
+    send(message) {
+      const parsed = JSON.parse(message);
+      sentMessages.push(parsed);
+      this.listeners.message?.({
+        data: JSON.stringify({
+          request_id: parsed.request_id,
+          success: true,
+          data: { ok: true, entries: [] },
+        }),
+      });
+    }
+
+    close() {}
+  }
+  const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
+
+  await transport.command("browser.user.history", { text: "docs", maxResults: 5 });
+
+  assert.equal(sentMessages[0].command, "agent_browser_history");
+  assert.deepEqual(sentMessages[0].params, { text: "docs", maxResults: 5 });
 });

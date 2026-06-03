@@ -603,6 +603,9 @@ async function handleCommand(message) {
       case "agent_browser_tabs_finalize":
         response.data = await cmdAgentBrowserTabsFinalize(params);
         break;
+      case "agent_browser_history":
+        response.data = await cmdAgentBrowserHistory(params);
+        break;
       case "clipboard_read":
         response.data = await cmdClipboardRead(params);
         break;
@@ -2081,6 +2084,27 @@ async function cmdAgentBrowserTabsFinalize(params) {
   }
 
   return { ok: true, action: "finalize", grouped, closed };
+}
+
+async function cmdAgentBrowserHistory(params) {
+  const maxResults = Math.min(Math.max(Number(params.maxResults ?? params.limit ?? 20), 1), 100);
+  const query = {
+    text: String(params.text ?? ""),
+    maxResults
+  };
+  if (params.startTime !== undefined) query.startTime = Number(params.startTime);
+  if (params.endTime !== undefined) query.endTime = Number(params.endTime);
+
+  const items = await chrome.history.search(query);
+  const entries = items.map((item) => ({
+    id: item.id,
+    url: item.url,
+    title: item.title || "",
+    lastVisitTime: item.lastVisitTime || null,
+    visitCount: item.visitCount || 0,
+    typedCount: item.typedCount || 0
+  }));
+  return { ok: true, entries, count: entries.length };
 }
 
 async function cmdClipboardRead(params) {

@@ -9,6 +9,7 @@
     "scripting",
     "tabs",
     "storage",
+    "history",
     "tabGroups",
     "clipboardRead",
     "clipboardWrite"

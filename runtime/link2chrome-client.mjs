@@ -107,6 +107,11 @@ function runtimeCapabilities() {
       tabClaim: true,
       tabFinalize: true,
     },
+    browserState: {
+      openTabs: true,
+      claimTab: true,
+      history: true,
+    },
     nativeMessaging: false,
     localPlaywrightDependency: false,
   };
@@ -141,6 +146,7 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       if (name === "browser_tab_switch") return send("agent_browser_tab_switch", args);
       if (name === "browser_tab_new") return send("agent_browser_tab_new", args);
       if (name === "browser.tabs.finalize") return send("agent_browser_tabs_finalize", args);
+      if (name === "browser.user.history") return send("agent_browser_history", args);
       if (name === "browser.clipboard.readText") return send("clipboard_read", args);
       if (name === "browser.clipboard.writeText") return send("clipboard_write", args);
       if (name === "browser_navigate") return send("navigate", args);
@@ -367,8 +373,8 @@ class UserSurface {
     return this._browser.tabs.selected();
   }
 
-  async history() {
-    throw new Error("user.history is not implemented by the current Link2Chrome backend");
+  async history(options = {}) {
+    return this._transport.command("browser.user.history", options);
   }
 }
 
