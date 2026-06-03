@@ -33,6 +33,8 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
   }
   const safety = new SafetyManager({ confirmAction });
   const client = {
+    _transport: transport,
+    _safety: safety,
     async diagnose() {
       try {
         return {
@@ -76,6 +78,12 @@ class TaskSurface {
         task: { name },
         launch: launch.launch,
         readiness: launch.readiness,
+        tab: preparedTabFromReadiness({
+          browser,
+          transport: this._client._transport,
+          safety: this._client._safety,
+          readiness: launch.readiness,
+        }),
       };
       try {
         const result = await this._client.scripts.run(script, {
@@ -135,11 +143,18 @@ async function runModelScript(script, context) {
     "context",
     `"use strict";
 return (async () => {
-  const { agent, link2chrome, browser, lease, task, launch, readiness } = context;
+  const { agent, link2chrome, browser, tab, lease, task, launch, readiness } = context;
+{
 ${script}
+}
 })();`
   );
   return runner(context);
+}
+
+function preparedTabFromReadiness({ browser, transport, safety, readiness }) {
+  const data = readiness?.selectedTab?.tab || {};
+  return new Tab({ browser, transport, safety, data, raw: data });
 }
 
 class SessionSurface {
