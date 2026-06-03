@@ -1101,6 +1101,36 @@ test("locator textContent reads text from dom_query results", async () => {
   });
 });
 
+test("locator allTextContents reads every text result from dom_query", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser.dom.query") {
+        return {
+          results: [
+            { text: "First result" },
+            { textContent: "Second result" },
+            { ariaLabel: "Third result" },
+          ],
+          count: 3,
+        };
+      }
+      return { tabs: [{ id: 7, active: true }] };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const texts = await tab.playwright.locator(".result").allTextContents();
+
+  assert.deepEqual(texts, ["First result", "Second result", "Third result"]);
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.dom.query",
+    args: { selector: ".result", limit: 100, attributes: ["text", "ariaLabel"] },
+  });
+});
+
 test("locator getAttribute and inputValue read dom_query attributes", async () => {
   const transport = {
     calls: [],

@@ -1048,6 +1048,20 @@ class Locator {
     return first?.text || first?.textContent || "";
   }
 
+  async allTextContents() {
+    if (this.target.text && !this.target.selector) {
+      return [this.target.text];
+    }
+    const raw = await this._transport.command("browser.dom.query", {
+      selector: this.target.selector,
+      limit: 100,
+      attributes: ["text", "ariaLabel"],
+    });
+    return locatorElements(raw)
+      .map((element) => element.text ?? element.textContent ?? element.ariaLabel ?? "")
+      .filter((text) => text !== "");
+  }
+
   async getAttribute(name) {
     const raw = await this._transport.command("browser.dom.query", {
       selector: this.target.selector,
