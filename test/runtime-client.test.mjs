@@ -185,6 +185,11 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
     claimTab: true,
     history: true,
   });
+  assert.deepEqual(result.capabilities.domCua, {
+    visibleDom: true,
+    query: true,
+    click: true,
+  });
   assert.deepEqual(transport.calls, [
     { name: "__hub_status__", args: {} },
     { name: "browser_tab_info", args: {} },
@@ -524,15 +529,31 @@ test("cua click maps to browser.cua.click", async () => {
   });
 });
 
-test("dom_cua visibleDom clearly reports unsupported backend", async () => {
+test("dom_cua visibleDom maps to DOM overview", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
   const [tab] = await browser.tabs.list();
 
-  await assert.rejects(
-    () => tab.dom_cua.visibleDom(),
-    /dom_cua.visibleDom is not implemented/
-  );
+  await tab.dom_cua.visibleDom({ includeHidden: false });
+
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.dom.overview",
+    args: { includeHidden: false },
+  });
+});
+
+test("dom_cua query and click map to DOM commands", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.dom_cua.query("button.primary", { limit: 5 });
+  await tab.dom_cua.click({ selector: "button.primary" });
+
+  assert.deepEqual(transport.calls.slice(-2), [
+    { name: "browser.dom.query", args: { selector: "button.primary", limit: 5 } },
+    { name: "browser.dom.click", args: { target: { selector: "button.primary" } } },
+  ]);
 });
 
 test("dev console surface maps capture list and clear commands", async () => {

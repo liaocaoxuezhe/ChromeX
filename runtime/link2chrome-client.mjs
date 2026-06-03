@@ -177,6 +177,11 @@ function runtimeCapabilities() {
       drag: true,
       keyboard: true,
     },
+    domCua: {
+      visibleDom: true,
+      query: true,
+      click: true,
+    },
     devtools: {
       console: true,
       network: true,
@@ -497,7 +502,7 @@ class Tab {
     this.raw = raw;
     this.playwright = new PlaywrightSurface({ tab: this, transport, safety });
     this.cua = new CuaSurface({ tab: this, transport, safety });
-    this.dom_cua = new DomCuaSurface({ tab: this, transport });
+    this.dom_cua = new DomCuaSurface({ tab: this, transport, safety });
     this.dev = new DevSurface({ tab: this, transport });
     this.clipboard = new ClipboardSurface({ tab: this, transport, safety });
     this.dialog = new DialogSurface({ tab: this, transport, safety });
@@ -675,13 +680,28 @@ class CuaSurface {
 }
 
 class DomCuaSurface {
-  constructor({ tab, transport }) {
+  constructor({ tab, transport, safety }) {
     this._tab = tab;
     this._transport = transport;
+    this._safety = safety;
   }
 
-  async visibleDom() {
-    throw new Error("dom_cua.visibleDom is not implemented by the current Link2Chrome backend");
+  async visibleDom(options = {}) {
+    return this._transport.command("browser.dom.overview", options);
+  }
+
+  async query(selector, options = {}) {
+    return this._transport.command("browser.dom.query", { selector, ...options });
+  }
+
+  async click(target, options = {}) {
+    await this._safety?.confirm({
+      type: "dom_cua.click",
+      target,
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("browser.dom.click", { target, ...commandOptions });
   }
 }
 
