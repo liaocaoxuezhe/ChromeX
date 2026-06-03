@@ -170,6 +170,45 @@ test("sessions.runExclusive releases the browser hub lease after callback errors
   ]);
 });
 
+test("scripts.run executes a model-authored callback with runtime browser context", async () => {
+  const transport = fakeTransport();
+  const link2chrome = createLink2ChromeClient({ transport });
+
+  const result = await link2chrome.scripts.run(async ({ agent, link2chrome, browser }) => {
+    assert.equal(agent.browsers, link2chrome.browsers);
+    const tabs = await browser.tabs.list();
+    return tabs.map((tab) => tab.id);
+  });
+
+  assert.deepEqual(result, [7]);
+  assert.deepEqual(transport.calls, [{ name: "browser_tabs_list", args: {} }]);
+});
+
+test("scripts.run executes source code and can wrap it in an exclusive browser session", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "__hub_acquire__") return { lease_token: "lease-3", lease_name: args.name };
+      if (name === "browser_tab_info") return { id: 17, active: true, url: "https://code.test", title: "Code" };
+      return { ok: true };
+    },
+  };
+  const link2chrome = createLink2ChromeClient({ transport });
+
+  const result = await link2chrome.scripts.run(
+    "const tab = await browser.tabs.selected(); return { tabId: tab.id, lease: lease.lease_token };",
+    { sessionName: "model-authored code" }
+  );
+
+  assert.deepEqual(result, { tabId: 17, lease: "lease-3" });
+  assert.deepEqual(transport.calls, [
+    { name: "__hub_acquire__", args: { name: "model-authored code" } },
+    { name: "browser_tab_info", args: {} },
+    { name: "__hub_release__", args: { lease_token: "lease-3" } },
+  ]);
+});
+
 test("diagnose returns Browser Hub status", async () => {
   const transport = {
     calls: [],
@@ -275,6 +314,12 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
   });
   assert.deepEqual(result.capabilities.sessions, {
     runExclusive: true,
+  });
+  assert.deepEqual(result.capabilities.codeRunner, {
+    scriptsRun: true,
+    acceptsFunction: true,
+    acceptsSourceString: true,
+    exclusiveSession: true,
   });
   assert.deepEqual(result.capabilities.domCua, {
     visibleDom: true,

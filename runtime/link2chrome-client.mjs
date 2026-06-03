@@ -32,8 +32,7 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
     throw new TypeError("createLink2ChromeClient requires a transport with command(name, args)");
   }
   const safety = new SafetyManager({ confirmAction });
-
-  return {
+  const client = {
     async diagnose() {
       try {
         return {
@@ -59,6 +58,49 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
       },
     },
   };
+  client.scripts = new ScriptSurface({ client });
+  return client;
+}
+
+class ScriptSurface {
+  constructor({ client }) {
+    this._client = client;
+  }
+
+  async run(script, options = {}) {
+    const execute = async ({ browser, lease } = {}) => {
+      const runtimeBrowser = browser || await this._client.browsers.get(options.browser || "extension");
+      const context = {
+        agent: { browsers: this._client.browsers },
+        link2chrome: this._client,
+        browser: runtimeBrowser,
+        lease,
+      };
+      return runModelScript(script, context);
+    };
+    if (options.sessionName) {
+      return this._client.sessions.runExclusive(options.sessionName, execute);
+    }
+    return execute();
+  }
+}
+
+async function runModelScript(script, context) {
+  if (typeof script === "function") {
+    return script(context);
+  }
+  if (typeof script !== "string") {
+    throw new TypeError("scripts.run requires an async function or JavaScript source string");
+  }
+  const runner = new Function(
+    "context",
+    `"use strict";
+return (async () => {
+  const { agent, link2chrome, browser, lease } = context;
+${script}
+})();`
+  );
+  return runner(context);
 }
 
 class SessionSurface {
@@ -241,6 +283,12 @@ function runtimeCapabilities() {
     },
     sessions: {
       runExclusive: true,
+    },
+    codeRunner: {
+      scriptsRun: true,
+      acceptsFunction: true,
+      acceptsSourceString: true,
+      exclusiveSession: true,
     },
     nativeMessaging: false,
     localPlaywrightDependency: false,
