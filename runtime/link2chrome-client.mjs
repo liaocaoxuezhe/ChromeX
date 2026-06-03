@@ -933,6 +933,14 @@ class Locator {
     return this.nth(0);
   }
 
+  last() {
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      target: { ...this.target, last: true },
+    });
+  }
+
   nth(index) {
     if (!Number.isInteger(index) || index < 0) {
       throw new RangeError("locator.nth(index) requires a non-negative integer");
@@ -1139,13 +1147,13 @@ class Locator {
   }
 
   async _resolveSelector() {
-    if (this.target.index === undefined) return this.target.selector;
+    if (this.target.index === undefined && !this.target.last) return this.target.selector;
     return (await this._resolveTarget()).selector;
   }
 
   async _resolveTarget() {
-    if (this.target.index === undefined) return this.target;
-    const limit = this.target.index + 1;
+    if (this.target.index === undefined && !this.target.last) return this.target;
+    const limit = this.target.last ? 100 : this.target.index + 1;
     const raw = this.target.selector
       ? await this._transport.command("browser.dom.query", {
         selector: this.target.selector,
@@ -1156,9 +1164,11 @@ class Locator {
         query: this.target.text,
         limit,
       });
-    const element = locatorElements(raw)[this.target.index];
+    const elements = locatorElements(raw);
+    const element = this.target.last ? elements.at(-1) : elements[this.target.index];
     if (!element) {
-      throw new Error(`locator.nth(${this.target.index}) did not match an element`);
+      const description = this.target.last ? "locator.last()" : `locator.nth(${this.target.index})`;
+      throw new Error(`${description} did not match an element`);
     }
     return {
       ...(element.selector ? { selector: element.selector } : this.target),

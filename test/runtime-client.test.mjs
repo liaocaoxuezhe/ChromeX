@@ -1453,6 +1453,44 @@ test("locator nth resolves DOM query result before clicking", async () => {
   ]);
 });
 
+test("locator last resolves the final DOM query result before clicking", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser.dom.query") {
+        return {
+          results: [
+            { selector: ".toast:nth-of-type(1)", text: "Queued" },
+            { selector: ".toast:nth-of-type(2)", text: "Saved" },
+            { selector: ".toast:nth-of-type(3)", text: "Done" },
+          ],
+          count: 3,
+        };
+      }
+      if (name === "browser_tabs_list") {
+        return { tabs: [{ id: 7, active: true }] };
+      }
+      return { ok: true };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.playwright.locator(".toast").last().click();
+
+  assert.deepEqual(transport.calls.slice(-2), [
+    {
+      name: "browser.dom.query",
+      args: { selector: ".toast", limit: 100, attributes: ["text"] },
+    },
+    {
+      name: "browser.dom.click",
+      args: { target: { selector: ".toast:nth-of-type(3)" } },
+    },
+  ]);
+});
+
 test("cua click maps to browser.cua.click", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
