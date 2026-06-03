@@ -56,13 +56,17 @@ export async function discoverLocalBrowserEnvironment(options = {}) {
   const candidates = options.candidates || defaultBrowserCandidates(platform);
   const processes = options.processes || await listProcesses(platform);
   const extensionDir = options.extensionDir || join(PROJECT_ROOT, "extension");
+  const extensionPackage = await diagnoseExtensionPackage(extensionDir);
   const browsers = [];
 
   for (const candidate of candidates) {
     const executablePath = await firstExisting(candidate.executablePaths || []);
     const installed = Boolean(executablePath);
     const running = isProcessRunning(processes, candidate.processNames || [candidate.name]);
-    const profiles = await discoverProfiles(candidate.profileRoot);
+    const profiles = await discoverProfiles(candidate.profileRoot, {
+      extensionDir,
+      extensionName: extensionPackage.name,
+    });
     browsers.push({
       id: candidate.id,
       name: candidate.name,
@@ -85,7 +89,7 @@ export async function discoverLocalBrowserEnvironment(options = {}) {
     platform,
     browsers,
     summary,
-    extensionPackage: await diagnoseExtensionPackage(extensionDir),
+    extensionPackage,
   };
 }
 
@@ -161,12 +165,12 @@ async function exists(path) {
   }
 }
 
-async function discoverProfiles(profileRoot) {
+async function discoverProfiles(profileRoot, extension = {}) {
   if (!profileRoot || !await exists(profileRoot)) return [];
   const localState = await readLocalState(profileRoot);
   const infoCache = localState?.profile?.info_cache || {};
   const entries = await readdir(profileRoot, { withFileTypes: true });
-  return entries
+  const profiles = entries
     .filter((entry) => entry.isDirectory() && (entry.name === "Default" || /^Profile \d+$/.test(entry.name)))
     .map((entry) => ({
       id: entry.name,
@@ -174,11 +178,68 @@ async function discoverProfiles(profileRoot) {
       path: join(profileRoot, entry.name),
     }))
     .sort((a, b) => a.id.localeCompare(b.id, "en"));
+  return Promise.all(profiles.map(async (profile) => ({
+    ...profile,
+    extensionInstall: await diagnoseProfileExtensionInstall(profile.path, extension),
+  })));
 }
 
 async function readLocalState(profileRoot) {
   try {
     return JSON.parse(await readFile(join(profileRoot, "Local State"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function diagnoseProfileExtensionInstall(profilePath, extension = {}) {
+  for (const fileName of ["Preferences", "Secure Preferences"]) {
+    const preferences = await readJsonFile(join(profilePath, fileName));
+    const match = findExtensionSettingsMatch(preferences, extension);
+    if (match) {
+      return {
+        installed: true,
+        enabled: match.enabled,
+        id: match.id,
+        path: match.path,
+        source: fileName,
+      };
+    }
+  }
+  return missingExtensionInstall();
+}
+
+function findExtensionSettingsMatch(preferences, extension = {}) {
+  const settings = preferences?.extensions?.settings || {};
+  for (const [id, value] of Object.entries(settings)) {
+    const extensionPath = value?.path || null;
+    const manifestName = value?.manifest?.name || "";
+    const pathMatches = extension.extensionDir && extensionPath === extension.extensionDir;
+    const nameMatches = extension.extensionName && manifestName === extension.extensionName;
+    if (pathMatches || nameMatches) {
+      return {
+        id,
+        path: extensionPath,
+        enabled: value?.state === undefined ? true : value.state === 1,
+      };
+    }
+  }
+  return null;
+}
+
+function missingExtensionInstall() {
+  return {
+    installed: false,
+    enabled: false,
+    id: null,
+    path: null,
+    source: null,
+  };
+}
+
+async function readJsonFile(path) {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
   } catch {
     return null;
   }

@@ -16,6 +16,34 @@ test("discovers installed browser apps and profile directories", async () => {
   await writeFile(join(chromeApp, "Contents", "MacOS", "Google Chrome"), "", "utf8");
   await mkdir(join(chromeProfileRoot, "Default"), { recursive: true });
   await mkdir(join(chromeProfileRoot, "Profile 1"), { recursive: true });
+  const extensionRoot = join(root, "Link2ChromeExtension");
+  await mkdir(extensionRoot, { recursive: true });
+  await writeFile(
+    join(extensionRoot, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "ChromeX - Local Browser MCP",
+      permissions: [
+        "debugger",
+        "activeTab",
+        "scripting",
+        "tabs",
+        "storage",
+        "history",
+        "tabGroups",
+        "clipboardRead",
+        "clipboardWrite",
+      ],
+      host_permissions: ["<all_urls>"],
+      background: { service_worker: "background.js" },
+    }),
+    "utf8"
+  );
+  await writeFile(
+    join(extensionRoot, "background.js"),
+    'const WS_URL = "ws://localhost:8765"; chrome.alarms.create("keepalive", {}); chrome.runtime.onStartup.addListener(() => {});',
+    "utf8"
+  );
   await writeFile(
     join(chromeProfileRoot, "Local State"),
     JSON.stringify({
@@ -23,6 +51,21 @@ test("discovers installed browser apps and profile directories", async () => {
         info_cache: {
           Default: { name: "Person 1" },
           "Profile 1": { name: "Work" },
+        },
+      },
+    }),
+    "utf8"
+  );
+  await writeFile(
+    join(chromeProfileRoot, "Default", "Preferences"),
+    JSON.stringify({
+      extensions: {
+        settings: {
+          abcdefghijklmnopabcdefghijklmnop: {
+            path: extensionRoot,
+            state: 1,
+            manifest: { name: "ChromeX - Local Browser MCP" },
+          },
         },
       },
     }),
@@ -53,8 +96,30 @@ test("discovers installed browser apps and profile directories", async () => {
       executablePath: join(chromeApp, "Contents", "MacOS", "Google Chrome"),
       profileRoot: chromeProfileRoot,
       profiles: [
-        { id: "Default", name: "Person 1", path: join(chromeProfileRoot, "Default") },
-        { id: "Profile 1", name: "Work", path: join(chromeProfileRoot, "Profile 1") },
+        {
+          id: "Default",
+          name: "Person 1",
+          path: join(chromeProfileRoot, "Default"),
+          extensionInstall: {
+            installed: true,
+            enabled: true,
+            id: "abcdefghijklmnopabcdefghijklmnop",
+            path: extensionRoot,
+            source: "Preferences",
+          },
+        },
+        {
+          id: "Profile 1",
+          name: "Work",
+          path: join(chromeProfileRoot, "Profile 1"),
+          extensionInstall: {
+            installed: false,
+            enabled: false,
+            id: null,
+            path: null,
+            source: null,
+          },
+        },
       ],
     },
   ]);
@@ -184,6 +249,73 @@ test("reports missing Link2Chrome keepalive signals", async () => {
     missingSignals: ["chrome.alarms", "chrome.runtime lifecycle listener"],
   });
   assert.equal(env.extensionPackage.websocketUrl, "ws://localhost:8765");
+});
+
+test("reports disabled Link2Chrome extension installs from secure preferences", async () => {
+  const root = await mkdtemp(join(tmpdir(), "link2chrome-secure-preferences-"));
+  const profileRoot = join(root, "ChromeProfiles");
+  const extensionRoot = join(root, "Link2ChromeExtension");
+  await mkdir(join(profileRoot, "Default"), { recursive: true });
+  await mkdir(extensionRoot, { recursive: true });
+  await writeFile(
+    join(extensionRoot, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "ChromeX - Local Browser MCP",
+      permissions: [
+        "debugger",
+        "activeTab",
+        "scripting",
+        "tabs",
+        "storage",
+        "history",
+        "tabGroups",
+        "clipboardRead",
+        "clipboardWrite",
+      ],
+      host_permissions: ["<all_urls>"],
+      background: { service_worker: "background.js" },
+    }),
+    "utf8"
+  );
+  await writeFile(
+    join(extensionRoot, "background.js"),
+    'const WS_URL = "ws://localhost:8765"; chrome.alarms.create("keepalive", {}); chrome.runtime.onStartup.addListener(() => {});',
+    "utf8"
+  );
+  await writeFile(
+    join(profileRoot, "Default", "Secure Preferences"),
+    JSON.stringify({
+      extensions: {
+        settings: {
+          zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz: {
+            state: 0,
+            manifest: { name: "ChromeX - Local Browser MCP" },
+          },
+        },
+      },
+    }),
+    "utf8"
+  );
+
+  const env = await discoverLocalBrowserEnvironment({
+    candidates: [{
+      id: "chrome",
+      name: "Google Chrome",
+      executablePaths: [],
+      profileRoot,
+    }],
+    processes: [],
+    extensionDir: extensionRoot,
+  });
+
+  assert.deepEqual(env.browsers[0].profiles[0].extensionInstall, {
+    installed: true,
+    enabled: false,
+    id: "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    path: null,
+    source: "Secure Preferences",
+  });
 });
 
 test("reports missing Link2Chrome extension package permissions", async () => {
