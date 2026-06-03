@@ -14,6 +14,7 @@ await browser.nameSession("Link2Chrome runtime basic navigation");
 const tab = await browser.tabs.selected();
 
 await tab.goto("https://example.com");
+await tab.waitFor({ condition: "dom-ready", timeout: 10000 });
 const snapshot = await tab.playwright.domSnapshot();
 console.log(snapshot);
 

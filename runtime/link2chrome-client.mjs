@@ -190,6 +190,7 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       if (name === "browser_tab_new") return send("agent_browser_tab_new", args);
       if (name === "browser.tabs.finalize") return send("agent_browser_tabs_finalize", args);
       if (name === "browser.user.history") return send("agent_browser_history", args);
+      if (name === "browser.wait") return send("agent_browser_wait", args);
       if (name === "browser.clipboard.readText") return send("clipboard_read", args);
       if (name === "browser.clipboard.writeText") return send("clipboard_write", args);
       if (name === "browser_navigate") return send("navigate", args);
@@ -478,6 +479,10 @@ class Tab {
   async screenshot(options = {}) {
     return this._transport.command("browser.cua.screenshot", options);
   }
+
+  async waitFor(options = {}) {
+    return this._transport.command("browser.wait", options);
+  }
 }
 
 class PlaywrightSurface {
@@ -550,6 +555,14 @@ class Locator {
       target: this.target,
       text,
       clearFirst: options.clearFirst ?? true,
+    });
+  }
+
+  async waitFor(options = {}) {
+    return this._transport.command("browser.wait", {
+      condition: options.condition || "dom-ready",
+      selector: this.target.selector,
+      ...options,
     });
   }
 

@@ -215,6 +215,19 @@ test("tabs.selected returns active tab info and tab navigation uses browser_navi
   ]);
 });
 
+test("tab waitFor maps to browser wait command", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.waitFor({ condition: "dom-ready", timeout: 5000 });
+
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.wait",
+    args: { condition: "dom-ready", timeout: 5000 },
+  });
+});
+
 test("user.openTabs lists currently open tabs", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
@@ -342,6 +355,19 @@ test("locator fill maps to browser.dom.type", async () => {
       text: "Link2Chrome",
       clearFirst: true,
     },
+  });
+});
+
+test("locator waitFor maps selector waits to browser wait command", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.playwright.locator("#ready").waitFor({ state: "visible", timeout: 2000 });
+
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.wait",
+    args: { condition: "dom-ready", selector: "#ready", state: "visible", timeout: 2000 },
   });
 });
 
@@ -790,4 +816,38 @@ test("websocket transport maps user history to extension history command", async
 
   assert.equal(sentMessages[0].command, "agent_browser_history");
   assert.deepEqual(sentMessages[0].params, { text: "docs", maxResults: 5 });
+});
+
+test("websocket transport maps runtime wait to extension wait command", async () => {
+  const sentMessages = [];
+  class FakeWebSocket {
+    constructor() {
+      this.listeners = {};
+      queueMicrotask(() => this.listeners.open?.({}));
+    }
+
+    addEventListener(name, handler) {
+      this.listeners[name] = handler;
+    }
+
+    send(message) {
+      const parsed = JSON.parse(message);
+      sentMessages.push(parsed);
+      this.listeners.message?.({
+        data: JSON.stringify({
+          request_id: parsed.request_id,
+          success: true,
+          data: { ok: true, condition: parsed.params.condition },
+        }),
+      });
+    }
+
+    close() {}
+  }
+  const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
+
+  await transport.command("browser.wait", { condition: "dom-ready", selector: "#ready" });
+
+  assert.equal(sentMessages[0].command, "agent_browser_wait");
+  assert.deepEqual(sentMessages[0].params, { condition: "dom-ready", selector: "#ready" });
 });
