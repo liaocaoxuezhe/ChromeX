@@ -1078,6 +1078,29 @@ test("locator count understands dom_query results and filters role names", async
   });
 });
 
+test("locator textContent reads text from dom_query results", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser.dom.query") {
+        return { results: [{ text: " Search result title " }], count: 1 };
+      }
+      return { tabs: [{ id: 7, active: true }] };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const text = await tab.playwright.locator("h1").textContent();
+
+  assert.equal(text, " Search result title ");
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.dom.query",
+    args: { selector: "h1", limit: 1, attributes: ["text"] },
+  });
+});
+
 test("locator setFiles maps to upload_file", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");

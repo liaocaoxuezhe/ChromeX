@@ -1039,8 +1039,12 @@ class Locator {
     if (this.target.text && !this.target.selector) {
       return this.target.text;
     }
-    const raw = await this._transport.command("browser.dom.query", { selector: this.target.selector, limit: 1 });
-    const first = (raw.elements || raw.matches || [])[0];
+    const raw = await this._transport.command("browser.dom.query", {
+      selector: this.target.selector,
+      limit: 1,
+      attributes: ["text"],
+    });
+    const first = locatorElements(raw)[0];
     return first?.text || first?.textContent || "";
   }
 }
