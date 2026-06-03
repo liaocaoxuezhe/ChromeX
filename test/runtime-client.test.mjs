@@ -500,6 +500,63 @@ test("tasks.run attaches launch and readiness diagnostics when model code fails"
   ]);
 });
 
+test("tasks.run attaches launch and task diagnostics when readiness times out", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "__hub_acquire__") return { lease_token: "lease-timeout", lease_name: args.name };
+      if (name === "__hub_status__") return { extension_connected: false };
+      if (name === "browser_tab_info") throw new Error("Extension not connected");
+      return { ok: true };
+    },
+  };
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    localEnvironment: {
+      inspect: async () => ({
+        ok: true,
+        extensionPackage: { ok: true, path: "/Users/me/Link2Chrome/extension" },
+        browsers: [{
+          id: "chrome",
+          installed: true,
+          executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+          profiles: [{ id: "Default", extensionInstall: { installed: true, enabled: true } }],
+        }],
+      }),
+    },
+  });
+
+  await assert.rejects(
+    () => link2chrome.tasks.run("readiness timeout task", "return true;", {
+      timeoutMs: 1,
+      intervalMs: 1,
+      now: (() => {
+        let t = 0;
+        return () => {
+          t += 2;
+          return t;
+        };
+      })(),
+      sleep: async () => {},
+      launcher: async () => ({ pid: 107 }),
+    }),
+    (error) => {
+      assert.match(error.message, /Timed out waiting for Link2Chrome readiness/);
+      assert.deepEqual(error.task, { name: "readiness timeout task" });
+      assert.equal(error.launch.profileId, "Default");
+      assert.equal(error.readiness.ok, false);
+      return true;
+    }
+  );
+
+  assert.deepEqual(transport.calls.filter((call) => call.name === "__hub_acquire__" || call.name === "__hub_release__"), [
+    { name: "__hub_acquire__", args: { name: "readiness timeout task" } },
+    { name: "__hub_release__", args: { lease_token: "lease-timeout" } },
+  ]);
+});
+
 test("diagnose returns Browser Hub status", async () => {
   const transport = {
     calls: [],

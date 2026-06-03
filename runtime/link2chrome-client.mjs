@@ -73,7 +73,13 @@ class TaskSurface {
   async run(name, script, options = {}) {
     const sessionName = options.sessionName || name;
     return this._client.sessions.runExclusive(sessionName, async ({ browser, lease }) => {
-      const launch = await this._client.localEnvironment.openAndWait(options);
+      let launch;
+      try {
+        launch = await this._client.localEnvironment.openAndWait(options);
+      } catch (error) {
+        error.task = { name };
+        throw error;
+      }
       const taskContext = {
         task: { name },
         launch: launch.launch,
@@ -230,14 +236,19 @@ class LocalEnvironmentSurface {
 
   async openAndWait(options = {}) {
     const launch = await this.openBrowser(options);
-    const readiness = await waitForReadiness({
-      diagnostics: this._client.diagnostics,
-      timeoutMs: options.timeoutMs,
-      intervalMs: options.intervalMs,
-      sleep: options.sleep,
-      now: options.now,
-    });
-    return { launch, readiness };
+    try {
+      const readiness = await waitForReadiness({
+        diagnostics: this._client.diagnostics,
+        timeoutMs: options.timeoutMs,
+        intervalMs: options.intervalMs,
+        sleep: options.sleep,
+        now: options.now,
+      });
+      return { launch, readiness };
+    } catch (error) {
+      error.launch = launch;
+      throw error;
+    }
   }
 }
 
