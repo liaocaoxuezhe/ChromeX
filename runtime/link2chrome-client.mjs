@@ -863,8 +863,12 @@ class PlaywrightSurface {
     return new Locator({ transport: this._transport, safety: this._safety, target: { selector } });
   }
 
-  getByText(text) {
-    return new Locator({ transport: this._transport, safety: this._safety, target: { text } });
+  getByText(text, options = {}) {
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      target: { text, textMatcher: normalizeTextMatcher(text, options) },
+    });
   }
 
   getByRole(role, options = {}) {
@@ -959,27 +963,28 @@ class Locator {
     return new Locator({
       transport: this._transport,
       safety: this._safety,
-      target: { ...this.target, text: options.hasText },
+      target: { ...this.target, text: options.hasText, textMatcher: normalizeTextMatcher(options.hasText) },
     });
   }
 
   async count() {
-    if (this.target.text && !this.target.selector) {
-      const raw = await this._transport.command("browser.dom.search", { query: this.target.text });
-      return (raw.matches || raw.elements || []).length;
+    const matcher = this._textMatcher();
+    if (matcher && !this.target.selector) {
+      if (matcher.kind === "contains") {
+        const raw = await this._transport.command("browser.dom.search", { query: matcher.text });
+        return (raw.matches || raw.elements || []).length;
+      }
+      const raw = await this._queryTextMatches(matcher);
+      return locatorElements(raw).filter((element) => locatorTextMatches(element, matcher)).length;
     }
     const raw = await this._transport.command("browser.dom.query", {
       selector: this.target.selector,
       limit: 100,
-      ...(this.target.text ? { attributes: ["text", "ariaLabel"] } : {}),
+      ...(matcher ? { attributes: ["text", "ariaLabel"] } : {}),
     });
     const elements = locatorElements(raw);
-    if (this.target.text) {
-      const needle = normalizeLocatorText(this.target.text);
-      return elements.filter((element) => {
-        const text = normalizeLocatorText(element.text || element.textContent || element.ariaLabel || element.name || "");
-        return text.includes(needle);
-      }).length;
+    if (matcher) {
+      return elements.filter((element) => locatorTextMatches(element, matcher)).length;
     }
     return elements.length || Number(raw.count || 0);
   }
@@ -1147,27 +1152,21 @@ class Locator {
   }
 
   async _resolveSelector() {
-    if (this.target.index === undefined && !this.target.last) return this.target.selector;
+    if (!this._needsResolvedTarget()) return this.target.selector;
     return (await this._resolveTarget()).selector;
   }
 
   async _resolveTarget() {
-    if (this.target.index === undefined && !this.target.last) return this.target;
-    const limit = this.target.last ? 100 : this.target.index + 1;
-    const raw = this.target.selector
-      ? await this._transport.command("browser.dom.query", {
-        selector: this.target.selector,
-        limit,
-        attributes: ["text"],
-      })
-      : await this._transport.command("browser.dom.search", {
-        query: this.target.text,
-        limit,
-      });
-    const elements = locatorElements(raw);
-    const element = this.target.last ? elements.at(-1) : elements[this.target.index];
+    if (!this._needsResolvedTarget()) return this.target;
+    const matcher = this._textMatcher();
+    const raw = await this._queryResolvableElements(matcher);
+    const elements = matcher
+      ? locatorElements(raw).filter((element) => locatorTextMatches(element, matcher))
+      : locatorElements(raw);
+    const index = this.target.index ?? 0;
+    const element = this.target.last ? elements.at(-1) : elements[index];
     if (!element) {
-      const description = this.target.last ? "locator.last()" : `locator.nth(${this.target.index})`;
+      const description = this.target.last ? "locator.last()" : `locator.nth(${index})`;
       throw new Error(`${description} did not match an element`);
     }
     return {
@@ -1175,10 +1174,74 @@ class Locator {
       ...(this.target.text ? { text: this.target.text } : {}),
     };
   }
+
+  _needsResolvedTarget() {
+    const matcher = this._textMatcher();
+    return this.target.index !== undefined
+      || this.target.last
+      || (matcher && matcher.kind !== "contains");
+  }
+
+  _textMatcher() {
+    if (this.target.text === undefined) return null;
+    return this.target.textMatcher || normalizeTextMatcher(this.target.text);
+  }
+
+  _queryTextMatches(matcher) {
+    if (matcher.kind === "exact") {
+      return this._transport.command("browser.dom.search", { query: matcher.text, limit: 100 });
+    }
+    return this._transport.command("browser.dom.query", {
+      selector: "*",
+      limit: 100,
+      attributes: ["text", "ariaLabel"],
+    });
+  }
+
+  _queryResolvableElements(matcher) {
+    if (this.target.selector) {
+      const limit = matcher || this.target.last ? 100 : this.target.index + 1;
+      return this._transport.command("browser.dom.query", {
+        selector: this.target.selector,
+        limit,
+        attributes: matcher ? ["text", "ariaLabel"] : ["text"],
+      });
+    }
+    if (matcher) {
+      return this._queryTextMatches(matcher);
+    }
+    return this._transport.command("browser.dom.search", {
+      query: this.target.text,
+      limit: this.target.last ? 100 : this.target.index + 1,
+    });
+  }
 }
 
 function locatorElements(raw = {}) {
   return raw.elements || raw.matches || raw.results || [];
+}
+
+function normalizeTextMatcher(value, options = {}) {
+  if (value instanceof RegExp) {
+    return { kind: "regex", source: value.source, flags: value.flags };
+  }
+  const text = String(value ?? "");
+  return options.exact ? { kind: "exact", text } : { kind: "contains", text };
+}
+
+function locatorTextMatches(element, matcher) {
+  const text = locatorElementText(element);
+  if (matcher.kind === "exact") {
+    return normalizeLocatorText(text) === normalizeLocatorText(matcher.text);
+  }
+  if (matcher.kind === "regex") {
+    return new RegExp(matcher.source, matcher.flags).test(text);
+  }
+  return normalizeLocatorText(text).includes(normalizeLocatorText(matcher.text));
+}
+
+function locatorElementText(element = {}) {
+  return String(element.text || element.textContent || element.ariaLabel || element.name || "");
 }
 
 function normalizeLocatorText(value) {

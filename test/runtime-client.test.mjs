@@ -1364,6 +1364,75 @@ test("getByText count maps to browser.dom.search", async () => {
   });
 });
 
+test("getByText exact click resolves an exact text match before clicking", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser.dom.search") {
+        return {
+          matches: [
+            { selector: "#autosave", text: "Autosave" },
+            { selector: "#save", text: "Save" },
+          ],
+        };
+      }
+      if (name === "browser_tabs_list") {
+        return { tabs: [{ id: 7, active: true }] };
+      }
+      return { ok: true };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.playwright.getByText("Save", { exact: true }).click();
+
+  assert.deepEqual(transport.calls.slice(-2), [
+    {
+      name: "browser.dom.search",
+      args: { query: "Save", limit: 100 },
+    },
+    {
+      name: "browser.dom.click",
+      args: { target: { selector: "#save", text: "Save" } },
+    },
+  ]);
+});
+
+test("getByText regex count filters DOM query results in the runtime", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser.dom.query") {
+        return {
+          results: [
+            { text: "Save changes" },
+            { text: "Cancel" },
+            { ariaLabel: "Submit form" },
+          ],
+          count: 3,
+        };
+      }
+      if (name === "browser_tabs_list") {
+        return { tabs: [{ id: 7, active: true }] };
+      }
+      return { ok: true };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const count = await tab.playwright.getByText(/Save|Submit/).count();
+
+  assert.equal(count, 2);
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.dom.query",
+    args: { selector: "*", limit: 100, attributes: ["text", "ariaLabel"] },
+  });
+});
+
 test("getByRole click maps to browser.dom.click with role and name target", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
@@ -1449,6 +1518,44 @@ test("locator nth resolves DOM query result before clicking", async () => {
     {
       name: "browser.dom.click",
       args: { target: { selector: "ul.results > li:nth-of-type(2)" } },
+    },
+  ]);
+});
+
+test("locator filter hasText regex resolves the first filtered DOM result before clicking", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser.dom.query") {
+        return {
+          results: [
+            { selector: "button:nth-of-type(1)", text: "Cancel" },
+            { selector: "button:nth-of-type(2)", text: "Save draft" },
+            { selector: "button:nth-of-type(3)", text: "Submit" },
+          ],
+          count: 3,
+        };
+      }
+      if (name === "browser_tabs_list") {
+        return { tabs: [{ id: 7, active: true }] };
+      }
+      return { ok: true };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.playwright.locator("button").filter({ hasText: /Save/ }).first().click();
+
+  assert.deepEqual(transport.calls.slice(-2), [
+    {
+      name: "browser.dom.query",
+      args: { selector: "button", limit: 100, attributes: ["text", "ariaLabel"] },
+    },
+    {
+      name: "browser.dom.click",
+      args: { target: { selector: "button:nth-of-type(2)", text: /Save/ } },
     },
   ]);
 });
