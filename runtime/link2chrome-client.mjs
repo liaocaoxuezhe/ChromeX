@@ -47,7 +47,6 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
       }
     },
     diagnostics: new DiagnosticsSurface({ transport, localEnvironment }),
-    localEnvironment: new LocalEnvironmentSurface({ localEnvironment }),
     sessions: new SessionSurface({ transport, safety }),
     browsers: {
       async get(kind = "extension") {
@@ -58,6 +57,7 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
       },
     },
   };
+  client.localEnvironment = new LocalEnvironmentSurface({ localEnvironment, client });
   client.scripts = new ScriptSurface({ client });
   return client;
 }
@@ -136,8 +136,9 @@ class SessionSurface {
 }
 
 class LocalEnvironmentSurface {
-  constructor({ localEnvironment }) {
+  constructor({ localEnvironment, client }) {
     this._localEnvironment = localEnvironment;
+    this._client = client;
   }
 
   async inspect(options = {}) {
@@ -162,6 +163,18 @@ class LocalEnvironmentSurface {
       onlyExtension: options.onlyExtension,
       launcher: options.launcher,
     });
+  }
+
+  async openAndWait(options = {}) {
+    const launch = await this.openBrowser(options);
+    const readiness = await waitForReadiness({
+      diagnostics: this._client.diagnostics,
+      timeoutMs: options.timeoutMs,
+      intervalMs: options.intervalMs,
+      sleep: options.sleep,
+      now: options.now,
+    });
+    return { launch, readiness };
   }
 }
 
@@ -198,6 +211,31 @@ function selectLaunchTarget(environment, browser, options) {
     profileId: fallbackProfile?.id || null,
     extensionDir: environment?.extensionPackage?.ok ? environment.extensionPackage.path : null,
   };
+}
+
+async function waitForReadiness({
+  diagnostics,
+  timeoutMs = 15000,
+  intervalMs = 250,
+  sleep = defaultSleep,
+  now = Date.now,
+}) {
+  const deadline = now() + timeoutMs;
+  let lastReadiness = null;
+  while (true) {
+    lastReadiness = await diagnostics.readiness();
+    if (lastReadiness.ok) return lastReadiness;
+    if (now() >= deadline) {
+      const error = new Error("Timed out waiting for Link2Chrome readiness");
+      error.readiness = lastReadiness;
+      throw error;
+    }
+    await sleep(intervalMs);
+  }
+}
+
+function defaultSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 class DiagnosticsSurface {
@@ -310,6 +348,11 @@ function runtimeCapabilities() {
     },
     sessions: {
       runExclusive: true,
+    },
+    localEnvironment: {
+      inspect: true,
+      openBrowser: true,
+      openAndWait: true,
     },
     codeRunner: {
       scriptsRun: true,

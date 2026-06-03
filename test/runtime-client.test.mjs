@@ -196,6 +196,103 @@ test("runtime localEnvironment openBrowser loads the unpacked extension when no 
   ]);
 });
 
+test("runtime localEnvironment openAndWait opens Chrome and waits until extension readiness", async () => {
+  const launched = [];
+  let readinessChecks = 0;
+  const transport = {
+    async command(name) {
+      if (name === "__hub_status__") {
+        readinessChecks += 1;
+        return { extension_connected: readinessChecks >= 3 };
+      }
+      if (name === "browser_tab_info") {
+        if (readinessChecks < 3) throw new Error("tab not ready");
+        return { id: 7, active: true, url: "https://ready.test" };
+      }
+      return { ok: true };
+    },
+  };
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    localEnvironment: {
+      inspect: async () => ({
+        ok: true,
+        extensionPackage: { ok: true, path: "/Users/me/Link2Chrome/extension" },
+        browsers: [{
+          id: "chrome",
+          installed: true,
+          executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+          profiles: [{ id: "Default", extensionInstall: { installed: true, enabled: true } }],
+        }],
+      }),
+    },
+  });
+
+  const result = await link2chrome.localEnvironment.openAndWait({
+    browserId: "chrome",
+    timeoutMs: 1000,
+    intervalMs: 1,
+    sleep: async () => {},
+    launcher: async (command, args) => {
+      launched.push({ command, args });
+      return { pid: 103 };
+    },
+  });
+
+  assert.equal(result.launch.profileId, "Default");
+  assert.equal(result.readiness.ok, true);
+  assert.equal(readinessChecks, 3);
+  assert.equal(launched.length, 1);
+});
+
+test("runtime localEnvironment openAndWait reports timeout with last readiness", async () => {
+  const link2chrome = createLink2ChromeClient({
+    transport: {
+      async command(name) {
+        if (name === "__hub_status__") return { extension_connected: false };
+        if (name === "browser_tab_info") throw new Error("Extension not connected");
+        return { ok: true };
+      },
+    },
+    localEnvironment: {
+      inspect: async () => ({
+        ok: true,
+        extensionPackage: { ok: true, path: "/Users/me/Link2Chrome/extension" },
+        browsers: [{
+          id: "chrome",
+          installed: true,
+          executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+          profiles: [{ id: "Default", extensionInstall: { installed: true, enabled: true } }],
+        }],
+      }),
+    },
+  });
+
+  await assert.rejects(
+    () => link2chrome.localEnvironment.openAndWait({
+      timeoutMs: 1,
+      intervalMs: 1,
+      now: (() => {
+        let t = 0;
+        return () => {
+          t += 2;
+          return t;
+        };
+      })(),
+      sleep: async () => {},
+      launcher: async () => ({ pid: 104 }),
+    }),
+    (error) => {
+      assert.match(error.message, /Timed out waiting for Link2Chrome readiness/);
+      assert.equal(error.readiness.ok, false);
+      assert.equal(error.readiness.extension.connected, false);
+      return true;
+    }
+  );
+});
+
 test("sessions.runExclusive acquires and releases a browser hub lease", async () => {
   const transport = {
     calls: [],
@@ -389,6 +486,11 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
   });
   assert.deepEqual(result.capabilities.sessions, {
     runExclusive: true,
+  });
+  assert.deepEqual(result.capabilities.localEnvironment, {
+    inspect: true,
+    openBrowser: true,
+    openAndWait: true,
   });
   assert.deepEqual(result.capabilities.codeRunner, {
     scriptsRun: true,
