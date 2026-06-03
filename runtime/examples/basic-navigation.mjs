@@ -1,8 +1,6 @@
-import { createLink2ChromeClient, createWebSocketTransport } from "../link2chrome-client.mjs";
+import { setupLink2ChromeRuntime } from "../link2chrome-client.mjs";
 
-const link2chrome = createLink2ChromeClient({
-  transport: createWebSocketTransport({ url: process.env.LINK2CHROME_WS_URL || "ws://localhost:8766" }),
-});
+setupLink2ChromeRuntime({ globals: globalThis });
 
 const readiness = await link2chrome.diagnostics.readiness();
 if (!readiness.ok) {
@@ -11,7 +9,7 @@ if (!readiness.ok) {
   process.exit();
 }
 
-const browser = await link2chrome.browsers.get("extension");
+const browser = await agent.browsers.get("extension");
 await browser.nameSession("Link2Chrome runtime basic navigation");
 const tab = await browser.tabs.selected();
 

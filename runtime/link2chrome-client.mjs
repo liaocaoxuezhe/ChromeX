@@ -1,5 +1,29 @@
 import { discoverLocalBrowserEnvironment } from "./local-environment.mjs";
 
+export function setupLink2ChromeRuntime({
+  globals = globalThis,
+  transport,
+  confirmAction,
+  localEnvironment,
+  overwrite = false,
+  wsUrl = process.env.LINK2CHROME_WS_URL || "ws://localhost:8766",
+  WebSocketImpl = globalThis.WebSocket,
+} = {}) {
+  const link2chrome = createLink2ChromeClient({
+    transport: transport || createWebSocketTransport({ url: wsUrl, WebSocketImpl }),
+    confirmAction,
+    localEnvironment,
+  });
+  const agent = { browsers: link2chrome.browsers };
+  if (overwrite || globals.link2chrome === undefined) {
+    globals.link2chrome = link2chrome;
+  }
+  if (overwrite || globals.agent === undefined) {
+    globals.agent = agent;
+  }
+  return { agent, link2chrome };
+}
+
 export function createLink2ChromeClient({ transport, confirmAction, localEnvironment } = {}) {
   if (!transport || typeof transport.command !== "function") {
     throw new TypeError("createLink2ChromeClient requires a transport with command(name, args)");

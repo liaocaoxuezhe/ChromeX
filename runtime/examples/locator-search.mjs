@@ -1,10 +1,8 @@
-import { createLink2ChromeClient, createWebSocketTransport } from "../link2chrome-client.mjs";
+import { setupLink2ChromeRuntime } from "../link2chrome-client.mjs";
 
-const link2chrome = createLink2ChromeClient({
-  transport: createWebSocketTransport({ url: process.env.LINK2CHROME_WS_URL || "ws://localhost:8766" }),
-});
+setupLink2ChromeRuntime({ globals: globalThis });
 
-const browser = await link2chrome.browsers.get("extension");
+const browser = await agent.browsers.get("extension");
 const tab = await browser.tabs.selected();
 
 await tab.goto("https://www.google.com/search?q=Link2Chrome");

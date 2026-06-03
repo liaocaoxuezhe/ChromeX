@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createLink2ChromeClient, createWebSocketTransport } from "../runtime/link2chrome-client.mjs";
+import {
+  createLink2ChromeClient,
+  createWebSocketTransport,
+  setupLink2ChromeRuntime,
+} from "../runtime/link2chrome-client.mjs";
 
 function fakeTransport() {
   const calls = [];
@@ -27,6 +31,35 @@ test("browsers.get returns an extension browser with tabs API", async () => {
   assert.equal(tabs.length, 1);
   assert.equal(tabs[0].id, 7);
   assert.deepEqual(transport.calls[0], { name: "browser_tabs_list", args: {} });
+});
+
+test("setupLink2ChromeRuntime installs agent and link2chrome globals", async () => {
+  const globals = {};
+  const transport = fakeTransport();
+
+  const runtime = setupLink2ChromeRuntime({ globals, transport });
+
+  assert.equal(globals.link2chrome, runtime.link2chrome);
+  assert.equal(globals.agent, runtime.agent);
+  assert.equal(globals.agent.browsers, globals.link2chrome.browsers);
+  const browser = await globals.agent.browsers.get("extension");
+  const tabs = await browser.tabs.list();
+
+  assert.equal(tabs[0].id, 7);
+  assert.deepEqual(transport.calls[0], { name: "browser_tabs_list", args: {} });
+});
+
+test("setupLink2ChromeRuntime preserves existing globals unless overwrite is true", () => {
+  const globals = { agent: { existing: true }, link2chrome: { existing: true } };
+  const transport = fakeTransport();
+
+  const runtime = setupLink2ChromeRuntime({ globals, transport });
+
+  assert.deepEqual(globals.agent, { existing: true });
+  assert.deepEqual(globals.link2chrome, { existing: true });
+  assert.notEqual(runtime.agent, globals.agent);
+  setupLink2ChromeRuntime({ globals, transport, overwrite: true });
+  assert.equal(globals.agent.browsers, globals.link2chrome.browsers);
 });
 
 test("diagnose returns Browser Hub status", async () => {
