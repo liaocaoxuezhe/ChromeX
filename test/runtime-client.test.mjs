@@ -33,6 +33,21 @@ test("browsers.get returns an extension browser with tabs API", async () => {
   assert.deepEqual(transport.calls[0], { name: "browser_tabs_list", args: {} });
 });
 
+test("browsers.list returns available runtime browser kinds", async () => {
+  const link2chrome = createLink2ChromeClient({ transport: fakeTransport() });
+
+  const browsers = await link2chrome.browsers.list();
+
+  assert.deepEqual(browsers, [
+    {
+      kind: "extension",
+      name: "Link2Chrome Extension",
+      available: true,
+      default: true,
+    },
+  ]);
+});
+
 test("setupLink2ChromeRuntime installs agent and link2chrome globals", async () => {
   const globals = {};
   const transport = fakeTransport();
@@ -656,6 +671,7 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
     fillForm: true,
   });
   assert.deepEqual(result.capabilities.browserState, {
+    browserList: true,
     openTabs: true,
     claimTab: true,
     history: true,

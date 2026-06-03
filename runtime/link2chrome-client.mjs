@@ -51,6 +51,14 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
     diagnostics: new DiagnosticsSurface({ transport, localEnvironment }),
     sessions: new SessionSurface({ transport, safety }),
     browsers: {
+      async list() {
+        return [{
+          kind: "extension",
+          name: "Link2Chrome Extension",
+          available: true,
+          default: true,
+        }];
+      },
       async get(kind = "extension") {
         if (kind !== "extension") {
           throw new Error(`unsupported browser kind: ${kind}`);
@@ -416,6 +424,7 @@ function runtimeCapabilities() {
       tabFinalize: true,
     },
     browserState: {
+      browserList: true,
       openTabs: true,
       claimTab: true,
       history: true,
