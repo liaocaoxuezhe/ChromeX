@@ -444,6 +444,53 @@ return {
   assert.equal(launched.length, 1);
 });
 
+test("tasks.run attaches launch and readiness diagnostics when model code fails", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "__hub_status__") return { extension_connected: true, queue_locked: false };
+      if (name === "browser_tab_info") return { id: 31, active: true, url: "https://failure.test" };
+      if (name === "__hub_acquire__") return { lease_token: "lease-fail", lease_name: args.name };
+      return { ok: true };
+    },
+  };
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    localEnvironment: {
+      inspect: async () => ({
+        ok: true,
+        extensionPackage: { ok: true, path: "/Users/me/Link2Chrome/extension" },
+        browsers: [{
+          id: "chrome",
+          installed: true,
+          executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+          profiles: [{ id: "Default", extensionInstall: { installed: true, enabled: true } }],
+        }],
+      }),
+    },
+  });
+
+  await assert.rejects(
+    () => link2chrome.tasks.run("failing model task", "throw new Error('model exploded');", {
+      launcher: async () => ({ pid: 106 }),
+    }),
+    (error) => {
+      assert.equal(error.message, "model exploded");
+      assert.deepEqual(error.task, { name: "failing model task" });
+      assert.equal(error.launch.profileId, "Default");
+      assert.equal(error.readiness.selectedTab.tab.id, 31);
+      return true;
+    }
+  );
+
+  assert.deepEqual(transport.calls.filter((call) => call.name === "__hub_acquire__" || call.name === "__hub_release__"), [
+    { name: "__hub_acquire__", args: { name: "failing model task" } },
+    { name: "__hub_release__", args: { lease_token: "lease-fail" } },
+  ]);
+});
+
 test("diagnose returns Browser Hub status", async () => {
   const transport = {
     calls: [],
