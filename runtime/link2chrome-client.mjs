@@ -3,6 +3,7 @@ import {
   discoverLocalBrowserEnvironment,
   openLocalBrowserWindow,
 } from "./local-environment.mjs";
+import { evaluateSafetyPolicy } from "./safety-policy.mjs";
 import {
   decodeNativeMessages,
   encodeNativeMessage,
@@ -32,11 +33,11 @@ export function setupLink2ChromeRuntime({
   return { agent, link2chrome };
 }
 
-export function createLink2ChromeClient({ transport, confirmAction, localEnvironment } = {}) {
+export function createLink2ChromeClient({ transport, confirmAction, localEnvironment, safetyPolicy } = {}) {
   if (!transport || typeof transport.command !== "function") {
     throw new TypeError("createLink2ChromeClient requires a transport with command(name, args)");
   }
-  const safety = new SafetyManager({ confirmAction });
+  const safety = new SafetyManager({ confirmAction, policy: safetyPolicy });
   const client = {
     _transport: transport,
     _safety: safety,
@@ -822,17 +823,19 @@ function isUnsupportedCommandError(error) {
 }
 
 class SafetyManager {
-  constructor({ confirmAction } = {}) {
+  constructor({ confirmAction, policy } = {}) {
     this._confirmAction = confirmAction;
+    this._policy = policy;
   }
 
   async confirm(action) {
-    if (!action.safety) return true;
-    if (action.safety.level === "no-confirm") return true;
+    const safety = action.safety || evaluateSafetyPolicy({ policy: this._policy, action });
+    if (!safety) return true;
+    if (safety.level === "no-confirm") return true;
     if (typeof this._confirmAction !== "function") {
-      throw new Error(`Action requires confirmation: ${action.safety.reason || action.type}`);
+      throw new Error(`Action requires confirmation: ${safety.reason || action.type}`);
     }
-    const confirmed = await this._confirmAction(action);
+    const confirmed = await this._confirmAction({ ...action, safety });
     if (!confirmed) {
       throw new Error("Action was not confirmed");
     }
@@ -1324,6 +1327,11 @@ class CuaSurface {
   }
 
   async click(x, y, options = {}) {
+    if (typeof x === "object" && x !== null) {
+      options = y || {};
+      y = x.y;
+      x = x.x;
+    }
     await this._safety?.confirm({ type: "cua.click", target: { x, y }, safety: options.safety });
     const { safety, ...commandOptions } = options;
     return this._transport.command("browser.cua.click", { x, y, ...commandOptions });
@@ -1338,11 +1346,15 @@ class CuaSurface {
   }
 
   async type(text, options = {}) {
-    return this._transport.command("browser.cua.type", { text, ...options });
+    await this._safety?.confirm({ type: "cua.type", text, safety: options.safety });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("browser.cua.type", { text, ...commandOptions });
   }
 
-  async key(combo) {
-    return this._transport.command("browser.cua.key", { combo });
+  async key(combo, options = {}) {
+    await this._safety?.confirm({ type: "cua.key", key: combo, safety: options.safety });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("browser.cua.key", { combo, ...commandOptions });
   }
 
   async scroll(dx = 0, dy = 500, options = {}) {
@@ -1350,7 +1362,13 @@ class CuaSurface {
   }
 
   async drag(x1, y1, x2, y2, options = {}) {
-    return this._transport.command("browser.cua.drag", { x1, y1, x2, y2, ...options });
+    await this._safety?.confirm({
+      type: "cua.drag",
+      target: { x1, y1, x2, y2 },
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("browser.cua.drag", { x1, y1, x2, y2, ...commandOptions });
   }
 }
 

@@ -1485,6 +1485,102 @@ test("locator click runs safety confirmation before sensitive actions", async ()
   });
 });
 
+test("safety policy requires confirmation for payment-looking locator clicks", async () => {
+  const confirmations = [];
+  const transport = fakeTransport();
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    safetyPolicy: { mode: "always-confirm", actions: ["payment"] },
+    confirmAction: async (action) => {
+      confirmations.push(action);
+      return false;
+    },
+  });
+  const browser = await link2chrome.browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await assert.rejects(
+    () => tab.playwright.locator("button.pay").click(),
+    /Action was not confirmed/
+  );
+
+  assert.equal(confirmations.length, 1);
+  assert.equal(confirmations[0].safety.policyAction, "payment");
+  assert.notEqual(transport.calls.at(-1).name, "browser.dom.click");
+});
+
+test("safety policy requires confirmation for locator file uploads", async () => {
+  const confirmations = [];
+  const transport = fakeTransport();
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    safetyPolicy: { mode: "always-confirm", actions: ["upload"] },
+    confirmAction: async (action) => {
+      confirmations.push(action);
+      return false;
+    },
+  });
+  const browser = await link2chrome.browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await assert.rejects(
+    () => tab.playwright.locator("input[type=file]").setFiles(["/tmp/a.pdf"]),
+    /Action was not confirmed/
+  );
+
+  assert.equal(confirmations.length, 1);
+  assert.equal(confirmations[0].safety.policyAction, "upload");
+  assert.notEqual(transport.calls.at(-1).name, "upload_file");
+});
+
+test("safety policy requires confirmation for CUA coordinate clicks", async () => {
+  const confirmations = [];
+  const transport = fakeTransport();
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    safetyPolicy: { mode: "always-confirm", actions: ["click"] },
+    confirmAction: async (action) => {
+      confirmations.push(action);
+      return false;
+    },
+  });
+  const browser = await link2chrome.browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await assert.rejects(
+    () => tab.cua.click({ x: 100, y: 200 }),
+    /Action was not confirmed/
+  );
+
+  assert.equal(confirmations.length, 1);
+  assert.deepEqual(confirmations[0].target, { x: 100, y: 200 });
+  assert.notEqual(transport.calls.at(-1).name, "browser.cua.click");
+});
+
+test("safety policy requires confirmation for DOM CUA clicks", async () => {
+  const confirmations = [];
+  const transport = fakeTransport();
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    safetyPolicy: { mode: "always-confirm", actions: ["click"] },
+    confirmAction: async (action) => {
+      confirmations.push(action);
+      return false;
+    },
+  });
+  const browser = await link2chrome.browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await assert.rejects(
+    () => tab.dom_cua.click({ selector: "button.primary" }),
+    /Action was not confirmed/
+  );
+
+  assert.equal(confirmations.length, 1);
+  assert.equal(confirmations[0].safety.policyAction, "click");
+  assert.notEqual(transport.calls.at(-1).name, "browser.dom.click");
+});
+
 test("locator nth resolves DOM query result before clicking", async () => {
   const transport = {
     calls: [],
