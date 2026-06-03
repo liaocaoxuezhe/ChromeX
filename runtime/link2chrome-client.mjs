@@ -1,7 +1,12 @@
+import { spawn as defaultSpawn } from "node:child_process";
 import {
   discoverLocalBrowserEnvironment,
   openLocalBrowserWindow,
 } from "./local-environment.mjs";
+import {
+  decodeNativeMessages,
+  encodeNativeMessage,
+} from "../scripts/native-host/native-host.mjs";
 
 export function setupLink2ChromeRuntime({
   globals = globalThis,
@@ -340,7 +345,7 @@ class DiagnosticsSurface {
       },
       selectedTab,
       localEnvironment,
-      capabilities: runtimeCapabilities(),
+      capabilities: runtimeCapabilities({ transport: this._transport }),
     };
   }
 
@@ -387,7 +392,7 @@ class DiagnosticsSurface {
   }
 }
 
-function runtimeCapabilities() {
+function runtimeCapabilities({ transport } = {}) {
   return {
     playwrightStyle: {
       domSnapshot: true,
@@ -451,8 +456,67 @@ function runtimeCapabilities() {
       exclusiveSession: true,
       finalize: true,
     },
-    nativeMessaging: false,
+    nativeMessaging: Boolean(transport?.nativeMessaging),
     localPlaywrightDependency: false,
+  };
+}
+
+export function createNativeMessagingTransport({
+  hostPath,
+  spawnImpl = defaultSpawn,
+} = {}) {
+  if (!hostPath) {
+    throw new Error("createNativeMessagingTransport requires hostPath");
+  }
+  let nextId = 1;
+  let stdoutBuffer = Buffer.alloc(0);
+  const pending = new Map();
+  const child = spawnImpl(hostPath, [], { stdio: ["pipe", "pipe", "pipe"] });
+
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer = Buffer.concat([stdoutBuffer, Buffer.from(chunk)]);
+    const decoded = decodeNativeMessages(stdoutBuffer);
+    stdoutBuffer = decoded.remainder;
+    for (const message of decoded.messages) {
+      const request = pending.get(message.id);
+      if (!request) continue;
+      pending.delete(message.id);
+      if (message.error) {
+        request.reject(new Error(message.error));
+      } else {
+        request.resolve(message.result);
+      }
+    }
+  });
+
+  const rejectPending = (error) => {
+    for (const request of pending.values()) {
+      request.reject(error);
+    }
+    pending.clear();
+  };
+  child.on?.("error", rejectPending);
+  child.on?.("exit", (code, signal) => {
+    rejectPending(new Error(`native messaging host exited: code=${code} signal=${signal}`));
+  });
+
+  return {
+    nativeMessaging: true,
+    child,
+    command(name, args = {}) {
+      const id = nextId++;
+      const message = { id, name, args };
+      const encoded = encodeNativeMessage(message);
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        try {
+          child.stdin.write(encoded);
+        } catch (error) {
+          pending.delete(id);
+          reject(error);
+        }
+      });
+    },
   };
 }
 
