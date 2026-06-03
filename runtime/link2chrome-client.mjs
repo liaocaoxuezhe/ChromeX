@@ -42,6 +42,7 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
         return { tabs, totalCount: tabs.length, raw };
       }
       if (name === "browser_tab_info") return send("agent_browser_tab_info", args);
+      if (name === "browser_tab_switch") return send("agent_browser_tab_switch", args);
       if (name === "browser_tab_new") return send("agent_browser_tab_new", args);
       if (name === "browser.tabs.finalize") return send("agent_browser_tabs_finalize", args);
       if (name === "browser_navigate") return send("navigate", args);
@@ -191,6 +192,7 @@ class Browser {
     this._transport = transport;
     this._safety = safety;
     this.tabs = new Tabs({ browser: this, transport, safety });
+    this.user = new UserSurface({ browser: this, transport, safety });
   }
 
   async nameSession(name) {
@@ -246,6 +248,29 @@ class Tabs {
       kept: normalizedKeep,
       raw: null,
     };
+  }
+}
+
+class UserSurface {
+  constructor({ browser, transport, safety }) {
+    this._browser = browser;
+    this._transport = transport;
+    this._safety = safety;
+  }
+
+  async openTabs() {
+    return this._browser.tabs.list();
+  }
+
+  async claimTab(options = {}) {
+    if (options.tabId !== undefined && options.tabId !== null) {
+      await this._transport.command("browser_tab_switch", { tabId: options.tabId });
+    }
+    return this._browser.tabs.selected();
+  }
+
+  async history() {
+    throw new Error("user.history is not implemented by the current Link2Chrome backend");
   }
 }
 

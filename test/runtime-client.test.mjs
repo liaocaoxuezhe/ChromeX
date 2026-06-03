@@ -56,6 +56,69 @@ test("tabs.selected returns active tab info and tab navigation uses browser_navi
   ]);
 });
 
+test("user.openTabs lists currently open tabs", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+
+  const tabs = await browser.user.openTabs();
+
+  assert.equal(tabs.length, 1);
+  assert.equal(tabs[0].id, 7);
+  assert.deepEqual(transport.calls[0], { name: "browser_tabs_list", args: {} });
+});
+
+test("user.claimTab without arguments claims selected tab", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser_tab_info") {
+        return { id: 9, active: true, url: "https://claimed.test", title: "Claimed" };
+      }
+      return { ok: true };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+
+  const tab = await browser.user.claimTab();
+
+  assert.equal(tab.id, 9);
+  assert.deepEqual(transport.calls, [{ name: "browser_tab_info", args: {} }]);
+});
+
+test("user.claimTab with tabId switches and returns selected tab", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser_tab_switch") return { ok: true, tabId: args.tabId };
+      if (name === "browser_tab_info") {
+        return { id: 11, active: true, url: "https://target.test", title: "Target" };
+      }
+      return { ok: true };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+
+  const tab = await browser.user.claimTab({ tabId: 11 });
+
+  assert.equal(tab.id, 11);
+  assert.deepEqual(transport.calls, [
+    { name: "browser_tab_switch", args: { tabId: 11 } },
+    { name: "browser_tab_info", args: {} },
+  ]);
+});
+
+test("user.history clearly reports unsupported backend", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+
+  await assert.rejects(
+    () => browser.user.history(),
+    /user.history is not implemented/
+  );
+});
+
 test("tabs.finalize is a structured no-op for deliverable handoff habits", async () => {
   const transport = fakeTransport();
   const originalCommand = transport.command.bind(transport);
@@ -298,4 +361,38 @@ test("websocket transport maps runtime finalize to extension finalize command", 
 
   assert.equal(sentMessages[0].command, "agent_browser_tabs_finalize");
   assert.deepEqual(sentMessages[0].params, { keep: [{ tabId: 7, status: "deliverable" }] });
+});
+
+test("websocket transport maps runtime tab switch to extension switch command", async () => {
+  const sentMessages = [];
+  class FakeWebSocket {
+    constructor() {
+      this.listeners = {};
+      queueMicrotask(() => this.listeners.open?.({}));
+    }
+
+    addEventListener(name, handler) {
+      this.listeners[name] = handler;
+    }
+
+    send(message) {
+      const parsed = JSON.parse(message);
+      sentMessages.push(parsed);
+      this.listeners.message?.({
+        data: JSON.stringify({
+          request_id: parsed.request_id,
+          success: true,
+          data: { ok: true, tabId: parsed.params.tabId },
+        }),
+      });
+    }
+
+    close() {}
+  }
+  const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
+
+  await transport.command("browser_tab_switch", { tabId: 12 });
+
+  assert.equal(sentMessages[0].command, "agent_browser_tab_switch");
+  assert.deepEqual(sentMessages[0].params, { tabId: 12 });
 });
