@@ -64,7 +64,13 @@ export function createNativeHostCommandHandler({
 
   const isHubProcessRunning = () => Boolean(hubProcess && (hubProcess.exitCode === null || hubProcess.exitCode === undefined));
 
-  const startHub = () => {
+  const startHub = async () => {
+    try {
+      await commandHub("__hub_status__", {});
+      return { ok: true, alreadyRunning: true, pid: hubProcess?.pid || null };
+    } catch (_) {
+      // No reachable hub yet; start the singleton below.
+    }
     if (isHubProcessRunning()) {
       return { ok: true, alreadyRunning: true, pid: hubProcess.pid };
     }
@@ -98,7 +104,7 @@ export function createNativeHostCommandHandler({
       };
     }
     if (!isHubProcessRunning()) {
-      startHub();
+      await startHub();
     }
     return commandHub(name, args);
   };

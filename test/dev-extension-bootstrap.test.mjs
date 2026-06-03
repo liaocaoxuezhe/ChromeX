@@ -24,6 +24,21 @@ test("background service worker bootstraps Browser Hub through native messaging 
   assert.match(source, /connectNativeBootstrap\(\).*connectWebSocket/s);
 });
 
+test("background service worker reuses an existing native host port during reconnects", () => {
+  const source = fs.readFileSync(path.join(root, "extension/background.js"), "utf8");
+
+  assert.match(source, /if \(nativePort && nativeConnected\) \{/);
+  assert.match(source, /return Promise\.resolve\(nativeStatus \|\| \{ ok: true, state: "connected" \}\)/);
+});
+
+test("background service worker refuses to connect when loaded with a stale extension id", () => {
+  const source = fs.readFileSync(path.join(root, "extension/background.js"), "utf8");
+
+  assert.match(source, /EXPECTED_EXTENSION_ID = "gfmbcnhkhgdlpcdhmolaefigfapbamcg"/);
+  assert.match(source, /isExpectedExtensionId\(\)/);
+  assert.match(source, /extension_id_mismatch/);
+});
+
 test("dev extension install plan derives extension id from manifest key", () => {
   const manifest = {
     key: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArwIDAQAB",

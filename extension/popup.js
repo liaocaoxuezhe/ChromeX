@@ -12,6 +12,7 @@ function updateUI(statusOrConnected, enabled) {
     : { connected: statusOrConnected, enabled };
   const connected = Boolean(status.connected || status.wsConnected);
   const nativeConnected = Boolean(status.nativeConnected);
+  const nativeError = status.nativeStatus?.error || "";
   enabled = status.enabled !== false;
   statusCard.classList.toggle("dimmed", !enabled);
 
@@ -25,6 +26,14 @@ function updateUI(statusOrConnected, enabled) {
   }
 
   toggleHint.textContent = "启用连接";
+
+  if (nativeError === "extension_id_mismatch") {
+    dot.className = "status-dot disconnected";
+    statusText.textContent = "扩展 ID 不匹配";
+    statusDetail.textContent = `请移除后重载 ${status.nativeStatus.expectedId}`;
+    reconnectBtn.disabled = true;
+    return;
+  }
 
   if (connected) {
     dot.className = "status-dot connected";

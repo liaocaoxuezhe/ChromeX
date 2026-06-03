@@ -73,9 +73,10 @@ node scripts/dev-extension/install.mjs
 
 1. 打开 `chrome://extensions/`
 2. 开启「开发者模式」
-3. 点击「加载已解压的扩展程序」
-4. 选择本项目的 `extension/` 目录
-5. 打开扩展 popup，确认显示 `Native Host + :8765` 或已连接状态
+3. 如果之前加载过同一个 `extension/` 但扩展 ID 不是 `gfmbcnhkhgdlpcdhmolaefigfapbamcg`，先移除旧项
+4. 点击「加载已解压的扩展程序」
+5. 选择本项目的 `extension/` 目录
+6. 打开扩展 popup，确认显示 `Native Host + :8765` 或已连接状态
 
 ## 配置 Claude Code
 

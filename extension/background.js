@@ -19,6 +19,7 @@ let reconnectTimer = null;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const WS_URL = "ws://localhost:8765";
 const NATIVE_HOST_NAME = "com.link2chrome.nativehost";
+const EXPECTED_EXTENSION_ID = "gfmbcnhkhgdlpcdhmolaefigfapbamcg";
 const HEARTBEAT_INTERVAL = 30000;
 const KEEPALIVE_ALARM = "link2chrome.keepalive";
 const KEEPALIVE_PERIOD_MINUTES = 0.5;
@@ -64,8 +65,31 @@ function isDebugableUrl(url) {
 
 // ==================== Native Host / WebSocket 管理 ====================
 
+function isExpectedExtensionId() {
+  return chrome.runtime.id === EXPECTED_EXTENSION_ID;
+}
+
+function markExtensionIdMismatch() {
+  nativeConnected = false;
+  wsConnected = false;
+  nativeStatus = {
+    ok: false,
+    error: "extension_id_mismatch",
+    expectedId: EXPECTED_EXTENSION_ID,
+    actualId: chrome.runtime.id
+  };
+  broadcastStatus();
+}
+
 function connectNativeBootstrap() {
   if (!connectionEnabled) return Promise.resolve({ ok: false, reason: "disabled" });
+  if (!isExpectedExtensionId()) {
+    markExtensionIdMismatch();
+    return Promise.resolve(nativeStatus);
+  }
+  if (nativePort && nativeConnected) {
+    return Promise.resolve(nativeStatus || { ok: true, state: "connected" });
+  }
   if (!chrome.runtime.connectNative) {
     nativeConnected = false;
     nativeStatus = { ok: false, error: "nativeMessaging unavailable" };
@@ -122,6 +146,10 @@ function connectNativeBootstrap() {
 
 function connectWebSocket() {
   if (!connectionEnabled) return;
+  if (!isExpectedExtensionId()) {
+    markExtensionIdMismatch();
+    return;
+  }
   // 避免 CONNECTING 阶段重复创建连接，导致连接风暴
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 

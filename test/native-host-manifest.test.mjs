@@ -102,6 +102,7 @@ test("runtime diagnostics capabilities report native messaging from transport st
 test("native host command handler starts Browser Hub and reports status", async () => {
   const spawnCalls = [];
   const hubStatusCalls = [];
+  let hubStatusAttempt = 0;
   const handler = createNativeHostCommandHandler({
     projectRoot: "/repo/Link2Chrome",
     pythonBin: "python3.9",
@@ -111,6 +112,9 @@ test("native host command handler starts Browser Hub and reports status", async 
     },
     hubCommand: async (name, args) => {
       hubStatusCalls.push({ name, args });
+      if (name === "__hub_status__" && hubStatusAttempt++ === 0) {
+        throw new Error("not running");
+      }
       return { hub_id: "hub-test", extension_connected: true };
     },
   });
@@ -134,5 +138,30 @@ test("native host command handler starts Browser Hub and reports status", async 
       stdio: ["ignore", "ignore", "pipe"],
     },
   ]);
-  assert.deepEqual(hubStatusCalls, [{ name: "__hub_status__", args: {} }]);
+  assert.deepEqual(hubStatusCalls, [
+    { name: "__hub_status__", args: {} },
+    { name: "__hub_status__", args: {} },
+  ]);
+});
+
+test("native host command handler does not spawn Browser Hub when an existing hub is reachable", async () => {
+  const spawnCalls = [];
+  const handler = createNativeHostCommandHandler({
+    projectRoot: "/repo/Link2Chrome",
+    spawnImpl: (...args) => {
+      spawnCalls.push(args);
+      return { pid: 42, unref() {} };
+    },
+    hubCommand: async (name) => {
+      if (name === "__hub_status__") return { hub_id: "existing", extension_connected: true };
+      return { ok: true };
+    },
+  });
+
+  assert.deepEqual(await handler("__native_start_hub__", {}), {
+    ok: true,
+    alreadyRunning: true,
+    pid: null,
+  });
+  assert.deepEqual(spawnCalls, []);
 });

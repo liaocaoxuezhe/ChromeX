@@ -454,3 +454,11 @@ node scripts/dev-extension/install.mjs
 - 允许来源：当前 `extension/manifest.json` 的固定 key 推导出的 extension id。
 
 完成后重新加载 unpacked extension。扩展 background 会先调用 `chrome.runtime.connectNative("com.link2chrome.nativehost")`，Native Host 会拉起 `server/browser_hub.py`，然后扩展继续连接 `ws://localhost:8765`。popup 会显示 Native Host 与 WebSocket/Hub 的连接状态。
+
+如果 popup 在 `Native Host / :8765` 和 `WebSocket :8765` 之间跳动，通常是多个 Chrome profile 同时加载了同一个 `extension/`，或存在旧的 unpacked extension ID。请在所有 Chrome profile 的 `chrome://extensions` 中移除旧项，只保留固定 ID：
+
+```text
+gfmbcnhkhgdlpcdhmolaefigfapbamcg
+```
+
+新版 background 会拒绝旧 ID 连接，popup 会显示“扩展 ID 不匹配”。
