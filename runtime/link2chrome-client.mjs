@@ -1,7 +1,8 @@
-export function createLink2ChromeClient({ transport } = {}) {
+export function createLink2ChromeClient({ transport, confirmAction } = {}) {
   if (!transport || typeof transport.command !== "function") {
     throw new TypeError("createLink2ChromeClient requires a transport with command(name, args)");
   }
+  const safety = new SafetyManager({ confirmAction });
 
   return {
     browsers: {
@@ -9,7 +10,7 @@ export function createLink2ChromeClient({ transport } = {}) {
         if (kind !== "extension") {
           throw new Error(`unsupported browser kind: ${kind}`);
         }
-        return new Browser({ kind, transport });
+        return new Browser({ kind, transport, safety });
       },
     },
   };
@@ -166,11 +167,29 @@ function cleanNumber(value) {
   return Number.isInteger(value) ? value : Number(value.toFixed(3));
 }
 
+function roleSelector(role) {
+  const normalized = String(role || "").toLowerCase();
+  const selectors = {
+    button: 'button, input[type="button"], input[type="submit"], [role="button"]',
+    link: 'a[href], [role="link"]',
+    textbox: 'input:not([type]), input[type="text"], input[type="search"], textarea, [role="textbox"]',
+    checkbox: 'input[type="checkbox"], [role="checkbox"]',
+    radio: 'input[type="radio"], [role="radio"]',
+    combobox: 'select, [role="combobox"]',
+  };
+  return selectors[normalized] || `[role="${cssStringEscape(normalized)}"]`;
+}
+
+function cssStringEscape(value) {
+  return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
 class Browser {
-  constructor({ kind, transport }) {
+  constructor({ kind, transport, safety }) {
     this.kind = kind;
     this._transport = transport;
-    this.tabs = new Tabs({ browser: this, transport });
+    this._safety = safety;
+    this.tabs = new Tabs({ browser: this, transport, safety });
   }
 
   async nameSession(name) {
@@ -180,21 +199,22 @@ class Browser {
 }
 
 class Tabs {
-  constructor({ browser, transport }) {
+  constructor({ browser, transport, safety }) {
     this._browser = browser;
     this._transport = transport;
+    this._safety = safety;
   }
 
   async list() {
     const raw = await this._transport.command("browser_tabs_list", {});
     return (raw.tabs || []).map(
-      (tab) => new Tab({ browser: this._browser, transport: this._transport, data: tab, raw: tab })
+      (tab) => new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: tab, raw: tab })
     );
   }
 
   async selected() {
     const raw = await this._transport.command("browser_tab_info", {});
-    return new Tab({ browser: this._browser, transport: this._transport, data: raw, raw });
+    return new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: raw, raw });
   }
 
   async get(id) {
@@ -204,33 +224,65 @@ class Tabs {
 
   async new(url) {
     const raw = await this._transport.command("browser_tab_new", url ? { url } : {});
-    return new Tab({ browser: this._browser, transport: this._transport, data: raw, raw });
+    return new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: raw, raw });
   }
 
   async finalize({ keep = [] } = {}) {
+    const normalizedKeep = keep.map((item) => ({
+      tabId: item.tab?.id ?? item.tabId ?? null,
+      status: item.status || "handoff",
+    }));
+    try {
+      return await this._transport.command("browser.tabs.finalize", { keep: normalizedKeep });
+    } catch (error) {
+      if (!isUnsupportedCommandError(error)) {
+        throw error;
+      }
+    }
     return {
       ok: true,
       action: "finalize",
-      kept: keep.map((item) => ({
-        tabId: item.tab?.id ?? item.tabId ?? null,
-        status: item.status || "handoff",
-      })),
+      kept: normalizedKeep,
       raw: null,
     };
   }
 }
 
+function isUnsupportedCommandError(error) {
+  return /unknown|unsupported|unimplemented|未知|未实现/i.test(String(error?.message || error));
+}
+
+class SafetyManager {
+  constructor({ confirmAction } = {}) {
+    this._confirmAction = confirmAction;
+  }
+
+  async confirm(action) {
+    if (!action.safety) return true;
+    if (action.safety.level === "no-confirm") return true;
+    if (typeof this._confirmAction !== "function") {
+      throw new Error(`Action requires confirmation: ${action.safety.reason || action.type}`);
+    }
+    const confirmed = await this._confirmAction(action);
+    if (!confirmed) {
+      throw new Error("Action was not confirmed");
+    }
+    return true;
+  }
+}
+
 class Tab {
-  constructor({ browser, transport, data = {}, raw = data }) {
+  constructor({ browser, transport, safety, data = {}, raw = data }) {
     this.browser = browser;
     this._transport = transport;
+    this._safety = safety;
     this.id = data.id;
     this.url = data.url;
     this.title = data.title;
     this.active = data.active;
     this.raw = raw;
-    this.playwright = new PlaywrightSurface({ tab: this, transport });
-    this.cua = new CuaSurface({ tab: this, transport });
+    this.playwright = new PlaywrightSurface({ tab: this, transport, safety });
+    this.cua = new CuaSurface({ tab: this, transport, safety });
     this.dom_cua = new DomCuaSurface({ tab: this, transport });
     this.dev = new DevSurface({ tab: this, transport });
   }
@@ -254,9 +306,10 @@ class Tab {
 }
 
 class PlaywrightSurface {
-  constructor({ tab, transport }) {
+  constructor({ tab, transport, safety }) {
     this._tab = tab;
     this._transport = transport;
+    this._safety = safety;
   }
 
   async domSnapshot(options = {}) {
@@ -264,15 +317,19 @@ class PlaywrightSurface {
   }
 
   locator(selector) {
-    return new Locator({ transport: this._transport, target: { selector } });
+    return new Locator({ transport: this._transport, safety: this._safety, target: { selector } });
   }
 
   getByText(text) {
-    return new Locator({ transport: this._transport, target: { text } });
+    return new Locator({ transport: this._transport, safety: this._safety, target: { text } });
   }
 
   getByRole(role, options = {}) {
-    return new Locator({ transport: this._transport, target: { role, text: options.name } });
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      target: { selector: roleSelector(role), role, text: options.name },
+    });
   }
 
   getByTestId(testId) {
@@ -282,8 +339,9 @@ class PlaywrightSurface {
 }
 
 class Locator {
-  constructor({ transport, target }) {
+  constructor({ transport, safety, target }) {
     this._transport = transport;
+    this._safety = safety;
     this.target = target;
   }
 
@@ -297,10 +355,22 @@ class Locator {
   }
 
   async click(options = {}) {
-    return this._transport.command("browser.dom.click", { target: this.target, ...options });
+    await this._safety?.confirm({
+      type: "click",
+      target: this.target,
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("browser.dom.click", { target: this.target, ...commandOptions });
   }
 
   async fill(text, options = {}) {
+    await this._safety?.confirm({
+      type: "fill",
+      target: this.target,
+      text,
+      safety: options.safety,
+    });
     return this._transport.command("browser.dom.type", {
       target: this.target,
       text,
@@ -319,9 +389,10 @@ class Locator {
 }
 
 class CuaSurface {
-  constructor({ tab, transport }) {
+  constructor({ tab, transport, safety }) {
     this._tab = tab;
     this._transport = transport;
+    this._safety = safety;
   }
 
   async screenshot(options = {}) {
@@ -329,7 +400,9 @@ class CuaSurface {
   }
 
   async click(x, y, options = {}) {
-    return this._transport.command("browser.cua.click", { x, y, ...options });
+    await this._safety?.confirm({ type: "cua.click", target: { x, y }, safety: options.safety });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("browser.cua.click", { x, y, ...commandOptions });
   }
 
   async doubleClick(x, y) {

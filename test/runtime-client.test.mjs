@@ -58,6 +58,13 @@ test("tabs.selected returns active tab info and tab navigation uses browser_navi
 
 test("tabs.finalize is a structured no-op for deliverable handoff habits", async () => {
   const transport = fakeTransport();
+  const originalCommand = transport.command.bind(transport);
+  transport.command = async (name, args = {}) => {
+    if (name === "browser.tabs.finalize") {
+      throw new Error("unknown command: browser.tabs.finalize");
+    }
+    return originalCommand(name, args);
+  };
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
   const [tab] = await browser.tabs.list();
 
@@ -68,6 +75,32 @@ test("tabs.finalize is a structured no-op for deliverable handoff habits", async
     action: "finalize",
     kept: [{ tabId: 7, status: "deliverable" }],
     raw: null,
+  });
+});
+
+test("tabs.finalize calls backend when finalize support is available", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser_tabs_list") {
+        return { tabs: [{ id: 7, active: true, url: "https://example.com", title: "Example" }] };
+      }
+      if (name === "browser.tabs.finalize") {
+        return { ok: true, action: "finalize", grouped: [{ tabId: 7, status: "deliverable" }] };
+      }
+      return { ok: true };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const result = await browser.tabs.finalize({ keep: [{ tab, status: "deliverable" }] });
+
+  assert.deepEqual(result, { ok: true, action: "finalize", grouped: [{ tabId: 7, status: "deliverable" }] });
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.tabs.finalize",
+    args: { keep: [{ tabId: 7, status: "deliverable" }] },
   });
 });
 
@@ -120,7 +153,46 @@ test("getByRole click maps to browser.dom.click with role and name target", asyn
 
   assert.deepEqual(transport.calls.at(-1), {
     name: "browser.dom.click",
-    args: { target: { role: "button", text: "Search" } },
+    args: {
+      target: {
+        selector: 'button, input[type="button"], input[type="submit"], [role="button"]',
+        role: "button",
+        text: "Search",
+      },
+    },
+  });
+});
+
+test("locator click runs safety confirmation before sensitive actions", async () => {
+  const confirmations = [];
+  const transport = fakeTransport();
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    confirmAction: async (action) => {
+      confirmations.push(action);
+      return false;
+    },
+  });
+  const browser = await link2chrome.browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await assert.rejects(
+    () => tab.playwright.getByRole("button", { name: "Delete" }).click({
+      safety: { level: "always-confirm", reason: "delete data" },
+    }),
+    /Action was not confirmed/
+  );
+
+  assert.equal(confirmations.length, 1);
+  assert.equal(confirmations[0].type, "click");
+  assert.deepEqual(confirmations[0].target, {
+    selector: 'button, input[type="button"], input[type="submit"], [role="button"]',
+    role: "button",
+    text: "Delete",
+  });
+  assert.notDeepEqual(transport.calls.at(-1), {
+    name: "browser.dom.click",
+    args: { target: { role: "button", text: "Delete" } },
   });
 });
 
