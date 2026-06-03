@@ -29,6 +29,52 @@ test("browsers.get returns an extension browser with tabs API", async () => {
   assert.deepEqual(transport.calls[0], { name: "browser_tabs_list", args: {} });
 });
 
+test("diagnose returns Browser Hub status", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "__hub_status__") {
+        return {
+          hub_id: "hub-1",
+          extension_connected: true,
+          adapter_connections: 2,
+          queue_locked: false,
+        };
+      }
+      return { ok: true };
+    },
+  };
+  const link2chrome = createLink2ChromeClient({ transport });
+
+  const result = await link2chrome.diagnose();
+
+  assert.deepEqual(result, {
+    ok: true,
+    hub: {
+      hub_id: "hub-1",
+      extension_connected: true,
+      adapter_connections: 2,
+      queue_locked: false,
+    },
+  });
+  assert.deepEqual(transport.calls, [{ name: "__hub_status__", args: {} }]);
+});
+
+test("diagnose returns structured error when Hub is unreachable", async () => {
+  const transport = {
+    async command() {
+      throw new Error("connection refused");
+    },
+  };
+  const link2chrome = createLink2ChromeClient({ transport });
+
+  const result = await link2chrome.diagnose();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "connection refused");
+});
+
 test("tabs.selected returns active tab info and tab navigation uses browser_navigate", async () => {
   const transport = {
     calls: [],

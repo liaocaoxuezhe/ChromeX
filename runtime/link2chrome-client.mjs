@@ -5,6 +5,19 @@ export function createLink2ChromeClient({ transport, confirmAction } = {}) {
   const safety = new SafetyManager({ confirmAction });
 
   return {
+    async diagnose() {
+      try {
+        return {
+          ok: true,
+          hub: await transport.command("__hub_status__", {}),
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          error: String(error?.message || error),
+        };
+      }
+    },
     browsers: {
       async get(kind = "extension") {
         if (kind !== "extension") {
