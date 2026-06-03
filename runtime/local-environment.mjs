@@ -1,16 +1,32 @@
 import { access, readdir, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const REQUIRED_EXTENSION_PERMISSIONS = [
+  "debugger",
+  "activeTab",
+  "scripting",
+  "tabs",
+  "storage",
+  "history",
+  "tabGroups",
+  "clipboardRead",
+  "clipboardWrite",
+];
+const REQUIRED_HOST_PERMISSIONS = ["<all_urls>"];
+const RUNTIME_DIR = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = dirname(RUNTIME_DIR);
 
 export async function discoverLocalBrowserEnvironment(options = {}) {
   const platform = options.platform || process.platform;
   const candidates = options.candidates || defaultBrowserCandidates(platform);
   const processes = options.processes || await listProcesses(platform);
+  const extensionDir = options.extensionDir || join(PROJECT_ROOT, "extension");
   const browsers = [];
 
   for (const candidate of candidates) {
@@ -40,6 +56,7 @@ export async function discoverLocalBrowserEnvironment(options = {}) {
     platform,
     browsers,
     summary,
+    extensionPackage: await diagnoseExtensionPackage(extensionDir),
   };
 }
 
@@ -126,6 +143,43 @@ async function readLocalState(profileRoot) {
     return JSON.parse(await readFile(join(profileRoot, "Local State"), "utf8"));
   } catch {
     return null;
+  }
+}
+
+async function diagnoseExtensionPackage(extensionDir) {
+  const manifestPath = join(extensionDir, "manifest.json");
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    const permissions = manifest.permissions || [];
+    const hostPermissions = manifest.host_permissions || [];
+    const backgroundServiceWorker = manifest.background?.service_worker || null;
+    const missingPermissions = REQUIRED_EXTENSION_PERMISSIONS.filter((permission) => !permissions.includes(permission));
+    const missingHostPermissions = REQUIRED_HOST_PERMISSIONS.filter((permission) => !hostPermissions.includes(permission));
+    return {
+      ok: (
+        manifest.manifest_version === 3
+        && Boolean(backgroundServiceWorker)
+        && missingPermissions.length === 0
+        && missingHostPermissions.length === 0
+      ),
+      path: extensionDir,
+      manifestVersion: manifest.manifest_version || null,
+      name: manifest.name || "",
+      backgroundServiceWorker,
+      missingPermissions,
+      missingHostPermissions,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      path: extensionDir,
+      error: String(error?.message || error),
+      manifestVersion: null,
+      name: "",
+      backgroundServiceWorker: null,
+      missingPermissions: REQUIRED_EXTENSION_PERMISSIONS,
+      missingHostPermissions: REQUIRED_HOST_PERMISSIONS,
+    };
   }
 }
 

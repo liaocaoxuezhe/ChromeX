@@ -94,6 +94,7 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
       ok: true,
       summary: { installedCount: 1, runningCount: 1, profileCount: 2 },
       browsers: [{ id: "chrome", installed: true, running: true, profiles: [{ id: "Default" }, { id: "Profile 1" }] }],
+      extensionPackage: { ok: true, missingPermissions: [], missingHostPermissions: [] },
     }),
   };
   const link2chrome = createLink2ChromeClient({ transport, localEnvironment });
@@ -114,6 +115,7 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
     ok: true,
     summary: { installedCount: 1, runningCount: 1, profileCount: 2 },
     browsers: [{ id: "chrome", installed: true, running: true, profiles: [{ id: "Default" }, { id: "Profile 1" }] }],
+    extensionPackage: { ok: true, missingPermissions: [], missingHostPermissions: [] },
   });
   assert.deepEqual(result.capabilities.playwrightStyle, {
     domSnapshot: true,

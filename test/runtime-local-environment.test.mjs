@@ -88,3 +88,80 @@ test("reports missing browsers without throwing", async () => {
   assert.equal(env.browsers[0].installed, false);
   assert.deepEqual(env.browsers[0].profiles, []);
 });
+
+test("diagnoses a loadable Link2Chrome extension package", async () => {
+  const root = await mkdtemp(join(tmpdir(), "link2chrome-extension-"));
+  await writeFile(
+    join(root, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "ChromeX - Local Browser MCP",
+      permissions: [
+        "debugger",
+        "activeTab",
+        "scripting",
+        "tabs",
+        "storage",
+        "history",
+        "tabGroups",
+        "clipboardRead",
+        "clipboardWrite",
+      ],
+      host_permissions: ["<all_urls>"],
+      background: { service_worker: "background.js" },
+    }),
+    "utf8"
+  );
+  await writeFile(join(root, "background.js"), "", "utf8");
+
+  const env = await discoverLocalBrowserEnvironment({
+    candidates: [],
+    processes: [],
+    extensionDir: root,
+  });
+
+  assert.deepEqual(env.extensionPackage, {
+    ok: true,
+    path: root,
+    manifestVersion: 3,
+    name: "ChromeX - Local Browser MCP",
+    backgroundServiceWorker: "background.js",
+    missingPermissions: [],
+    missingHostPermissions: [],
+  });
+});
+
+test("reports missing Link2Chrome extension package permissions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "link2chrome-extension-missing-"));
+  await writeFile(
+    join(root, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "Incomplete Extension",
+      permissions: ["tabs"],
+      host_permissions: [],
+      background: {},
+    }),
+    "utf8"
+  );
+
+  const env = await discoverLocalBrowserEnvironment({
+    candidates: [],
+    processes: [],
+    extensionDir: root,
+  });
+
+  assert.equal(env.extensionPackage.ok, false);
+  assert.deepEqual(env.extensionPackage.missingPermissions, [
+    "debugger",
+    "activeTab",
+    "scripting",
+    "storage",
+    "history",
+    "tabGroups",
+    "clipboardRead",
+    "clipboardWrite",
+  ]);
+  assert.deepEqual(env.extensionPackage.missingHostPermissions, ["<all_urls>"]);
+  assert.equal(env.extensionPackage.backgroundServiceWorker, null);
+});
