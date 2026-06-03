@@ -1386,6 +1386,43 @@ test("locator click runs safety confirmation before sensitive actions", async ()
   });
 });
 
+test("locator nth resolves DOM query result before clicking", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser.dom.query") {
+        return {
+          results: [
+            { selector: "ul.results > li:nth-of-type(1)", text: "First" },
+            { selector: "ul.results > li:nth-of-type(2)", text: "Second" },
+          ],
+          count: 2,
+        };
+      }
+      if (name === "browser_tabs_list") {
+        return { tabs: [{ id: 7, active: true }] };
+      }
+      return { ok: true };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.playwright.locator("ul.results > li").nth(1).click();
+
+  assert.deepEqual(transport.calls.slice(-2), [
+    {
+      name: "browser.dom.query",
+      args: { selector: "ul.results > li", limit: 2, attributes: ["text"] },
+    },
+    {
+      name: "browser.dom.click",
+      args: { target: { selector: "ul.results > li:nth-of-type(2)" } },
+    },
+  ]);
+});
+
 test("cua click maps to browser.cua.click", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");

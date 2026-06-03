@@ -929,6 +929,21 @@ class Locator {
     this.target = target;
   }
 
+  first() {
+    return this.nth(0);
+  }
+
+  nth(index) {
+    if (!Number.isInteger(index) || index < 0) {
+      throw new RangeError("locator.nth(index) requires a non-negative integer");
+    }
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      target: { ...this.target, index },
+    });
+  }
+
   async count() {
     if (this.target.text && !this.target.selector) {
       const raw = await this._transport.command("browser.dom.search", { query: this.target.text });
@@ -951,61 +966,66 @@ class Locator {
   }
 
   async click(options = {}) {
+    const target = await this._resolveTarget();
     await this._safety?.confirm({
       type: "click",
-      target: this.target,
+      target,
       safety: options.safety,
     });
     const { safety, ...commandOptions } = options;
-    return this._transport.command("browser.dom.click", { target: this.target, ...commandOptions });
+    return this._transport.command("browser.dom.click", { target, ...commandOptions });
   }
 
   async fill(text, options = {}) {
+    const target = await this._resolveTarget();
     await this._safety?.confirm({
       type: "fill",
-      target: this.target,
+      target,
       text,
       safety: options.safety,
     });
     return this._transport.command("browser.dom.type", {
-      target: this.target,
+      target,
       text,
       clearFirst: options.clearFirst ?? true,
     });
   }
 
   async hover(options = {}) {
+    const target = await this._resolveTarget();
     return this._transport.command("action_hover", {
-      target: this.target,
+      target,
       ...options,
     });
   }
 
   async press(key, options = {}) {
+    const target = await this._resolveTarget();
     await this._safety?.confirm({
       type: "press",
-      target: this.target,
+      target,
       key,
       safety: options.safety,
     });
     const { safety, ...commandOptions } = options;
     return this._transport.command("action_press_key", {
-      target: this.target,
+      target,
       key,
       ...commandOptions,
     });
   }
 
   async selectOption(value, options = {}) {
+    const target = await this._resolveTarget();
     await this._safety?.confirm({
       type: "selectOption",
-      target: this.target,
+      target,
       value,
       safety: options.safety,
     });
     const { safety, ...commandOptions } = options;
     return this._transport.command("action_select", {
-      target: this.target,
+      target,
       value,
       ...commandOptions,
     });
@@ -1039,8 +1059,9 @@ class Locator {
     if (this.target.text && !this.target.selector) {
       return this.target.text;
     }
+    const selector = await this._resolveSelector();
     const raw = await this._transport.command("browser.dom.query", {
-      selector: this.target.selector,
+      selector,
       limit: 1,
       attributes: ["text"],
     });
@@ -1063,8 +1084,9 @@ class Locator {
   }
 
   async getAttribute(name) {
+    const selector = await this._resolveSelector();
     const raw = await this._transport.command("browser.dom.query", {
-      selector: this.target.selector,
+      selector,
       limit: 1,
       attributes: [name],
     });
@@ -1077,29 +1099,60 @@ class Locator {
   }
 
   async isVisible() {
+    const selector = await this._resolveSelector();
     const detail = await this._transport.command("dom_element_detail", {
-      selector: this.target.selector,
+      selector,
       include: ["position"],
     });
     return Boolean(detail.ok && detail.position?.visible);
   }
 
   async isEnabled() {
+    const selector = await this._resolveSelector();
     const detail = await this._transport.command("dom_element_detail", {
-      selector: this.target.selector,
+      selector,
       include: ["position", "accessibility"],
     });
     return Boolean(detail.ok && detail.position?.visible && detail.accessibility?.focusable);
   }
 
   async boundingBox() {
+    const selector = await this._resolveSelector();
     const detail = await this._transport.command("dom_element_detail", {
-      selector: this.target.selector,
+      selector,
       include: ["position"],
     });
     if (!detail.ok || !detail.position?.visible) return null;
     const { x, y, width, height } = detail.position;
     return { x, y, width, height };
+  }
+
+  async _resolveSelector() {
+    if (this.target.index === undefined) return this.target.selector;
+    return (await this._resolveTarget()).selector;
+  }
+
+  async _resolveTarget() {
+    if (this.target.index === undefined) return this.target;
+    const limit = this.target.index + 1;
+    const raw = this.target.selector
+      ? await this._transport.command("browser.dom.query", {
+        selector: this.target.selector,
+        limit,
+        attributes: ["text"],
+      })
+      : await this._transport.command("browser.dom.search", {
+        query: this.target.text,
+        limit,
+      });
+    const element = locatorElements(raw)[this.target.index];
+    if (!element) {
+      throw new Error(`locator.nth(${this.target.index}) did not match an element`);
+    }
+    return {
+      ...(element.selector ? { selector: element.selector } : this.target),
+      ...(this.target.text ? { text: this.target.text } : {}),
+    };
   }
 }
 
