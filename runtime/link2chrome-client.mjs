@@ -73,6 +73,12 @@ class TaskSurface {
     const result = await this._client.scripts.run(script, {
       ...options.scriptOptions,
       sessionName: options.sessionName || name,
+      context: {
+        ...options.scriptOptions?.context,
+        task: { name },
+        launch: launch.launch,
+        readiness: launch.readiness,
+      },
     });
     return {
       launch: launch.launch,
@@ -95,6 +101,7 @@ class ScriptSurface {
         link2chrome: this._client,
         browser: runtimeBrowser,
         lease,
+        ...options.context,
       };
       return runModelScript(script, context);
     };
@@ -116,7 +123,7 @@ async function runModelScript(script, context) {
     "context",
     `"use strict";
 return (async () => {
-  const { agent, link2chrome, browser, lease } = context;
+  const { agent, link2chrome, browser, lease, task, launch, readiness } = context;
 ${script}
 })();`
   );

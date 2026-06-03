@@ -413,7 +413,13 @@ test("tasks.run opens a ready browser session and executes model-authored code",
 
   const task = await link2chrome.tasks.run("inspect tabs", `
 const tabs = await browser.tabs.list();
-return { tabIds: tabs.map((tab) => tab.id), lease: lease.lease_token };
+return {
+  tabIds: tabs.map((tab) => tab.id),
+  lease: lease.lease_token,
+  taskName: task.name,
+  launchProfile: launch.profileId,
+  readyTabId: readiness.selectedTab.tab.id,
+};
 `, {
     launcher: async (command, args) => {
       launched.push({ command, args });
@@ -423,7 +429,13 @@ return { tabIds: tabs.map((tab) => tab.id), lease: lease.lease_token };
 
   assert.equal(task.launch.profileId, "Default");
   assert.equal(task.readiness.ok, true);
-  assert.deepEqual(task.result, { tabIds: [21], lease: "lease-task" });
+  assert.deepEqual(task.result, {
+    tabIds: [21],
+    lease: "lease-task",
+    taskName: "inspect tabs",
+    launchProfile: "Default",
+    readyTabId: 21,
+  });
   assert.deepEqual(transport.calls.filter((call) => call.name === "__hub_acquire__" || call.name === "__hub_release__"), [
     { name: "__hub_acquire__", args: { name: "inspect tabs" } },
     { name: "__hub_release__", args: { lease_token: "lease-task" } },

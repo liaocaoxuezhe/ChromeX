@@ -7,6 +7,9 @@ const tab = await browser.tabs.selected();
 await tab.goto("https://example.com");
 await tab.waitFor({ condition: "dom-ready", timeout: 10000 });
 return {
+  taskName: task.name,
+  profileId: launch.profileId,
+  readyTabId: readiness.selectedTab.tab.id,
   title: (await tab.info()).title,
   tabId: tab.id,
   leaseToken: lease.lease_token,
