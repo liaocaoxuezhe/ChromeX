@@ -391,6 +391,7 @@ function runtimeCapabilities() {
   return {
     playwrightStyle: {
       domSnapshot: true,
+      waitForLoadState: true,
       locator: true,
       fileChooser: true,
       dialog: true,
@@ -422,6 +423,7 @@ function runtimeCapabilities() {
       tabList: true,
       tabClaim: true,
       tabFinalize: true,
+      tabHistoryNavigation: true,
     },
     browserState: {
       browserList: true,
@@ -798,6 +800,14 @@ class Tab {
     return this.goto(current.url);
   }
 
+  async goBack() {
+    return this._transport.command("go_back", {});
+  }
+
+  async goForward() {
+    return this._transport.command("go_forward", {});
+  }
+
   async info() {
     return this._transport.command("browser_tab_info", {});
   }
@@ -835,6 +845,15 @@ class PlaywrightSurface {
       throw new Error(`Unsupported playwright event: ${eventName}`);
     }
     return new FileChooser({ transport: this._transport, safety: this._safety, selector: options.selector });
+  }
+
+  async waitForLoadState(state = "load", options = {}) {
+    const condition = state === "networkidle" ? "network-idle" : "dom-ready";
+    return this._transport.command("browser.wait", {
+      condition,
+      state,
+      ...options,
+    });
   }
 
   locator(selector) {

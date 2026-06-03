@@ -662,6 +662,7 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
   });
   assert.deepEqual(result.capabilities.playwrightStyle, {
     domSnapshot: true,
+    waitForLoadState: true,
     locator: true,
     fileChooser: true,
     dialog: true,
@@ -675,6 +676,12 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
     openTabs: true,
     claimTab: true,
     history: true,
+  });
+  assert.deepEqual(result.capabilities.lifecycle, {
+    tabList: true,
+    tabClaim: true,
+    tabFinalize: true,
+    tabHistoryNavigation: true,
   });
   assert.deepEqual(result.capabilities.sessions, {
     runExclusive: true,
@@ -766,6 +773,20 @@ test("tab waitFor maps to browser wait command", async () => {
     name: "browser.wait",
     args: { condition: "dom-ready", timeout: 5000 },
   });
+});
+
+test("tab goBack and goForward map to browser history navigation commands", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.goBack();
+  await tab.goForward();
+
+  assert.deepEqual(transport.calls.slice(-2), [
+    { name: "go_back", args: {} },
+    { name: "go_forward", args: {} },
+  ]);
 });
 
 test("tab close maps to browser tab close command with tab id", async () => {
@@ -1090,6 +1111,20 @@ test("playwright waitForEvent rejects unsupported events", async () => {
     () => tab.playwright.waitForEvent("download"),
     /Unsupported playwright event/
   );
+});
+
+test("playwright waitForLoadState maps load states to browser waits", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.playwright.waitForLoadState("domcontentloaded", { timeout: 3000 });
+  await tab.playwright.waitForLoadState("networkidle");
+
+  assert.deepEqual(transport.calls.slice(-2), [
+    { name: "browser.wait", args: { condition: "dom-ready", state: "domcontentloaded", timeout: 3000 } },
+    { name: "browser.wait", args: { condition: "network-idle", state: "networkidle" } },
+  ]);
 });
 
 test("getByText count maps to browser.dom.search", async () => {
