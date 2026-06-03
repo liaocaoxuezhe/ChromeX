@@ -1129,6 +1129,36 @@ test("locator getAttribute and inputValue read dom_query attributes", async () =
   ]);
 });
 
+test("locator visibility helpers read DOM element detail", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "dom_element_detail") {
+        return {
+          ok: true,
+          position: { visible: true },
+          accessibility: { focusable: true },
+        };
+      }
+      return { tabs: [{ id: 7, active: true }] };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const locator = tab.playwright.locator("button.submit");
+  const visible = await locator.isVisible();
+  const enabled = await locator.isEnabled();
+
+  assert.equal(visible, true);
+  assert.equal(enabled, true);
+  assert.deepEqual(transport.calls.slice(-2), [
+    { name: "dom_element_detail", args: { selector: "button.submit", include: ["position"] } },
+    { name: "dom_element_detail", args: { selector: "button.submit", include: ["position", "accessibility"] } },
+  ]);
+});
+
 test("locator setFiles maps to upload_file", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");

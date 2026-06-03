@@ -1061,6 +1061,22 @@ class Locator {
   async inputValue() {
     return this.getAttribute("value");
   }
+
+  async isVisible() {
+    const detail = await this._transport.command("dom_element_detail", {
+      selector: this.target.selector,
+      include: ["position"],
+    });
+    return Boolean(detail.ok && detail.position?.visible);
+  }
+
+  async isEnabled() {
+    const detail = await this._transport.command("dom_element_detail", {
+      selector: this.target.selector,
+      include: ["position", "accessibility"],
+    });
+    return Boolean(detail.ok && detail.position?.visible && detail.accessibility?.focusable);
+  }
 }
 
 function locatorElements(raw = {}) {
