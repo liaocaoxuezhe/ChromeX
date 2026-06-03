@@ -752,6 +752,19 @@ test("tab waitFor maps to browser wait command", async () => {
   });
 });
 
+test("tab close maps to browser tab close command with tab id", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.close();
+
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser_tab_close",
+    args: { tabId: 7 },
+  });
+});
+
 test("user.openTabs lists currently open tabs", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
@@ -1020,6 +1033,47 @@ test("locator setFiles can require safety confirmation", async () => {
   assert.equal(confirmations[0].type, "filechooser.setFiles");
   assert.deepEqual(confirmations[0].paths, ["/tmp/secret.txt"]);
   assert.notEqual(transport.calls.at(-1)?.name, "upload_file");
+});
+
+test("playwright screenshot delegates to screenshot capture", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.playwright.screenshot({ format: "jpeg", quality: 70 });
+
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.cua.screenshot",
+    args: { format: "jpeg", quality: 70 },
+  });
+});
+
+test("playwright waitForEvent filechooser returns a file chooser facade", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const chooser = await tab.playwright.waitForEvent("filechooser", { selector: "input[type=file]" });
+  await chooser.setFiles("/tmp/report.txt");
+
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "upload_file",
+    args: {
+      selector: "input[type=file]",
+      paths: ["/tmp/report.txt"],
+    },
+  });
+});
+
+test("playwright waitForEvent rejects unsupported events", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await assert.rejects(
+    () => tab.playwright.waitForEvent("download"),
+    /Unsupported playwright event/
+  );
 });
 
 test("getByText count maps to browser.dom.search", async () => {
@@ -1334,6 +1388,40 @@ test("websocket transport maps runtime tab switch to extension switch command", 
 
   assert.equal(sentMessages[0].command, "agent_browser_tab_switch");
   assert.deepEqual(sentMessages[0].params, { tabId: 12 });
+});
+
+test("websocket transport maps runtime tab close to extension tab manage command", async () => {
+  const sentMessages = [];
+  class FakeWebSocket {
+    constructor() {
+      this.listeners = {};
+      queueMicrotask(() => this.listeners.open?.({}));
+    }
+
+    addEventListener(name, handler) {
+      this.listeners[name] = handler;
+    }
+
+    send(message) {
+      const parsed = JSON.parse(message);
+      sentMessages.push(parsed);
+      this.listeners.message?.({
+        data: JSON.stringify({
+          request_id: parsed.request_id,
+          success: true,
+          data: { closed: true, tabId: parsed.params.tabId },
+        }),
+      });
+    }
+
+    close() {}
+  }
+  const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
+
+  await transport.command("browser_tab_close", { tabId: 12 });
+
+  assert.equal(sentMessages[0].command, "tab_manage");
+  assert.deepEqual(sentMessages[0].params, { action: "close", tabId: 12 });
 });
 
 test("websocket transport passes dev console and network commands through", async () => {

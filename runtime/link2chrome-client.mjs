@@ -499,6 +499,7 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       if (name === "browser_tab_info") return send("agent_browser_tab_info", args);
       if (name === "browser_tab_switch") return send("agent_browser_tab_switch", args);
       if (name === "browser_tab_new") return send("agent_browser_tab_new", args);
+      if (name === "browser_tab_close") return send("tab_manage", { action: "close", ...args });
       if (name === "browser.tabs.finalize") return send("agent_browser_tabs_finalize", args);
       if (name === "browser.user.history") return send("agent_browser_history", args);
       if (name === "browser.wait") return send("agent_browser_wait", args);
@@ -799,6 +800,10 @@ class Tab {
   async waitFor(options = {}) {
     return this._transport.command("browser.wait", options);
   }
+
+  async close() {
+    return this._transport.command("browser_tab_close", { tabId: this.id });
+  }
 }
 
 class PlaywrightSurface {
@@ -810,6 +815,17 @@ class PlaywrightSurface {
 
   async domSnapshot(options = {}) {
     return this._transport.command("browser.dom.overview", options);
+  }
+
+  async screenshot(options = {}) {
+    return this._transport.command("browser.cua.screenshot", options);
+  }
+
+  async waitForEvent(eventName, options = {}) {
+    if (eventName !== "filechooser") {
+      throw new Error(`Unsupported playwright event: ${eventName}`);
+    }
+    return new FileChooser({ transport: this._transport, safety: this._safety, selector: options.selector });
   }
 
   locator(selector) {
@@ -842,6 +858,34 @@ class PlaywrightSurface {
     const { safety, ...commandOptions } = options;
     return this._transport.command("action_fill_form", {
       fields,
+      ...commandOptions,
+    });
+  }
+}
+
+class FileChooser {
+  constructor({ transport, safety, selector }) {
+    this._transport = transport;
+    this._safety = safety;
+    this.selector = selector;
+  }
+
+  async setFiles(paths, options = {}) {
+    const selector = options.selector || this.selector;
+    if (!selector) {
+      throw new Error("filechooser.setFiles requires a selector because Link2Chrome cannot observe native file chooser events yet");
+    }
+    const normalizedPaths = Array.isArray(paths) ? paths : [paths];
+    await this._safety?.confirm({
+      type: "filechooser.setFiles",
+      target: { selector },
+      paths: normalizedPaths,
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("upload_file", {
+      selector,
+      paths: normalizedPaths,
       ...commandOptions,
     });
   }

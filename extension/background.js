@@ -1123,7 +1123,7 @@ async function cmdGetInfo() {
 
 // -- tab_manage --
 async function cmdTabManage(params) {
-  const { action, tab_index, url } = params;
+  const { action, tab_index, tabId, url } = params;
 
   switch (action) {
     case "new": {
@@ -1157,6 +1157,12 @@ async function cmdTabManage(params) {
       return { created: true, tabId: newTab.id };
     }
     case "close": {
+      if (tabId !== undefined && tabId !== null) {
+        await chrome.tabs.remove(tabId);
+        if (tabId === targetTabId) targetTabId = null;
+        if (tabId === attachedTabId) attachedTabId = null;
+        return { closed: true, tabId };
+      }
       if (tab_index !== undefined) {
         const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
         if (tab_index >= 0 && tab_index < tabs.length) {
