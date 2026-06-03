@@ -63,10 +63,19 @@ PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222
 
 ## 加载 Chrome 扩展
 
+先安装开发者模式 Native Host bootstrap：
+
+```bash
+node scripts/dev-extension/install.mjs
+```
+
+脚本会基于 `extension/manifest.json` 中的固定 key 推导扩展 ID，并写入 Chrome Native Messaging Host manifest。然后：
+
 1. 打开 `chrome://extensions/`
 2. 开启「开发者模式」
 3. 点击「加载已解压的扩展程序」
 4. 选择本项目的 `extension/` 目录
+5. 打开扩展 popup，确认显示 `Native Host + :8765` 或已连接状态
 
 ## 配置 Claude Code
 

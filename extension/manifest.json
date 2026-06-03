@@ -3,6 +3,7 @@
   "name": "ChromeX - Local Browser MCP",
   "version": "1.0.0",
   "description": "通过 WebSocket 桥接 MCP Server 与 Chrome DevTools Protocol",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAty8T8IQZVNf6LuDVj9asfKnMmuDCjxerH4xKlsYd91J7piaP8s843dHbyExUmftQFertMrM0MdLssAA/rpH3kpeBHWSh6Ys2Ye6cLiUgEFlGNrEwnBjv3w/3GZX4guAcFwSkWNzhqJiSIosLqhzrVZhguYBTPEcBJ6hS1HUW8i1zp1mMu7bcAn6smKF1RQklQTIp/YjLzVcGWoxJke8aoyp/S1qpBJC2LSPYc4BZHYDb14EMjrckqxCF4J5QLFL8f5SAFllacSzS/7xE4FkoBOdLkoSMU06jXSB/I31cXIxG9kHzy/GGm9PGR8nyTPP7wYGK5riFcDXcX/i6k5jepQIDAQAB",
   "permissions": [
     "debugger",
     "activeTab",
@@ -10,9 +11,11 @@
     "tabs",
     "storage",
     "history",
+    "alarms",
     "tabGroups",
     "clipboardRead",
-    "clipboardWrite"
+    "clipboardWrite",
+    "nativeMessaging"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

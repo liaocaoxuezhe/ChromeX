@@ -11,6 +11,7 @@ import {
   getChromeNativeMessagingManifestPath,
 } from "../scripts/native-host/installManifest.mjs";
 import {
+  createNativeHostCommandHandler,
   decodeNativeMessages,
   encodeNativeMessage,
 } from "../scripts/native-host/native-host.mjs";
@@ -96,4 +97,42 @@ test("runtime diagnostics capabilities report native messaging from transport st
   const readiness = await client.diagnostics.readiness();
 
   assert.equal(readiness.capabilities.nativeMessaging, true);
+});
+
+test("native host command handler starts Browser Hub and reports status", async () => {
+  const spawnCalls = [];
+  const hubStatusCalls = [];
+  const handler = createNativeHostCommandHandler({
+    projectRoot: "/repo/Link2Chrome",
+    pythonBin: "python3.9",
+    spawnImpl: (...args) => {
+      spawnCalls.push(args);
+      return { pid: 42, unref() {} };
+    },
+    hubCommand: async (name, args) => {
+      hubStatusCalls.push({ name, args });
+      return { hub_id: "hub-test", extension_connected: true };
+    },
+  });
+
+  assert.deepEqual(await handler("__native_start_hub__", {}), {
+    ok: true,
+    alreadyRunning: false,
+    pid: 42,
+  });
+  assert.deepEqual(await handler("__native_status__", {}), {
+    ok: true,
+    hub: { hub_id: "hub-test", extension_connected: true },
+    hubProcess: { running: true, pid: 42 },
+  });
+  assert.deepEqual(spawnCalls[0], [
+    "python3.9",
+    ["/repo/Link2Chrome/server/browser_hub.py"],
+    {
+      cwd: "/repo/Link2Chrome",
+      env: { ...process.env, LOG_CONSOLE: "false" },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  ]);
+  assert.deepEqual(hubStatusCalls, [{ name: "__hub_status__", args: {} }]);
 });

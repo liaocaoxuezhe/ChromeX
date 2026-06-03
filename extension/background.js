@@ -4,9 +4,12 @@
  */
 
 // ==================== 状态管理 ====================
-const BUILD_VERSION = "2025-02-10-sendkeys"; // 用于验证扩展是否加载了新代码（send_keys code 修复）
+const BUILD_VERSION = "2026-06-01-plan-c-keepalive";
 let ws = null;
 let wsConnected = false;
+let nativePort = null;
+let nativeConnected = false;
+let nativeStatus = null;
 let connectionEnabled = true; // 用户可通过 popup 开关控制
 let attachedTabId = null;
 // 显式跟踪当前工作标签（解决 active tab 返回 chrome-extension:// 页面的问题）
@@ -15,7 +18,10 @@ let reconnectAttempts = 0;
 let reconnectTimer = null;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const WS_URL = "ws://localhost:8765";
+const NATIVE_HOST_NAME = "com.link2chrome.nativehost";
 const HEARTBEAT_INTERVAL = 30000;
+const KEEPALIVE_ALARM = "link2chrome.keepalive";
+const KEEPALIVE_PERIOD_MINUTES = 0.5;
 const CDP_COMMAND_TIMEOUT = 10000;
 let heartbeatTimer = null;
 const networkCaptureState = {
@@ -56,7 +62,63 @@ function isDebugableUrl(url) {
   return isDebugable;
 }
 
-// ==================== WebSocket 管理 ====================
+// ==================== Native Host / WebSocket 管理 ====================
+
+function connectNativeBootstrap() {
+  if (!connectionEnabled) return Promise.resolve({ ok: false, reason: "disabled" });
+  if (!chrome.runtime.connectNative) {
+    nativeConnected = false;
+    nativeStatus = { ok: false, error: "nativeMessaging unavailable" };
+    return Promise.resolve(nativeStatus);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    try {
+      const port = chrome.runtime.connectNative("com.link2chrome.nativehost");
+      nativePort = port;
+      nativeConnected = true;
+      nativeStatus = { ok: true, state: "connected" };
+
+      port.onMessage.addListener((message) => {
+        if (message?.id !== "__native_start_hub__") return;
+        nativeStatus = {
+          ok: !message.error,
+          result: message.result || null,
+          error: message.error || null
+        };
+        if (!settled) {
+          settled = true;
+          resolve(nativeStatus);
+        }
+        broadcastStatus();
+      });
+
+      port.onDisconnect.addListener(() => {
+        nativeConnected = false;
+        nativePort = null;
+        nativeStatus = {
+          ok: false,
+          error: chrome.runtime.lastError?.message || "native host disconnected"
+        };
+        broadcastStatus();
+      });
+
+      port.postMessage({ id: "__native_start_hub__", name: "__native_start_hub__", args: {} });
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          resolve(nativeStatus);
+        }
+      }, 1500);
+    } catch (err) {
+      nativeConnected = false;
+      nativePort = null;
+      nativeStatus = { ok: false, error: err.message || String(err) };
+      resolve(nativeStatus);
+    }
+  });
+}
 
 function connectWebSocket() {
   if (!connectionEnabled) return;
@@ -154,9 +216,7 @@ function scheduleReconnect() {
 function startHeartbeat() {
   stopHeartbeat();
   heartbeatTimer = setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "ping" }));
-    }
+    keepAliveTick();
   }, HEARTBEAT_INTERVAL);
 }
 
@@ -166,6 +226,44 @@ function stopHeartbeat() {
     heartbeatTimer = null;
   }
 }
+
+async function keepAliveTick() {
+  if (!connectionEnabled) return;
+  await chrome.storage.local.set({
+    lastKeepaliveAt: Date.now(),
+    wsConnected,
+    buildVersion: BUILD_VERSION
+  }).catch(() => {});
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify({ type: "ping", source: "keepalive" }));
+      return;
+    } catch (err) {
+      console.warn("[Link2Chrome] keepalive ping 失败:", err);
+    }
+  }
+
+  if (!ws || ws.readyState === WebSocket.CLOSED) {
+    scheduleReconnect();
+  }
+}
+
+function setupKeepaliveAlarm() {
+  if (!chrome.alarms) {
+    console.warn("[Link2Chrome] chrome.alarms 不可用，使用心跳定时器兜底");
+    return;
+  }
+  chrome.alarms.create(KEEPALIVE_ALARM, {
+    periodInMinutes: KEEPALIVE_PERIOD_MINUTES
+  });
+}
+
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name === KEEPALIVE_ALARM) {
+    keepAliveTick();
+  }
+});
 
 // ==================== Debugger 管理 ====================
 
@@ -1422,6 +1520,10 @@ function broadcastStatus() {
   chrome.runtime.sendMessage({
     type: "status",
     connected: wsConnected,
+    wsConnected,
+    nativeConnected,
+    nativeStatus,
+    transport: nativeConnected ? "native+websocket" : "websocket",
     enabled: connectionEnabled
   }).catch(() => {});
 }
@@ -1440,7 +1542,14 @@ function disableConnection() {
     ws = null;
   }
   wsConnected = false;
+  nativeConnected = false;
+  nativeStatus = null;
+  if (nativePort) {
+    try { nativePort.disconnect(); } catch (_) {}
+    nativePort = null;
+  }
   stopHeartbeat();
+  chrome.alarms?.clear(KEEPALIVE_ALARM).catch(() => {});
   broadcastStatus();
   chrome.storage.local.set({ connectionEnabled: false });
 }
@@ -1449,13 +1558,22 @@ function enableConnection() {
   connectionEnabled = true;
   reconnectAttempts = 0;
   chrome.storage.local.set({ connectionEnabled: true });
-  connectWebSocket();
+  setupKeepaliveAlarm();
+  connectNativeBootstrap().finally(() => connectWebSocket());
   broadcastStatus();
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "getStatus") {
-    sendResponse({ connected: wsConnected, enabled: connectionEnabled, targetTabId });
+    sendResponse({
+      connected: wsConnected,
+      wsConnected,
+      nativeConnected,
+      nativeStatus,
+      transport: nativeConnected ? "native+websocket" : "websocket",
+      enabled: connectionEnabled,
+      targetTabId
+    });
     return true;
   }
   if (message.type === "setEnabled") {
@@ -1483,7 +1601,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     ws = null;
     wsConnected = false;
     stopHeartbeat();
-    connectWebSocket();
+    connectNativeBootstrap().finally(() => connectWebSocket());
     sendResponse({ ok: true });
     return true;
   }
@@ -2771,7 +2889,8 @@ chrome.storage.local.get("connectionEnabled", (result) => {
   // 未设置过时默认为 true
   connectionEnabled = result.connectionEnabled !== false;
   if (connectionEnabled) {
-    connectWebSocket();
+    setupKeepaliveAlarm();
+    connectNativeBootstrap().finally(() => connectWebSocket());
   }
   console.log(`[Link2Chrome] Service Worker 已启动, enabled=${connectionEnabled}`);
 });

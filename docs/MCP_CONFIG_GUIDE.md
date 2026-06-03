@@ -438,3 +438,19 @@ LINK2CHROME_REAL_CHROME_E2E=1 LINK2CHROME_E2E_START_SERVER=0 node --test test/e2
 ```
 
 失败时测试会记录 Chrome 是否运行、Extension 是否安装/连接、WebSocket readiness、当前 tab 和 server stderr，便于定位 profile、extension 或 hub 连接问题。
+
+### 开发者模式直接可用
+
+如果目标是“只在 `chrome://extensions` 加载 `extension/` 后就能用”，先执行一次：
+
+```bash
+node scripts/dev-extension/install.mjs
+```
+
+它会安装：
+
+- 固定扩展 ID 对应的 Native Messaging Host manifest。
+- Host 路径：`scripts/native-host/native-host.mjs`。
+- 允许来源：当前 `extension/manifest.json` 的固定 key 推导出的 extension id。
+
+完成后重新加载 unpacked extension。扩展 background 会先调用 `chrome.runtime.connectNative("com.link2chrome.nativehost")`，Native Host 会拉起 `server/browser_hub.py`，然后扩展继续连接 `ws://localhost:8765`。popup 会显示 Native Host 与 WebSocket/Hub 的连接状态。
