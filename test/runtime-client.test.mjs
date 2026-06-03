@@ -265,3 +265,37 @@ test("websocket transport speaks Browser Hub request_id protocol", async () => {
   assert.deepEqual(sentMessages[0].params, {});
   assert.equal(typeof sentMessages[0].request_id, "string");
 });
+
+test("websocket transport maps runtime finalize to extension finalize command", async () => {
+  const sentMessages = [];
+  class FakeWebSocket {
+    constructor() {
+      this.listeners = {};
+      queueMicrotask(() => this.listeners.open?.({}));
+    }
+
+    addEventListener(name, handler) {
+      this.listeners[name] = handler;
+    }
+
+    send(message) {
+      const parsed = JSON.parse(message);
+      sentMessages.push(parsed);
+      this.listeners.message?.({
+        data: JSON.stringify({
+          request_id: parsed.request_id,
+          success: true,
+          data: { ok: true, action: "finalize" },
+        }),
+      });
+    }
+
+    close() {}
+  }
+  const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
+
+  await transport.command("browser.tabs.finalize", { keep: [{ tabId: 7, status: "deliverable" }] });
+
+  assert.equal(sentMessages[0].command, "agent_browser_tabs_finalize");
+  assert.deepEqual(sentMessages[0].params, { keep: [{ tabId: 7, status: "deliverable" }] });
+});

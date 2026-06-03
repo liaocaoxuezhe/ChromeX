@@ -43,6 +43,7 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       }
       if (name === "browser_tab_info") return send("agent_browser_tab_info", args);
       if (name === "browser_tab_new") return send("agent_browser_tab_new", args);
+      if (name === "browser.tabs.finalize") return send("agent_browser_tabs_finalize", args);
       if (name === "browser_navigate") return send("navigate", args);
       if (name === "browser.dom.overview") return send("dom_overview", args);
       if (name === "browser.dom.query") return send("dom_query", args);

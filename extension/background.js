@@ -600,6 +600,9 @@ async function handleCommand(message) {
       case "agent_browser_tab_new":
         response.data = await cmdAgentBrowserTabNew(params);
         break;
+      case "agent_browser_tabs_finalize":
+        response.data = await cmdAgentBrowserTabsFinalize(params);
+        break;
       case "agent_browser_wait":
         response.data = await cmdAgentBrowserWait(params);
         break;
@@ -2037,6 +2040,41 @@ async function cmdAgentBrowserTabNew(params) {
   targetTabId = tab.id;
   attachedTabId = null;
   return { ok: true, tabId: tab.id, url: tab.url || params.url || "about:blank" };
+}
+
+async function cmdAgentBrowserTabsFinalize(params) {
+  const keep = Array.isArray(params.keep) ? params.keep : [];
+  const grouped = [];
+  const closed = [];
+
+  for (const item of keep) {
+    const tabId = Number(item.tabId);
+    const status = item.status || "handoff";
+    if (!Number.isInteger(tabId)) continue;
+    let tab;
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch (_) {
+      continue;
+    }
+
+    if (status === "deliverable" || status === "handoff") {
+      const groupId = await chrome.tabs.group({ tabIds: [tabId] });
+      await chrome.tabGroups.update(groupId, {
+        title: status === "deliverable" ? "Link2Chrome Deliverable" : "Link2Chrome Handoff",
+        color: status === "deliverable" ? "green" : "blue"
+      });
+      grouped.push({ tabId, groupId, status, windowId: tab.windowId, url: tab.url });
+      continue;
+    }
+
+    if (status === "close" || status === "temporary") {
+      await chrome.tabs.remove(tabId);
+      closed.push({ tabId, status });
+    }
+  }
+
+  return { ok: true, action: "finalize", grouped, closed };
 }
 
 async function cmdAgentBrowserWait(params) {
