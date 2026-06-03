@@ -1,4 +1,7 @@
-import { discoverLocalBrowserEnvironment } from "./local-environment.mjs";
+import {
+  discoverLocalBrowserEnvironment,
+  openLocalBrowserWindow,
+} from "./local-environment.mjs";
 
 export function setupLink2ChromeRuntime({
   globals = globalThis,
@@ -45,6 +48,7 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
       }
     },
     diagnostics: new DiagnosticsSurface({ transport, localEnvironment }),
+    localEnvironment: new LocalEnvironmentSurface({ localEnvironment }),
     browsers: {
       async get(kind = "extension") {
         if (kind !== "extension") {
@@ -54,6 +58,42 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
       },
     },
   };
+}
+
+class LocalEnvironmentSurface {
+  constructor({ localEnvironment }) {
+    this._localEnvironment = localEnvironment;
+  }
+
+  async inspect(options = {}) {
+    if (this._localEnvironment?.inspect) {
+      return this._localEnvironment.inspect(options);
+    }
+    return discoverLocalBrowserEnvironment(options);
+  }
+
+  async openBrowser(options = {}) {
+    if (this._localEnvironment?.openBrowser) {
+      return this._localEnvironment.openBrowser(options);
+    }
+    const environment = options.environment || await this.inspect(options.inspect || {});
+    const browser = findBrowserForOpen(environment, options);
+    return openLocalBrowserWindow({
+      browser,
+      profileId: options.profileId,
+      url: options.url,
+      launcher: options.launcher,
+    });
+  }
+}
+
+function findBrowserForOpen(environment, options) {
+  const browsers = environment?.browsers || [];
+  if (options.browser) return options.browser;
+  if (options.browserId) {
+    return browsers.find((browser) => browser.id === options.browserId);
+  }
+  return browsers.find((browser) => browser.installed) || browsers[0];
 }
 
 class DiagnosticsSurface {

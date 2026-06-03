@@ -22,6 +22,30 @@ const REQUIRED_HOST_PERMISSIONS = ["<all_urls>"];
 const RUNTIME_DIR = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = dirname(RUNTIME_DIR);
 
+export async function openLocalBrowserWindow({
+  browser,
+  profileId,
+  url,
+  launcher = defaultLauncher,
+} = {}) {
+  if (!browser?.executablePath) {
+    throw new Error("browser executable is required to open a local browser window");
+  }
+  const args = [];
+  if (profileId) args.push(`--profile-directory=${profileId}`);
+  if (browser.profileRoot) args.push(`--user-data-dir=${browser.profileRoot}`);
+  if (url) args.push(url);
+
+  const launchResult = await launcher(browser.executablePath, args);
+  return {
+    ok: true,
+    browserId: browser.id || null,
+    profileId: profileId || null,
+    url: url || null,
+    pid: launchResult?.pid || null,
+  };
+}
+
 export async function discoverLocalBrowserEnvironment(options = {}) {
   const platform = options.platform || process.platform;
   const candidates = options.candidates || defaultBrowserCandidates(platform);
@@ -58,6 +82,15 @@ export async function discoverLocalBrowserEnvironment(options = {}) {
     summary,
     extensionPackage: await diagnoseExtensionPackage(extensionDir),
   };
+}
+
+async function defaultLauncher(command, args) {
+  const child = execFile(command, args, {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  return { pid: child.pid };
 }
 
 export function defaultBrowserCandidates(platform = process.platform) {

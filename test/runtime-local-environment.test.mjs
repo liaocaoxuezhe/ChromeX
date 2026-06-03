@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { discoverLocalBrowserEnvironment } from "../runtime/local-environment.mjs";
+import {
+  discoverLocalBrowserEnvironment,
+  openLocalBrowserWindow,
+} from "../runtime/local-environment.mjs";
 
 test("discovers installed browser apps and profile directories", async () => {
   const root = await mkdtemp(join(tmpdir(), "link2chrome-env-"));
@@ -164,4 +167,47 @@ test("reports missing Link2Chrome extension package permissions", async () => {
   ]);
   assert.deepEqual(env.extensionPackage.missingHostPermissions, ["<all_urls>"]);
   assert.equal(env.extensionPackage.backgroundServiceWorker, null);
+});
+
+test("opens a local browser window with a selected profile and url", async () => {
+  const launched = [];
+  const result = await openLocalBrowserWindow({
+    browser: {
+      id: "chrome",
+      name: "Google Chrome",
+      executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+    },
+    profileId: "Profile 1",
+    url: "https://example.com",
+    launcher: async (command, args) => {
+      launched.push({ command, args });
+      return { pid: 1234 };
+    },
+  });
+
+  assert.deepEqual(launched, [
+    {
+      command: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      args: [
+        "--profile-directory=Profile 1",
+        "--user-data-dir=/Users/me/Library/Application Support/Google/Chrome",
+        "https://example.com",
+      ],
+    },
+  ]);
+  assert.deepEqual(result, {
+    ok: true,
+    browserId: "chrome",
+    profileId: "Profile 1",
+    url: "https://example.com",
+    pid: 1234,
+  });
+});
+
+test("openLocalBrowserWindow rejects missing browser executable", async () => {
+  await assert.rejects(
+    () => openLocalBrowserWindow({ browser: { id: "chrome", name: "Google Chrome" } }),
+    /browser executable is required/
+  );
 });

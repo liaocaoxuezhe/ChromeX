@@ -62,6 +62,30 @@ test("setupLink2ChromeRuntime preserves existing globals unless overwrite is tru
   assert.equal(globals.agent.browsers, globals.link2chrome.browsers);
 });
 
+test("runtime exposes local environment inspect and openBrowser helpers", async () => {
+  const calls = [];
+  const link2chrome = createLink2ChromeClient({
+    transport: fakeTransport(),
+    localEnvironment: {
+      inspect: async () => ({ ok: true, summary: { installedCount: 1 } }),
+      openBrowser: async (options) => {
+        calls.push(options);
+        return { ok: true, pid: 1234 };
+      },
+    },
+  });
+
+  assert.deepEqual(await link2chrome.localEnvironment.inspect(), {
+    ok: true,
+    summary: { installedCount: 1 },
+  });
+  assert.deepEqual(await link2chrome.localEnvironment.openBrowser({ browserId: "chrome", profileId: "Default" }), {
+    ok: true,
+    pid: 1234,
+  });
+  assert.deepEqual(calls, [{ browserId: "chrome", profileId: "Default" }]);
+});
+
 test("diagnose returns Browser Hub status", async () => {
   const transport = {
     calls: [],
