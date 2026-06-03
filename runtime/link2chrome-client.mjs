@@ -934,8 +934,20 @@ class Locator {
       const raw = await this._transport.command("browser.dom.search", { query: this.target.text });
       return (raw.matches || raw.elements || []).length;
     }
-    const raw = await this._transport.command("browser.dom.query", { selector: this.target.selector, limit: 100 });
-    return (raw.elements || raw.matches || []).length;
+    const raw = await this._transport.command("browser.dom.query", {
+      selector: this.target.selector,
+      limit: 100,
+      ...(this.target.text ? { attributes: ["text", "ariaLabel"] } : {}),
+    });
+    const elements = locatorElements(raw);
+    if (this.target.text) {
+      const needle = normalizeLocatorText(this.target.text);
+      return elements.filter((element) => {
+        const text = normalizeLocatorText(element.text || element.textContent || element.ariaLabel || element.name || "");
+        return text.includes(needle);
+      }).length;
+    }
+    return elements.length || Number(raw.count || 0);
   }
 
   async click(options = {}) {
@@ -1031,6 +1043,14 @@ class Locator {
     const first = (raw.elements || raw.matches || [])[0];
     return first?.text || first?.textContent || "";
   }
+}
+
+function locatorElements(raw = {}) {
+  return raw.elements || raw.matches || raw.results || [];
+}
+
+function normalizeLocatorText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 class CuaSurface {

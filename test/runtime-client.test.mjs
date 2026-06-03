@@ -1044,6 +1044,40 @@ test("locator waitFor maps selector waits to browser wait command", async () => 
   });
 });
 
+test("locator count understands dom_query results and filters role names", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser.dom.query") {
+        return {
+          results: [
+            { text: "Cancel", ariaLabel: "" },
+            { text: "Search", ariaLabel: "Search" },
+            { text: "Search docs", ariaLabel: "" },
+          ],
+          count: 3,
+        };
+      }
+      return { tabs: [{ id: 7, active: true }] };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const count = await tab.playwright.getByRole("button", { name: "Search" }).count();
+
+  assert.equal(count, 2);
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.dom.query",
+    args: {
+      selector: 'button, input[type="button"], input[type="submit"], [role="button"]',
+      limit: 100,
+      attributes: ["text", "ariaLabel"],
+    },
+  });
+});
+
 test("locator setFiles maps to upload_file", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
