@@ -391,6 +391,7 @@ test("tasks.run opens a ready browser session and executes model-authored code",
       if (name === "browser_tab_info") return { id: 21, active: true, url: "https://task.test" };
       if (name === "__hub_acquire__") return { lease_token: "lease-task", lease_name: args.name };
       if (name === "browser_tabs_list") return { tabs: [{ id: 21, active: true, title: "Task" }] };
+      if (name === "browser.tabs.finalize") return { ok: true, kept: args.keep };
       return { ok: true };
     },
   };
@@ -420,6 +421,7 @@ return {
   readyTabId: readiness.selectedTab.tab.id,
 };
 `, {
+    finalize: { status: "deliverable" },
     launcher: async (command, args) => {
       launched.push({ command, args });
       return { pid: 105 };
@@ -435,7 +437,15 @@ return {
     launchProfile: "Default",
     readyTabId: 21,
   });
+  assert.deepEqual(task.finalize, {
+    ok: true,
+    kept: [{ tabId: 21, status: "deliverable" }],
+  });
   assert.equal(transport.calls[0].name, "__hub_acquire__");
+  assert.deepEqual(transport.calls.find((call) => call.name === "browser.tabs.finalize"), {
+    name: "browser.tabs.finalize",
+    args: { keep: [{ tabId: 21, status: "deliverable" }] },
+  });
   assert.deepEqual(transport.calls.filter((call) => call.name === "__hub_acquire__" || call.name === "__hub_release__"), [
     { name: "__hub_acquire__", args: { name: "inspect tab" } },
     { name: "__hub_release__", args: { lease_token: "lease-task" } },
@@ -611,6 +621,7 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
     run: true,
     preparesBrowser: true,
     exclusiveSession: true,
+    finalize: true,
   });
   assert.deepEqual(result.capabilities.domCua, {
     visibleDom: true,

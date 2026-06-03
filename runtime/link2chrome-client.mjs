@@ -95,10 +95,19 @@ class TaskSurface {
             ...taskContext,
           },
         });
+        const finalize = options.finalize
+          ? await browser.tabs.finalize({
+            keep: [{
+              tab: taskContext.tab,
+              status: options.finalize.status || "handoff",
+            }],
+          })
+          : null;
         return {
           launch: launch.launch,
           readiness: launch.readiness,
           result,
+          ...(finalize ? { finalize } : {}),
         };
       } catch (error) {
         Object.assign(error, taskContext);
@@ -418,6 +427,7 @@ function runtimeCapabilities() {
       run: true,
       preparesBrowser: true,
       exclusiveSession: true,
+      finalize: true,
     },
     nativeMessaging: false,
     localPlaywrightDependency: false,
