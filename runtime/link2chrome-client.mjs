@@ -170,6 +170,9 @@ function runtimeCapabilities() {
       locator: true,
       fileChooser: true,
       dialog: true,
+      hover: true,
+      press: true,
+      selectOption: true,
     },
     cua: {
       screenshot: true,
@@ -600,6 +603,43 @@ class Locator {
       target: this.target,
       text,
       clearFirst: options.clearFirst ?? true,
+    });
+  }
+
+  async hover(options = {}) {
+    return this._transport.command("action_hover", {
+      target: this.target,
+      ...options,
+    });
+  }
+
+  async press(key, options = {}) {
+    await this._safety?.confirm({
+      type: "press",
+      target: this.target,
+      key,
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("action_press_key", {
+      target: this.target,
+      key,
+      ...commandOptions,
+    });
+  }
+
+  async selectOption(value, options = {}) {
+    await this._safety?.confirm({
+      type: "selectOption",
+      target: this.target,
+      value,
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("action_select", {
+      target: this.target,
+      value,
+      ...commandOptions,
     });
   }
 

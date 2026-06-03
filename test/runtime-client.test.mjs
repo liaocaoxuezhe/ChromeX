@@ -179,6 +179,9 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
     locator: true,
     fileChooser: true,
     dialog: true,
+    hover: true,
+    press: true,
+    selectOption: true,
   });
   assert.deepEqual(result.capabilities.browserState, {
     openTabs: true,
@@ -385,6 +388,48 @@ test("locator fill maps to browser.dom.type", async () => {
       clearFirst: true,
     },
   });
+});
+
+test("locator hover press and selectOption map to action commands", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.playwright.locator("button.help").hover();
+  await tab.playwright.locator("input[name=q]").press("Enter");
+  await tab.playwright.locator("select[name=country]").selectOption("US");
+
+  assert.deepEqual(transport.calls.slice(-3), [
+    { name: "action_hover", args: { target: { selector: "button.help" } } },
+    { name: "action_press_key", args: { target: { selector: "input[name=q]" }, key: "Enter" } },
+    { name: "action_select", args: { target: { selector: "select[name=country]" }, value: "US" } },
+  ]);
+});
+
+test("locator selectOption can require safety confirmation", async () => {
+  const confirmations = [];
+  const transport = fakeTransport();
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    confirmAction: async (action) => {
+      confirmations.push(action);
+      return false;
+    },
+  });
+  const browser = await link2chrome.browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await assert.rejects(
+    () => tab.playwright.locator("select[name=plan]").selectOption("enterprise", {
+      safety: { level: "always-confirm", reason: "change plan" },
+    }),
+    /Action was not confirmed/
+  );
+
+  assert.equal(confirmations[0].type, "selectOption");
+  assert.deepEqual(confirmations[0].target, { selector: "select[name=plan]" });
+  assert.equal(confirmations[0].value, "enterprise");
+  assert.notEqual(transport.calls.at(-1)?.name, "action_select");
 });
 
 test("locator waitFor maps selector waits to browser wait command", async () => {
