@@ -1078,6 +1078,36 @@ test("locator count understands dom_query results and filters role names", async
   });
 });
 
+test("locator filter hasText reuses DOM query text filtering", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser.dom.query") {
+        return {
+          results: [
+            { text: "Archive project" },
+            { text: "Delete project" },
+            { ariaLabel: "Delete workspace" },
+          ],
+          count: 3,
+        };
+      }
+      return { tabs: [{ id: 7, active: true }] };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const count = await tab.playwright.locator("button").filter({ hasText: "Delete" }).count();
+
+  assert.equal(count, 2);
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "browser.dom.query",
+    args: { selector: "button", limit: 100, attributes: ["text", "ariaLabel"] },
+  });
+});
+
 test("locator textContent reads text from dom_query results", async () => {
   const transport = {
     calls: [],

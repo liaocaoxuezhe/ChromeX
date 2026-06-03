@@ -944,6 +944,17 @@ class Locator {
     });
   }
 
+  filter(options = {}) {
+    if (options.hasText === undefined) {
+      return this;
+    }
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      target: { ...this.target, text: options.hasText },
+    });
+  }
+
   async count() {
     if (this.target.text && !this.target.selector) {
       const raw = await this._transport.command("browser.dom.search", { query: this.target.text });
