@@ -802,6 +802,19 @@ test("tab close maps to browser tab close command with tab id", async () => {
   });
 });
 
+test("tabs.new preserves creation options for model-authored code", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+
+  await browser.tabs.new("https://background.test", { active: false });
+  await browser.tabs.new({ url: "https://object.test", active: true });
+
+  assert.deepEqual(transport.calls.slice(-2), [
+    { name: "browser_tab_new", args: { url: "https://background.test", active: false } },
+    { name: "browser_tab_new", args: { url: "https://object.test", active: true } },
+  ]);
+});
+
 test("user.openTabs lists currently open tabs", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");

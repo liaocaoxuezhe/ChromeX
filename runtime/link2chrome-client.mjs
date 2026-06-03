@@ -701,8 +701,11 @@ class Tabs {
     return tabs.find((tab) => tab.id === id) || null;
   }
 
-  async new(url) {
-    const raw = await this._transport.command("browser_tab_new", url ? { url } : {});
+  async new(urlOrOptions, options = {}) {
+    const args = typeof urlOrOptions === "object" && urlOrOptions !== null
+      ? { ...urlOrOptions }
+      : { ...(urlOrOptions ? { url: urlOrOptions } : {}), ...options };
+    const raw = await this._transport.command("browser_tab_new", args);
     return new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: raw, raw });
   }
 
