@@ -283,6 +283,38 @@ test("dom_cua visibleDom clearly reports unsupported backend", async () => {
   );
 });
 
+test("dev console surface maps capture list and clear commands", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.dev.console.start({ maxEntries: 25 });
+  await tab.dev.console.list({ types: ["error"], limit: 5 });
+  await tab.dev.console.clear();
+
+  assert.deepEqual(transport.calls.slice(-3), [
+    { name: "console_capture", args: { action: "start", maxEntries: 25 } },
+    { name: "console_list", args: { types: ["error"], limit: 5 } },
+    { name: "console_clear", args: {} },
+  ]);
+});
+
+test("dev network surface maps capture query and replay commands", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.dev.network.start({ includeResponseBody: true });
+  await tab.dev.network.query({ urlContains: "/api", includeBody: true });
+  await tab.dev.network.replay({ id: "net-1" });
+
+  assert.deepEqual(transport.calls.slice(-3), [
+    { name: "network_capture", args: { action: "start", includeResponseBody: true } },
+    { name: "network_query", args: { urlContains: "/api", includeBody: true } },
+    { name: "network_replay", args: { id: "net-1" } },
+  ]);
+});
+
 test("createWebSocketTransport exports a command transport", () => {
   const transport = createWebSocketTransport({ url: "ws://127.0.0.1:8765", WebSocketImpl: class {} });
 
@@ -395,4 +427,41 @@ test("websocket transport maps runtime tab switch to extension switch command", 
 
   assert.equal(sentMessages[0].command, "agent_browser_tab_switch");
   assert.deepEqual(sentMessages[0].params, { tabId: 12 });
+});
+
+test("websocket transport passes dev console and network commands through", async () => {
+  const sentMessages = [];
+  class FakeWebSocket {
+    constructor() {
+      this.listeners = {};
+      queueMicrotask(() => this.listeners.open?.({}));
+    }
+
+    addEventListener(name, handler) {
+      this.listeners[name] = handler;
+    }
+
+    send(message) {
+      const parsed = JSON.parse(message);
+      sentMessages.push(parsed);
+      this.listeners.message?.({
+        data: JSON.stringify({
+          request_id: parsed.request_id,
+          success: true,
+          data: { ok: true },
+        }),
+      });
+    }
+
+    close() {}
+  }
+  const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
+
+  await transport.command("console_capture", { action: "start" });
+  await transport.command("network_query", { urlContains: "/api" });
+
+  assert.equal(sentMessages[0].command, "console_capture");
+  assert.deepEqual(sentMessages[0].params, { action: "start" });
+  assert.equal(sentMessages[1].command, "network_query");
+  assert.deepEqual(sentMessages[1].params, { urlContains: "/api" });
 });

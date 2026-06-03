@@ -471,5 +471,75 @@ class DevSurface {
   constructor({ tab, transport }) {
     this._tab = tab;
     this._transport = transport;
+    this.console = new ConsoleDevSurface({ transport });
+    this.network = new NetworkDevSurface({ transport });
+  }
+}
+
+class ConsoleDevSurface {
+  constructor({ transport }) {
+    this._transport = transport;
+  }
+
+  async start(options = {}) {
+    return this._transport.command("console_capture", { action: "start", ...options });
+  }
+
+  async stop(options = {}) {
+    return this._transport.command("console_capture", { action: "stop", ...options });
+  }
+
+  async status(options = {}) {
+    return this._transport.command("console_capture", { action: "status", ...options });
+  }
+
+  async list(options = {}) {
+    return this._transport.command("console_list", options);
+  }
+
+  async get(id) {
+    return this._transport.command("console_get", { id });
+  }
+
+  async clear() {
+    return this._transport.command("console_clear", {});
+  }
+}
+
+class NetworkDevSurface {
+  constructor({ transport }) {
+    this._transport = transport;
+  }
+
+  async start(options = {}) {
+    return this._transport.command("network_capture", { action: "start", ...options });
+  }
+
+  async stop(options = {}) {
+    return this._transport.command("network_capture", { action: "stop", ...options });
+  }
+
+  async status(options = {}) {
+    return this._transport.command("network_capture", { action: "status", ...options });
+  }
+
+  async clear(options = {}) {
+    return this._transport.command("network_capture", { action: "clear", ...options });
+  }
+
+  async list(options = {}) {
+    return this._transport.command("network_list", options);
+  }
+
+  async query(options = {}) {
+    return this._transport.command("network_query", options);
+  }
+
+  async fetch(options = {}) {
+    return this._transport.command("network_fetch", options);
+  }
+
+  async replay(options = {}) {
+    return this._transport.command("network_replay", options);
   }
 }
