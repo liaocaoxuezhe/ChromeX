@@ -49,6 +49,7 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
     },
     diagnostics: new DiagnosticsSurface({ transport, localEnvironment }),
     localEnvironment: new LocalEnvironmentSurface({ localEnvironment }),
+    sessions: new SessionSurface({ transport, safety }),
     browsers: {
       async get(kind = "extension") {
         if (kind !== "extension") {
@@ -58,6 +59,38 @@ export function createLink2ChromeClient({ transport, confirmAction, localEnviron
       },
     },
   };
+}
+
+class SessionSurface {
+  constructor({ transport, safety }) {
+    this._transport = transport;
+    this._safety = safety;
+  }
+
+  async runExclusive(name, callback) {
+    const lease = await this._acquire(name);
+    const browser = new Browser({ kind: "extension", transport: this._transport, safety: this._safety });
+    try {
+      return await callback({ browser, lease });
+    } finally {
+      await this._release(lease);
+    }
+  }
+
+  async _acquire(name) {
+    if (typeof this._transport.acquireLease === "function") {
+      return this._transport.acquireLease(name);
+    }
+    return this._transport.command("__hub_acquire__", { name });
+  }
+
+  async _release(lease) {
+    if (typeof this._transport.releaseLease === "function") {
+      return this._transport.releaseLease(lease);
+    }
+    const leaseToken = lease?.lease_token || lease?.leaseToken;
+    return this._transport.command("__hub_release__", { lease_token: leaseToken });
+  }
 }
 
 class LocalEnvironmentSurface {
@@ -206,18 +239,47 @@ function runtimeCapabilities() {
       claimTab: true,
       history: true,
     },
+    sessions: {
+      runExclusive: true,
+    },
     nativeMessaging: false,
     localPlaywrightDependency: false,
   };
 }
 
 export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocketImpl = globalThis.WebSocket } = {}) {
+  let leaseToken = null;
   return {
+    async acquireLease(name) {
+      const lease = await sendHubCommand({
+        url,
+        WebSocketImpl,
+        commandName: "__hub_acquire__",
+        params: { name },
+      });
+      leaseToken = lease.lease_token;
+      return lease;
+    },
+
+    async releaseLease(lease = {}) {
+      const token = lease.lease_token || lease.leaseToken || leaseToken;
+      const result = await sendHubCommand({
+        url,
+        WebSocketImpl,
+        commandName: "__hub_release__",
+        params: { lease_token: token },
+      });
+      if (!lease.lease_token || lease.lease_token === leaseToken) {
+        leaseToken = null;
+      }
+      return result;
+    },
+
     async command(name, args = {}) {
       if (!WebSocketImpl) {
         throw new Error("createWebSocketTransport requires global WebSocket or WebSocketImpl");
       }
-      const send = (commandName, params = {}) => sendHubCommand({ url, WebSocketImpl, commandName, params });
+      const send = (commandName, params = {}) => sendHubCommand({ url, WebSocketImpl, commandName, params, leaseToken });
       if (name === "browser_tabs_list") {
         const raw = await send("get_all_tabs", args);
         const tabs = [];
@@ -321,7 +383,7 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
   };
 }
 
-function sendHubCommand({ url, WebSocketImpl, commandName, params }) {
+function sendHubCommand({ url, WebSocketImpl, commandName, params, leaseToken }) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocketImpl(url);
     const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -333,7 +395,12 @@ function sendHubCommand({ url, WebSocketImpl, commandName, params }) {
     }, 30000);
 
     ws.addEventListener("open", () => {
-      ws.send(JSON.stringify({ request_id: requestId, command: commandName, params }));
+      ws.send(JSON.stringify({
+        request_id: requestId,
+        command: commandName,
+        params,
+        ...(leaseToken ? { lease_token: leaseToken } : {}),
+      }));
     });
     ws.addEventListener("message", (event) => {
       const data = JSON.parse(event.data);

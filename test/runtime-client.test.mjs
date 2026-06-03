@@ -121,6 +121,55 @@ test("runtime localEnvironment openBrowser passes extension launch options", asy
   ]);
 });
 
+test("sessions.runExclusive acquires and releases a browser hub lease", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "__hub_acquire__") return { lease_token: "lease-1", lease_name: args.name };
+      if (name === "browser_tabs_list") return { tabs: [{ id: 7, active: true }] };
+      return { ok: true };
+    },
+  };
+  const link2chrome = createLink2ChromeClient({ transport });
+
+  const tabIds = await link2chrome.sessions.runExclusive("checkout", async ({ browser }) => {
+    const tabs = await browser.tabs.list();
+    return tabs.map((tab) => tab.id);
+  });
+
+  assert.deepEqual(tabIds, [7]);
+  assert.deepEqual(transport.calls, [
+    { name: "__hub_acquire__", args: { name: "checkout" } },
+    { name: "browser_tabs_list", args: {} },
+    { name: "__hub_release__", args: { lease_token: "lease-1" } },
+  ]);
+});
+
+test("sessions.runExclusive releases the browser hub lease after callback errors", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "__hub_acquire__") return { lease_token: "lease-2", lease_name: args.name };
+      return { ok: true };
+    },
+  };
+  const link2chrome = createLink2ChromeClient({ transport });
+
+  await assert.rejects(
+    () => link2chrome.sessions.runExclusive("failing task", async () => {
+      throw new Error("callback failed");
+    }),
+    /callback failed/
+  );
+
+  assert.deepEqual(transport.calls, [
+    { name: "__hub_acquire__", args: { name: "failing task" } },
+    { name: "__hub_release__", args: { lease_token: "lease-2" } },
+  ]);
+});
+
 test("diagnose returns Browser Hub status", async () => {
   const transport = {
     calls: [],
@@ -223,6 +272,9 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
     openTabs: true,
     claimTab: true,
     history: true,
+  });
+  assert.deepEqual(result.capabilities.sessions, {
+    runExclusive: true,
   });
   assert.deepEqual(result.capabilities.domCua, {
     visibleDom: true,
@@ -1020,4 +1072,47 @@ test("websocket transport maps runtime wait to extension wait command", async ()
 
   assert.equal(sentMessages[0].command, "agent_browser_wait");
   assert.deepEqual(sentMessages[0].params, { condition: "dom-ready", selector: "#ready" });
+});
+
+test("websocket transport sends lease_token on commands while lease is active", async () => {
+  const sentMessages = [];
+  class FakeWebSocket {
+    constructor() {
+      this.listeners = {};
+      queueMicrotask(() => this.listeners.open?.({}));
+    }
+
+    addEventListener(name, handler) {
+      this.listeners[name] = handler;
+    }
+
+    send(message) {
+      const parsed = JSON.parse(message);
+      sentMessages.push(parsed);
+      const data = parsed.command === "__hub_acquire__"
+        ? { lease_token: "lease-1", lease_name: parsed.params.name }
+        : { ok: true };
+      this.listeners.message?.({
+        data: JSON.stringify({
+          request_id: parsed.request_id,
+          success: true,
+          data,
+        }),
+      });
+    }
+
+    close() {}
+  }
+  const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
+
+  await transport.acquireLease("runtime task");
+  await transport.command("browser_tab_info", {});
+  await transport.releaseLease();
+
+  assert.equal(sentMessages[0].command, "__hub_acquire__");
+  assert.deepEqual(sentMessages[0].params, { name: "runtime task" });
+  assert.equal(sentMessages[1].command, "agent_browser_tab_info");
+  assert.equal(sentMessages[1].lease_token, "lease-1");
+  assert.equal(sentMessages[2].command, "__hub_release__");
+  assert.deepEqual(sentMessages[2].params, { lease_token: "lease-1" });
 });
