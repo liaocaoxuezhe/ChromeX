@@ -603,6 +603,12 @@ async function handleCommand(message) {
       case "agent_browser_tabs_finalize":
         response.data = await cmdAgentBrowserTabsFinalize(params);
         break;
+      case "clipboard_read":
+        response.data = await cmdClipboardRead(params);
+        break;
+      case "clipboard_write":
+        response.data = await cmdClipboardWrite(params);
+        break;
       case "agent_browser_wait":
         response.data = await cmdAgentBrowserWait(params);
         break;
@@ -2075,6 +2081,33 @@ async function cmdAgentBrowserTabsFinalize(params) {
   }
 
   return { ok: true, action: "finalize", grouped, closed };
+}
+
+async function cmdClipboardRead(params) {
+  const result = await sendCDP("Runtime.evaluate", {
+    expression: "navigator.clipboard.readText()",
+    awaitPromise: true,
+    returnByValue: true,
+    timeout: params.timeout || 5000
+  });
+  if (result.exceptionDetails) {
+    throw new Error(result.exceptionDetails.exception?.description || "clipboard read failed");
+  }
+  return { ok: true, text: result.result?.value || "" };
+}
+
+async function cmdClipboardWrite(params) {
+  const text = String(params.text ?? "");
+  const result = await sendCDP("Runtime.evaluate", {
+    expression: `navigator.clipboard.writeText(${JSON.stringify(text)})`,
+    awaitPromise: true,
+    returnByValue: true,
+    timeout: params.timeout || 5000
+  });
+  if (result.exceptionDetails) {
+    throw new Error(result.exceptionDetails.exception?.description || "clipboard write failed");
+  }
+  return { ok: true, textLength: text.length };
 }
 
 async function cmdAgentBrowserWait(params) {

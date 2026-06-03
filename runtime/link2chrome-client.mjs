@@ -45,6 +45,8 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       if (name === "browser_tab_switch") return send("agent_browser_tab_switch", args);
       if (name === "browser_tab_new") return send("agent_browser_tab_new", args);
       if (name === "browser.tabs.finalize") return send("agent_browser_tabs_finalize", args);
+      if (name === "browser.clipboard.readText") return send("clipboard_read", args);
+      if (name === "browser.clipboard.writeText") return send("clipboard_write", args);
       if (name === "browser_navigate") return send("navigate", args);
       if (name === "browser.dom.overview") return send("dom_overview", args);
       if (name === "browser.dom.query") return send("dom_query", args);
@@ -311,6 +313,7 @@ class Tab {
     this.cua = new CuaSurface({ tab: this, transport, safety });
     this.dom_cua = new DomCuaSurface({ tab: this, transport });
     this.dev = new DevSurface({ tab: this, transport });
+    this.clipboard = new ClipboardSurface({ tab: this, transport, safety });
   }
 
   async goto(url) {
@@ -473,6 +476,28 @@ class DevSurface {
     this._transport = transport;
     this.console = new ConsoleDevSurface({ transport });
     this.network = new NetworkDevSurface({ transport });
+  }
+}
+
+class ClipboardSurface {
+  constructor({ tab, transport, safety }) {
+    this._tab = tab;
+    this._transport = transport;
+    this._safety = safety;
+  }
+
+  async readText(options = {}) {
+    return this._transport.command("browser.clipboard.readText", options);
+  }
+
+  async writeText(text, options = {}) {
+    await this._safety?.confirm({
+      type: "clipboard.writeText",
+      text,
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("browser.clipboard.writeText", { text, ...commandOptions });
   }
 }
 

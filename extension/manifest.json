@@ -9,7 +9,9 @@
     "scripting",
     "tabs",
     "storage",
-    "tabGroups"
+    "tabGroups",
+    "clipboardRead",
+    "clipboardWrite"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

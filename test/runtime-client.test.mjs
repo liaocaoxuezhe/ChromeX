@@ -315,6 +315,45 @@ test("dev network surface maps capture query and replay commands", async () => {
   ]);
 });
 
+test("clipboard surface maps read and write commands", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.clipboard.readText();
+  await tab.clipboard.writeText("hello");
+
+  assert.deepEqual(transport.calls.slice(-2), [
+    { name: "browser.clipboard.readText", args: {} },
+    { name: "browser.clipboard.writeText", args: { text: "hello" } },
+  ]);
+});
+
+test("clipboard write can require safety confirmation", async () => {
+  const confirmations = [];
+  const transport = fakeTransport();
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    confirmAction: async (action) => {
+      confirmations.push(action);
+      return false;
+    },
+  });
+  const browser = await link2chrome.browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await assert.rejects(
+    () => tab.clipboard.writeText("secret", {
+      safety: { level: "always-confirm", reason: "overwrite clipboard" },
+    }),
+    /Action was not confirmed/
+  );
+
+  assert.equal(confirmations[0].type, "clipboard.writeText");
+  assert.equal(confirmations[0].text, "secret");
+  assert.notEqual(transport.calls.at(-1)?.name, "browser.clipboard.writeText");
+});
+
 test("createWebSocketTransport exports a command transport", () => {
   const transport = createWebSocketTransport({ url: "ws://127.0.0.1:8765", WebSocketImpl: class {} });
 
@@ -464,4 +503,41 @@ test("websocket transport passes dev console and network commands through", asyn
   assert.deepEqual(sentMessages[0].params, { action: "start" });
   assert.equal(sentMessages[1].command, "network_query");
   assert.deepEqual(sentMessages[1].params, { urlContains: "/api" });
+});
+
+test("websocket transport maps clipboard commands to extension commands", async () => {
+  const sentMessages = [];
+  class FakeWebSocket {
+    constructor() {
+      this.listeners = {};
+      queueMicrotask(() => this.listeners.open?.({}));
+    }
+
+    addEventListener(name, handler) {
+      this.listeners[name] = handler;
+    }
+
+    send(message) {
+      const parsed = JSON.parse(message);
+      sentMessages.push(parsed);
+      this.listeners.message?.({
+        data: JSON.stringify({
+          request_id: parsed.request_id,
+          success: true,
+          data: { ok: true },
+        }),
+      });
+    }
+
+    close() {}
+  }
+  const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
+
+  await transport.command("browser.clipboard.readText", {});
+  await transport.command("browser.clipboard.writeText", { text: "hello" });
+
+  assert.equal(sentMessages[0].command, "clipboard_read");
+  assert.deepEqual(sentMessages[0].params, {});
+  assert.equal(sentMessages[1].command, "clipboard_write");
+  assert.deepEqual(sentMessages[1].params, { text: "hello" });
 });
