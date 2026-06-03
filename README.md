@@ -4,16 +4,17 @@
 
 # Link2Chrome
 
-Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome 扩展、WebSocket 和 MCP Server 将 Claude Code 与当前 Chrome 浏览器连接起来，让本地 Agent 可以读取页面状态、执行点击输入、滚动、标签页管理和基于视觉的页面操作。
+Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome/Tabbit 扩展、WebSocket 和 MCP Server 将本地 Agent 与真实浏览器连接起来，让 Agent 可以读取页面状态、执行点击输入、滚动、标签页管理，并按需使用 DOM/CDP、CUA 和 Playwright/CDP endpoint 三组并行控制面。
 
 ## 功能概览
 
 - 本地 MCP Server：通过 stdio 向 Claude Code 暴露浏览器工具。
-- Chrome 扩展：基于 Manifest V3，通过 `chrome.debugger` 调用 Chrome DevTools Protocol。
+- Chrome/Tabbit 扩展：基于 Manifest V3，通过 `chrome.debugger` 调用 Chrome DevTools Protocol，并用 alarms keepalive 强化连接稳定性。
 - WebSocket 桥接：Server 与扩展之间通过本地 WebSocket 通信。
 - 页面观察：支持 URL、标题、截图、压缩 DOM、正文提取等状态获取。
 - 浏览器操作：支持导航、点击、输入、滚动、拖拽、等待、标签页管理等动作。
-- 视觉交互：可调用兼容 OpenAI SDK 的视觉模型，将自然语言目标转换为页面坐标。
+- 三组并行控制面：`browser.dom.*` 面向结构化 DOM/CDP，`browser.cua.*` 面向多模态模型看图后的坐标原语，`browser.pw.*` 面向 Playwright/browser-use 的 CDP endpoint。
+- Code-first runtime：提供 Node ESM client，让 Agent 可以写 JavaScript 组合 Browser、Tab、Locator 和 CUA 对象，而不是只逐个调用 MCP tools。
 
 ## 目录结构
 
@@ -34,7 +35,7 @@ Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome 扩
 - Chrome / Chromium
 - Claude Code
 
-当前 MCP Python SDK 要求 Python 3.10 或更高版本。如果本机默认 Python 是 3.9，请先安装 `python3.10`、`python3.11` 或 `python3.12`，再由安装脚本创建隔离虚拟环境，避免污染系统环境。
+当前 MCP Python SDK 要求 Python 3.10 或更高版本。如果本机默认 Python 是 3.9，请先安装 `python3.10`、`python3.11` 或 `python3.12`，再由安装脚本创建隔离虚拟环境，避免污染系统环境。核心纯 Python 模块和测试仍保持 Python 3.9 兼容。
 
 ## 快速开始
 
@@ -54,10 +55,10 @@ server/venv/bin/pip install -r server/requirements.txt
 然后在项目根目录创建 `.env`：
 
 ```env
-DOUBAO_API_KEY=your-api-key-here
-DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-DOUBAO_MODEL=doubao-seed-1.8-thinking-250528
 LOG_LEVEL=INFO
+LINK2CHROME_BROWSER=chrome
+# 可选：Playwright attach 模式使用
+PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222
 ```
 
 ## 加载 Chrome 扩展
@@ -71,19 +72,40 @@ LOG_LEVEL=INFO
 
 将 `claude_config_snippet.json` 中的配置合并到 Claude Code 的配置文件中，并根据本机路径调整 `command`、`args` 和 `cwd`。
 
+## Code-first Runtime Client
+
+除了 MCP tools，Link2Chrome 也提供 Node ESM runtime client，适合让 Agent 通过代码组织多步浏览器流程：
+
+```js
+import { createLink2ChromeClient, createWebSocketTransport } from "./runtime/link2chrome-client.mjs";
+
+const link2chrome = createLink2ChromeClient({
+  transport: createWebSocketTransport({ url: "ws://localhost:8766" }),
+});
+
+const browser = await link2chrome.browsers.get("extension");
+const tab = await browser.tabs.selected();
+await tab.goto("https://example.com");
+const snapshot = await tab.playwright.domSnapshot();
+console.log(snapshot);
+```
+
+runtime 暴露 Playwright-style locator 和 CUA 原语，并复用现有扩展与 server。它不依赖本地 Playwright 包；`browser.pw.*` 仍然是给外部 browser-use / Playwright 客户端使用的 CDP endpoint 控制面。
+
 ## 开发与测试
 
 测试文件统一放在 `test/` 目录中。
 
 ```bash
 server/venv/bin/python -m pytest test
+node --test test/runtime-client.test.mjs
 ```
 
 ## 安全提示
 
 - 不要提交 `.env`、日志、缓存、虚拟环境或运行输出。
 - Chrome 扩展使用 `debugger` 权限，请只在可信环境中加载和运行。
-- 视觉模型 API Key 仅应通过本地环境变量或 `.env` 提供。
+- CUA 控制面不在服务端调用外部视觉模型；坐标判断由调用方多模态模型完成。
 
 ## License
 

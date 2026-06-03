@@ -384,3 +384,41 @@ python test/quick_test.py
 ---
 
 如有问题，请查看 [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) 或运行 `./diagnose.sh` 进行自动诊断。
+
+---
+
+## 方案 C：多 Agent 与三控制面补充
+
+Link2Chrome 现在暴露三组同时存在的命名空间工具，任意 MCP 客户端都可以共享同一个 MCP server：
+
+- `browser.dom.*`：复用扩展平面，适合稳定选择器、结构化页面和省 token 自动化。
+- `browser.cua.*`：复用扩展平面，适合视觉页面、canvas、表格坐标和选择器不稳定的场景。先调用 `browser.cua.screenshot`，由调用方多模态模型判断截图坐标，再调用坐标原语。
+- `browser.pw.*`：Playwright/CDP 平面，适合 browser-use 或需要 Playwright API 的任务。先 `browser.pw.start`，再 `browser.pw.endpoint` 取得 CDP URL。
+
+`browser.set_mode` 只记录会话默认偏好；显式调用某个命名空间工具时，不会被这个偏好限制。
+
+### 通用 MCP 片段
+
+```json
+{
+  "mcpServers": {
+    "link2chrome": {
+      "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
+      "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
+      "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+      "env": {
+        "LOG_LEVEL": "INFO",
+        "LOG_CONSOLE": "false"
+      }
+    }
+  }
+}
+```
+
+### browser-use / Playwright
+
+如果要让 browser-use 或外部 Playwright 直连：
+
+1. 用 `--remote-debugging-port=9222` 启动 Tabbit/Chrome，或设置 `PLAYWRIGHT_CDP_URL`。
+2. 调用 `browser.pw.start{"mode":"attach","browser":"tabbit"}` 或 `browser.pw.start{"mode":"attach","browser":"chrome"}`。
+3. 调用 `browser.pw.endpoint`，把返回的 URL 传给 `connectOverCDP` 或 browser-use 的 CDP session 配置。

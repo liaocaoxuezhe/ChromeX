@@ -1,57 +1,45 @@
 ---
 name: link2chrome-browser-mcp
-description: Use when controlling Chrome through the Link2Chrome MCP server, inspecting live webpages, extracting DOM/content, navigating tabs, or performing browser actions with observe-think-act discipline.
+description: Use when controlling Chrome or Tabbit through the Link2Chrome MCP gateway, inspecting live webpages, extracting DOM/content, navigating tabs, or combining DOM/CDP, CUA, and Playwright endpoint control surfaces.
 ---
 
 # Link2Chrome Browser MCP
 
-## 核心品味
+## Code-first Runtime
 
-把浏览器当成仪表盘，不要当成一张截图。优先相信 DOM 事实、结构化数据和可验证的小动作；只有布局、Canvas、图片内容或视觉确认重要时，才动用截图。
+多步浏览器自动化优先写 JavaScript 调 `runtime/link2chrome-client.mjs`，用 Browser、Tab、Locator 和 CUA 对象组织流程。一次性的小操作再直接调用 MCP tools。
+
+```js
+const browser = await link2chrome.browsers.get("extension");
+const tab = await browser.tabs.selected();
+await tab.playwright.getByRole("button", { name: "提交" }).click();
+```
+
+## 控制面组合
+
+任务是健壮自动化、测试、需要 Playwright API，或由 browser-use 驱动：
+使用 `browser.pw.start`，再用 `browser.pw.endpoint` 取得 CDP URL。
+
+否则要控制用户正在使用、已登录的真实浏览器：
+有稳定选择器、结构化交互、需要省 token 时，用 `browser.dom.*`。
+页面偏视觉、canvas、图片内容、表格坐标或选择器不稳定时，用 `browser.cua.*`。
+
+三组控制面是并行能力，不是三选一开关。`browser.pw.*` 是 endpoint 控制面，不代表 Link2Chrome 引入本地 Playwright 包。
 
 ## 工具地图
 
-- **连接诊断**：工具失败、标签页不对、扩展状态不明时，用 `browser_diagnose`。
-- **标签页**：`browser_tabs_list` -> `browser_tab_switch` / `browser_tab_new` -> `browser_tab_info`。
-- **导航**：`browser_navigate` 后，用 `browser_tab_info` 或 `dom_overview` 验证。
-- **观察**：先 `dom_overview`；再用 `dom_query`、`dom_search`、`dom_element_detail` 缩小范围；元数据优先 `dom_structured_data`。
-- **等待**：导航或动作之后，用 `dom_wait_for` 等待具体 DOM 状态。
-- **动作**：`action_click`、`action_type`、`action_scroll`、`action_drag`、`action_hover`、`action_press_key`、`upload_file`、`handle_dialog`。
-- **网络**：`network_capture` 控制捕获；`network_list` / `network_query` 查看请求；`network_fetch` 做扩展端 fetch；`network_replay` 重放已捕获请求。
-- **控制台**：`console_capture` 控制捕获；`console_list` / `console_get` 查看消息；`console_clear` 清空缓存。
-- **提取**：文章用 `browser_extract_content`；无限列表用 `browser_scrape_with_scroll`；精确自定义逻辑才用 `script_evaluate`。
-- **视觉兜底**：DOM 回答不了时，用 `browser_screenshot`。
+- **连接诊断**：`browser_diagnose`
+- **标签/导航**：`browser_tabs_list`、`browser_tab_switch`、`browser_tab_new`、`browser_tab_info`、`browser_navigate`
+- **DOM/CDP**：`browser.dom.overview`、`browser.dom.query`、`browser.dom.search`、`browser.dom.click`、`browser.dom.type`、`browser.dom.scroll`
+- **CUA**：先 `browser.cua.screenshot`，由主模型看图决定坐标，再用 `browser.cua.click`、`browser.cua.drag`、`browser.cua.type`、`browser.cua.key`、`browser.cua.scroll`
+- **Playwright endpoint**：`browser.pw.start`、`browser.pw.endpoint`、`browser.pw.stop`
+- **网络/控制台**：`network_capture`、`network_query`、`network_replay`、`console_capture`、`console_list`
+- **提取/脚本**：`browser_extract_content`、`browser_scrape_with_scroll`、`script_evaluate`
 
-## 观察-思考-操作
+## CUA 坐标契约
 
-1. **观察**：收集最低成本、最可靠的事实。
-   - 未知页面：`browser_tab_info` + `dom_overview`。
-   - 获取完整正文: 用`browser_extract_content`
-   - 找目标：文本用 `dom_search`，选择器用 `dom_query`。
-   - 看单个节点：`dom_element_detail`，按需带 `position` 或 `accessibility`。
-2. **思考**：思考你做的事情，看看执行什么工具可以完成任务，争取一次性执行多种 tools 来完成任务。
-3. **操作**：只做一个有意义的动作。
-   - 点击、输入、滚动、拖拽、悬停、上传文件、处理弹窗、按键。
-   - 立刻用 `dom_wait_for`、`dom_overview`、`dom_query` 或 `browser_tab_info` 验证效果。
-4. **循环**：用新观察继续下一步。不要拿过期 DOM 连续猜测操作。
+`browser.cua.screenshot` 返回截图、CSS viewport、DPR 和截图尺寸。`browser.cua.*` 的 x/y 输入是截图像素；服务端会按 DPR 转成 CSS 像素再派发 CDP 事件。非多模态模型优先用 DOM/CDP 或 Playwright endpoint 控制面。
 
-## 常用配方
+## 操作纪律
 
-- **打开并检查页面**：`browser_navigate` ->  `dom_overview`。
-- **按可见文案点击**：`dom_search` -> 若 selector 可信则优先 selector -> `action_click` -> `dom_wait_for` 等预期结果。
-- **填写搜索框**：`dom_query{"selector":"input,textarea","attributes":["text","placeholder","name","ariaLabel"]}` -> `action_type` -> `action_press_key{"key":"Enter"}`。
-- **滚动信息流**：阅读用 `action_scroll`；采集用 `browser_scrape_with_scroll`。
-- **提取文章**：先 `browser_extract_content`；Readability 漏字段时才 `script_evaluate`。
-- **排查混乱**：用 `browser_tabs_list` 确认目标标签；命令失败再 `browser_diagnose`。
-
-## 特别情况
-
-1. 对于表格/多维表格类网站，只能使用 截图来获取状态，通过点击像素，键盘操作来完成任务。
-
-## 避免
-
-- 不要把 `browser_screenshot` 当第一步，除非任务天然视觉化。
-- selector、text、aria-label 能定位时，不要先用坐标。
-- `dom_query`、`dom_structured_data`、`browser_extract_content` 足够时，不要抓整页 HTML。
-- 不依赖固定 sleep；等待 DOM 状态，或操作后验证。
-- 回答必须贴着工具观察。推断可以有，但要明说是推断。
+先观察，再做一个最小动作，然后验证。DOM 控制面优先等待具体后置条件；CUA 控制面先截图、小步点击或拖拽、再截图/DOM 验证；Playwright endpoint 控制面先确认 endpoint 可用。
