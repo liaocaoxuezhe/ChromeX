@@ -182,6 +182,7 @@ test("diagnostics readiness checks hub extension tab and runtime capabilities", 
     hover: true,
     press: true,
     selectOption: true,
+    fillForm: true,
   });
   assert.deepEqual(result.capabilities.browserState, {
     openTabs: true,
@@ -388,6 +389,50 @@ test("locator fill maps to browser.dom.type", async () => {
       clearFirst: true,
     },
   });
+});
+
+test("playwright fillForm maps to form fill action", async () => {
+  const transport = fakeTransport();
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+  const fields = [
+    { name: "email", value: "me@example.com" },
+    { selector: "textarea[name=message]", value: "hello" },
+  ];
+
+  await tab.playwright.fillForm(fields, { formSelector: "form#contact", submit: true });
+
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "action_fill_form",
+    args: { fields, formSelector: "form#contact", submit: true },
+  });
+});
+
+test("playwright fillForm can require safety confirmation", async () => {
+  const confirmations = [];
+  const transport = fakeTransport();
+  const link2chrome = createLink2ChromeClient({
+    transport,
+    confirmAction: async (action) => {
+      confirmations.push(action);
+      return false;
+    },
+  });
+  const browser = await link2chrome.browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+  const fields = [{ name: "email", value: "me@example.com" }];
+
+  await assert.rejects(
+    () => tab.playwright.fillForm(fields, {
+      safety: { level: "always-confirm", reason: "submit contact form" },
+      submit: true,
+    }),
+    /Action was not confirmed/
+  );
+
+  assert.equal(confirmations[0].type, "fillForm");
+  assert.deepEqual(confirmations[0].fields, fields);
+  assert.notEqual(transport.calls.at(-1)?.name, "action_fill_form");
 });
 
 test("locator hover press and selectOption map to action commands", async () => {

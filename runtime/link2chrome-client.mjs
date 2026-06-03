@@ -173,6 +173,7 @@ function runtimeCapabilities() {
       hover: true,
       press: true,
       selectOption: true,
+      fillForm: true,
     },
     cua: {
       screenshot: true,
@@ -563,6 +564,19 @@ class PlaywrightSurface {
   getByTestId(testId) {
     const escaped = String(testId).replaceAll('"', '\\"');
     return this.locator(`[data-testid="${escaped}"], [data-test-id="${escaped}"], [data-test="${escaped}"]`);
+  }
+
+  async fillForm(fields, options = {}) {
+    await this._safety?.confirm({
+      type: "fillForm",
+      fields,
+      safety: options.safety,
+    });
+    const { safety, ...commandOptions } = options;
+    return this._transport.command("action_fill_form", {
+      fields,
+      ...commandOptions,
+    });
   }
 }
 
