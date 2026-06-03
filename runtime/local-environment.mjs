@@ -26,6 +26,8 @@ export async function openLocalBrowserWindow({
   browser,
   profileId,
   url,
+  extensionDir,
+  onlyExtension = false,
   launcher = defaultLauncher,
 } = {}) {
   if (!browser?.executablePath) {
@@ -34,6 +36,8 @@ export async function openLocalBrowserWindow({
   const args = [];
   if (profileId) args.push(`--profile-directory=${profileId}`);
   if (browser.profileRoot) args.push(`--user-data-dir=${browser.profileRoot}`);
+  if (extensionDir && onlyExtension) args.push(`--disable-extensions-except=${extensionDir}`);
+  if (extensionDir) args.push(`--load-extension=${extensionDir}`);
   if (url) args.push(url);
 
   const launchResult = await launcher(browser.executablePath, args);
@@ -42,6 +46,7 @@ export async function openLocalBrowserWindow({
     browserId: browser.id || null,
     profileId: profileId || null,
     url: url || null,
+    extensionDir: extensionDir || null,
     pid: launchResult?.pid || null,
   };
 }

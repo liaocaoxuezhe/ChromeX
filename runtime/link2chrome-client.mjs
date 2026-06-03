@@ -82,6 +82,8 @@ class LocalEnvironmentSurface {
       browser,
       profileId: options.profileId,
       url: options.url,
+      extensionDir: options.extensionDir,
+      onlyExtension: options.onlyExtension,
       launcher: options.launcher,
     });
   }

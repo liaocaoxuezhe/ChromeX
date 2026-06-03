@@ -201,7 +201,37 @@ test("opens a local browser window with a selected profile and url", async () =>
     browserId: "chrome",
     profileId: "Profile 1",
     url: "https://example.com",
+    extensionDir: null,
     pid: 1234,
+  });
+});
+
+test("opens a local browser window with the unpacked Link2Chrome extension", async () => {
+  const launched = [];
+  await openLocalBrowserWindow({
+    browser: {
+      id: "chrome",
+      name: "Google Chrome",
+      executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+    },
+    profileId: "Default",
+    extensionDir: "/Users/me/Link2Chrome/extension",
+    onlyExtension: true,
+    launcher: async (command, args) => {
+      launched.push({ command, args });
+      return { pid: 5678 };
+    },
+  });
+
+  assert.deepEqual(launched[0], {
+    command: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    args: [
+      "--profile-directory=Default",
+      "--user-data-dir=/Users/me/Library/Application Support/Google/Chrome",
+      "--disable-extensions-except=/Users/me/Link2Chrome/extension",
+      "--load-extension=/Users/me/Link2Chrome/extension",
+    ],
   });
 });
 

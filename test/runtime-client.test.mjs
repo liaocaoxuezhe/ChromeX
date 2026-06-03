@@ -86,6 +86,41 @@ test("runtime exposes local environment inspect and openBrowser helpers", async 
   assert.deepEqual(calls, [{ browserId: "chrome", profileId: "Default" }]);
 });
 
+test("runtime localEnvironment openBrowser passes extension launch options", async () => {
+  const launched = [];
+  const link2chrome = createLink2ChromeClient({
+    transport: fakeTransport(),
+    localEnvironment: {
+      inspect: async () => ({
+        ok: true,
+        browsers: [{
+          id: "chrome",
+          installed: true,
+          executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+        }],
+      }),
+    },
+  });
+
+  await link2chrome.localEnvironment.openBrowser({
+    browserId: "chrome",
+    profileId: "Default",
+    extensionDir: "/Users/me/Link2Chrome/extension",
+    onlyExtension: true,
+    launcher: async (command, args) => {
+      launched.push({ command, args });
+      return { pid: 99 };
+    },
+  });
+
+  assert.equal(launched[0].command, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+  assert.deepEqual(launched[0].args.slice(-2), [
+    "--disable-extensions-except=/Users/me/Link2Chrome/extension",
+    "--load-extension=/Users/me/Link2Chrome/extension",
+  ]);
+});
+
 test("diagnose returns Browser Hub status", async () => {
   const transport = {
     calls: [],
