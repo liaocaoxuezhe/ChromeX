@@ -75,6 +75,67 @@ test("diagnose returns structured error when Hub is unreachable", async () => {
   assert.equal(result.error, "connection refused");
 });
 
+test("diagnostics readiness checks hub extension tab and runtime capabilities", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "__hub_status__") {
+        return { hub_id: "hub-1", extension_connected: true, adapter_connections: 1, queue_locked: false };
+      }
+      if (name === "browser_tab_info") {
+        return { id: 7, active: true, url: "https://ready.test", title: "Ready" };
+      }
+      return { ok: true };
+    },
+  };
+  const link2chrome = createLink2ChromeClient({ transport });
+
+  const result = await link2chrome.diagnostics.readiness();
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.hub, {
+    ok: true,
+    status: { hub_id: "hub-1", extension_connected: true, adapter_connections: 1, queue_locked: false },
+  });
+  assert.deepEqual(result.extension, { ok: true, connected: true });
+  assert.deepEqual(result.selectedTab, {
+    ok: true,
+    tab: { id: 7, active: true, url: "https://ready.test", title: "Ready" },
+  });
+  assert.deepEqual(result.capabilities.playwrightStyle, {
+    domSnapshot: true,
+    locator: true,
+    fileChooser: true,
+    dialog: true,
+  });
+  assert.deepEqual(transport.calls, [
+    { name: "__hub_status__", args: {} },
+    { name: "browser_tab_info", args: {} },
+  ]);
+});
+
+test("diagnostics readiness reports partial failures without throwing", async () => {
+  const transport = {
+    async command(name) {
+      if (name === "__hub_status__") {
+        return { hub_id: "hub-2", extension_connected: false, queue_locked: false };
+      }
+      if (name === "browser_tab_info") {
+        throw new Error("Extension not connected");
+      }
+      return { ok: true };
+    },
+  };
+  const link2chrome = createLink2ChromeClient({ transport });
+
+  const result = await link2chrome.diagnostics.readiness();
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.extension, { ok: false, connected: false });
+  assert.deepEqual(result.selectedTab, { ok: false, error: "Extension not connected" });
+});
+
 test("tabs.selected returns active tab info and tab navigation uses browser_navigate", async () => {
   const transport = {
     calls: [],

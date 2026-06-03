@@ -18,6 +18,7 @@ export function createLink2ChromeClient({ transport, confirmAction } = {}) {
         };
       }
     },
+    diagnostics: new DiagnosticsSurface({ transport }),
     browsers: {
       async get(kind = "extension") {
         if (kind !== "extension") {
@@ -26,6 +27,88 @@ export function createLink2ChromeClient({ transport, confirmAction } = {}) {
         return new Browser({ kind, transport, safety });
       },
     },
+  };
+}
+
+class DiagnosticsSurface {
+  constructor({ transport }) {
+    this._transport = transport;
+  }
+
+  async readiness() {
+    const hub = await this._checkHub();
+    const selectedTab = await this._checkSelectedTab();
+    const extensionConnected = Boolean(hub.status?.extension_connected);
+    return {
+      ok: Boolean(hub.ok && extensionConnected && selectedTab.ok),
+      hub,
+      extension: {
+        ok: extensionConnected,
+        connected: extensionConnected,
+      },
+      selectedTab,
+      capabilities: runtimeCapabilities(),
+    };
+  }
+
+  async _checkHub() {
+    try {
+      return {
+        ok: true,
+        status: await this._transport.command("__hub_status__", {}),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: String(error?.message || error),
+      };
+    }
+  }
+
+  async _checkSelectedTab() {
+    try {
+      return {
+        ok: true,
+        tab: await this._transport.command("browser_tab_info", {}),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: String(error?.message || error),
+      };
+    }
+  }
+}
+
+function runtimeCapabilities() {
+  return {
+    playwrightStyle: {
+      domSnapshot: true,
+      locator: true,
+      fileChooser: true,
+      dialog: true,
+    },
+    cua: {
+      screenshot: true,
+      click: true,
+      drag: true,
+      keyboard: true,
+    },
+    devtools: {
+      console: true,
+      network: true,
+    },
+    clipboard: {
+      readText: true,
+      writeText: true,
+    },
+    lifecycle: {
+      tabList: true,
+      tabClaim: true,
+      tabFinalize: true,
+    },
+    nativeMessaging: false,
+    localPlaywrightDependency: false,
   };
 }
 
