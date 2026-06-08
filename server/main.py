@@ -33,7 +33,6 @@ from server.script_library import get_script
 from server.tool_descriptions import TOOL_DEFINITIONS
 from server.modes.cua import CuaController
 from server.modes.playwright_plane import PlaywrightPlane
-from server.session.mode import ModeSession
 
 # 加载环境变量
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -50,11 +49,150 @@ op_logger = get_operation_logger()
 # 全局实例
 ws_manager = HubClient()
 debugger_manager = DebuggerManager(ws_manager=ws_manager)
-mode_session = ModeSession()
 cua_controller = CuaController(ws_manager)
 playwright_plane = PlaywrightPlane()
 
 app = Server("local-browser")
+
+# ==================== Legacy Alias Mapping ====================
+# Old tool names silently redirect to new unified names for backward compatibility.
+LEGACY_ALIASES = {
+    # Legacy browser_* tools
+    "browser_action_navigate": "browser_navigate",
+    "browser_go_back": "browser_navigate",
+    "browser_manage_tab": "browser_tab",
+    "browser_get_tabs": "browser_tabs_list",
+    "browser_get_state": "browser_dom_overview",
+    "browser_get_screenshot": "browser_screenshot",
+    "browser_click": "action_click",
+    "browser_type": "action_fill",
+    "browser_type_at_coord": "action_fill",
+    "browser_drag": "action_drag",
+    "browser_action_scroll": "action_scroll",
+    "browser_send_keys": "action_press_key",
+    "browser_find_text": "browser_dom_search",
+    "browser_extract_content": "browser_dom_get_text",
+    "browser_execute_script": "script_evaluate",
+    "browser_scroll_until": "action_scroll",
+    "browser_wait": "browser_dom_overview",
+    "browser_wait_for_condition": "script_evaluate",
+    "browser_detach_debugger": "browser_diagnose",
+    # Legacy dom_* / action_* tools
+    "dom_overview": "browser_dom_overview",
+    "dom_query": "browser_dom_query",
+    "dom_search": "browser_dom_search",
+    "dom_structured_data": "browser_dom_query",
+    "dom_element_detail": "browser_dom_query",
+    "dom_wait_for": "script_evaluate",
+    "action_type": "action_fill",
+    "action_select": "action_click",
+    "action_fill_form": "playwright_run",
+    # Legacy network / console tools
+    "network_capture": "network_check",
+    "network_list": "network_check",
+    "network_query": "network_check",
+    "network_fetch": "network_check",
+    "network_replay": "network_check",
+    "console_capture": "console_check",
+    "console_list": "console_check",
+    "console_get": "console_check",
+    "console_clear": "console_check",
+    # Plan C namespace aliases
+    "browser.dom.overview": "browser_dom_overview",
+    "browser.dom.query": "browser_dom_query",
+    "browser.dom.search": "browser_dom_search",
+    "browser.dom.click": "action_click",
+    "browser.dom.type": "action_fill",
+    "browser.dom.scroll": "action_scroll",
+    "browser.cua.screenshot": "browser_screenshot",
+    "browser.cua.click": "action_click",
+    "browser.cua.double_click": "action_double_click",
+    "browser.cua.move": "action_hover",
+    "browser.cua.type": "action_fill",
+    "browser.cua.key": "action_press_key",
+    "browser.cua.scroll": "action_scroll",
+    "browser.cua.drag": "action_drag",
+    "browser.pw.start": "playwright_run",
+    "browser.pw.endpoint": "playwright_run",
+    "browser.pw.stop": "playwright_run",
+    "browser.pw.goto": "browser_navigate",
+    "browser.pw.click": "action_click",
+    "browser.pw.fill": "action_fill",
+    "browser.pw.eval": "script_evaluate",
+    "browser.pw.screenshot": "browser_screenshot",
+    "browser_tab_info": "browser_tab",
+    "browser_tab_switch": "browser_tab",
+    "browser_tab_new": "browser_tab",
+}
+
+
+def _convert_legacy_params(old_name: str, args: dict) -> dict:
+    """Convert legacy tool parameters to new unified parameter schemas."""
+    args = dict(args)  # shallow copy
+
+    if old_name == "browser_go_back":
+        return {"action": "forward" if args.get("forward") else "back"}
+
+    if old_name in ("browser_type", "browser.dom.type", "browser.cua.type", "action_type"):
+        if "text" in args:
+            args["value"] = args.pop("text")
+        if "selector" in args:
+            args["target"] = {"selector": args.pop("selector")}
+        args.setdefault("clearFirst", True)
+        return args
+
+    if old_name == "browser_type_at_coord":
+        x = args.pop("x", 0)
+        y = args.pop("y", 0)
+        args["target"] = {"x": x, "y": y}
+        if "text" in args:
+            args["value"] = args.pop("text")
+        args.setdefault("clearFirst", True)
+        return args
+
+    if old_name == "browser_click":
+        if "selector" in args:
+            args["target"] = {"selector": args.pop("selector")}
+        elif "x" in args and "y" in args:
+            args["target"] = {"x": args.pop("x"), "y": args.pop("y")}
+        return args
+
+    if old_name == "browser_send_keys":
+        args["key"] = args.pop("keys", "")
+        if "selector" in args:
+            args["target"] = {"selector": args.pop("selector")}
+        return args
+
+    if old_name == "browser_find_text":
+        args["query"] = args.pop("text", "")
+        return args
+
+    if old_name == "browser_execute_script":
+        args["expression"] = args.pop("script", "")
+        return args
+
+    if old_name in ("browser_tab_new", "browser_tab_switch", "browser_tab_info"):
+        if old_name == "browser_tab_new":
+            args["action"] = "new"
+        elif old_name == "browser_tab_switch":
+            args["action"] = "switch"
+        elif old_name == "browser_tab_info":
+            args["action"] = "info"
+        return args
+
+    if old_name == "browser_action_navigate":
+        args.setdefault("action", "goto")
+        return args
+
+    if old_name == "browser_get_state":
+        return {"include": []}
+
+    if old_name in ("browser_scroll_until", "browser_manage_tab", "browser_extract_content",
+                    "browser_wait", "browser_wait_for_condition", "browser_detach_debugger"):
+        # Best-effort pass-through; new handlers may ignore incompatible params
+        return args
+
+    return args
 
 
 # ==================== Tool 定义（从 tool_descriptions.py 加载） ====================
@@ -76,6 +214,14 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]:
     logger.info(f"调用工具: {name}, 参数: {arguments}")
+
+    # Apply legacy alias mapping
+    if name in LEGACY_ALIASES:
+        old_name = name
+        name = LEGACY_ALIASES[name]
+        arguments = _convert_legacy_params(old_name, arguments)
+        logger.info(f"Legacy alias: {old_name} -> {name}, converted args: {arguments}")
+
     try:
         if name == "browser_diagnose":
             result = await tool_diagnose(arguments)
@@ -83,101 +229,34 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
             op_logger.log_operation(name, arguments, result_summary=result_summary)
             return result
 
-        if name in {"browser.get_mode", "browser.set_mode"}:
-            result = tool_session_mode(name, arguments)
-            op_logger.log_operation(name, arguments, result_summary=_extract_result_summary(result))
-            return result
-
-        if name.startswith("browser.pw."):
-            result = await tool_playwright_plane(name, arguments)
-            op_logger.log_operation(name, arguments, result_summary=_extract_result_summary(result))
-            return result
-
         async with ws_manager.operation(name):
-            if name == "browser_get_state":
-                result = await tool_get_state(arguments)
-            elif name == "browser_get_screenshot":
-                result = await tool_get_screenshot(arguments)
-            elif name == "browser_action_navigate":
-                result = await tool_action_navigate(arguments)
-            elif name == "browser_action_scroll":
-                result = await tool_action_scroll(arguments)
-            elif name == "browser_manage_tab":
-                result = await tool_manage_tab(arguments)
-            elif name == "browser_click":
-                result = await tool_click(arguments)
-            elif name == "browser_type":
-                result = await tool_type(arguments)
-            elif name == "browser_type_at_coord":
-                result = await tool_type_at_coord(arguments)
-            elif name == "browser_get_tabs":
-                result = await tool_get_tabs(arguments)
-            elif name == "browser_go_back":
-                result = await tool_go_back(arguments)
-            elif name == "browser_drag":
-                result = await tool_drag(arguments)
-            elif name == "browser_wait":
-                result = await tool_wait(arguments)
-            elif name == "browser_extract_content":
-                result = await tool_extract_content(arguments)
-            elif name == "browser_diagnose":
-                result = await tool_diagnose(arguments)
-            elif name == "browser_execute_script":
-                result = await tool_execute_script(arguments)
-            elif name == "browser_wait_for_condition":
-                result = await tool_wait_for_condition(arguments)
-            elif name == "browser_detach_debugger":
-                result = await tool_detach_debugger(arguments)
-            elif name == "browser_scroll_until":
-                result = await tool_scroll_until(arguments)
-            elif name == "browser_send_keys":
-                result = await tool_send_keys(arguments)
-            elif name == "browser_find_text":
-                result = await tool_find_text(arguments)
-            elif name == "browser_scrape_with_scroll":
-                result = await tool_scrape_with_scroll(arguments)
-            elif name.startswith("browser.cua."):
-                result = await tool_cua(name, arguments)
-            elif name in {
-                "browser_tabs_list",
-                "browser_tab_info",
-                "browser_tab_switch",
-                "browser_tab_new",
+            # New unified 26-tool routing
+            if name in {
                 "browser_navigate",
+                "browser_tab",
+                "browser_session",
+                "browser_tabs_list",
+                "browser_dom_overview",
+                "browser_dom_query",
+                "browser_dom_search",
+                "browser_dom_get_text",
+                "browser_dom_diff",
                 "browser_screenshot",
-                "browser_wait",
-                "dom_overview",
-                "dom_query",
-                "dom_search",
-                "dom_structured_data",
-                "dom_element_detail",
-                "dom_wait_for",
                 "action_click",
-                "action_drag",
-                "action_type",
-                "action_scroll",
-                "action_select",
+                "action_double_click",
                 "action_hover",
+                "action_scroll",
+                "action_drag",
+                "action_fill",
                 "action_press_key",
-                "action_fill_form",
                 "upload_file",
                 "handle_dialog",
-                "network_capture",
-                "network_list",
-                "network_query",
-                "network_fetch",
-                "network_replay",
-                "console_capture",
-                "console_list",
-                "console_get",
-                "console_clear",
+                "playwright_run",
                 "script_evaluate",
-                "browser.dom.overview",
-                "browser.dom.query",
-                "browser.dom.search",
-                "browser.dom.click",
-                "browser.dom.type",
-                "browser.dom.scroll",
+                "save_as_pdf",
+                "console_check",
+                "network_check",
+                "browser_scrape_with_scroll",
             }:
                 result = await tool_agent_first(name, arguments)
             else:
@@ -227,6 +306,8 @@ def _json_content(payload: object) -> list[TextContent]:
     """Return a compact JSON tool response, matching the PRD's agent-first contract."""
     return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2))]
 
+
+# ==================== Legacy Tool Implementations (kept for Phase 1) ====================
 
 async def tool_get_state(args: dict) -> list[TextContent | ImageContent]:
     """获取浏览器状态"""
@@ -355,8 +436,6 @@ async def tool_manage_tab(args: dict) -> list[TextContent | ImageContent]:
 
     return [TextContent(type="text", text=f"标签操作完成: {result}")]
 
-
-# ==================== 新增 Tool 实现 ====================
 
 async def tool_click(args: dict) -> list[TextContent | ImageContent]:
     """直接点击坐标或 CSS 选择器"""
@@ -882,54 +961,10 @@ async def tool_scrape_with_scroll(args: dict) -> list[TextContent]:
     return [TextContent(type="text", text=response)]
 
 
-# ==================== Agent-first PRD Tool 实现 ====================
-
-def tool_session_mode(name: str, args: dict) -> list[TextContent]:
-    if name == "browser.get_mode":
-        return _json_content({"mode": mode_session.get_mode(), "supportedModes": ["dom", "cua", "pw"]})
-    return _json_content(mode_session.set_mode(args["mode"]))
-
-
-async def tool_cua(name: str, args: dict) -> list[TextContent]:
-    action = name.rsplit(".", 1)[-1]
-    handlers = {
-        "screenshot": cua_controller.screenshot,
-        "click": cua_controller.click,
-        "double_click": cua_controller.double_click,
-        "move": cua_controller.move,
-        "type": cua_controller.type,
-        "key": cua_controller.key,
-        "scroll": cua_controller.scroll,
-        "drag": cua_controller.drag,
-    }
-    handler = handlers.get(action)
-    if handler is None:
-        return _json_content({"ok": False, "error": f"unknown CUA action: {action}"})
-    return _json_content(await handler(args))
-
-
-async def tool_playwright_plane(name: str, args: dict) -> list[TextContent]:
-    action = name.rsplit(".", 1)[-1]
-    if action == "start":
-        return _json_content(await playwright_plane.start(args))
-    if action == "endpoint":
-        return _json_content(await playwright_plane.endpoint(args))
-    if action == "stop":
-        return _json_content(await playwright_plane.stop(args))
-    return _json_content(await playwright_plane.command_not_available(action))
-
+# ==================== Agent-first Unified Tool Implementation ====================
 
 async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
-    """Dispatch the PRD tool namespace and return JSON-only observations."""
-    aliases = {
-        "browser.dom.overview": "dom_overview",
-        "browser.dom.query": "dom_query",
-        "browser.dom.search": "dom_search",
-        "browser.dom.click": "action_click",
-        "browser.dom.type": "action_type",
-        "browser.dom.scroll": "action_scroll",
-    }
-    name = aliases.get(name, name)
+    """Dispatch the unified 26-tool namespace and return JSON-only observations."""
 
     if name == "browser_tabs_list":
         raw = await ws_manager.send_command("get_all_tabs")
@@ -949,39 +984,105 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
                 )
         return _json_content({"tabs": tabs, "totalCount": len(tabs)})
 
-    if name == "browser_tab_info":
-        return _json_content(await ws_manager.send_command("agent_browser_tab_info", args))
-
-    if name == "browser_tab_switch":
-        return _json_content(await ws_manager.send_command("agent_browser_tab_switch", args))
-
-    if name == "browser_tab_new":
-        return _json_content(await ws_manager.send_command("agent_browser_tab_new", args))
-
     if name == "browser_navigate":
-        started = time.monotonic()
-        url = args["url"]
-        if not url.startswith(("http://", "https://", "chrome://", "about:")):
-            url = "https://" + url
-        result = await ws_manager.send_command(
-            "navigate",
-            {
-                "url": url,
-                "waitUntil": args.get("waitUntil", "dom-ready"),
-                "timeout": args.get("timeout", 10000),
-            },
-        )
-        final_url = result.get("url", url)
-        return _json_content(
-            {
+        action = args.get("action", "goto")
+        if action == "goto":
+            started = time.monotonic()
+            url = args.get("url", "")
+            if not url.startswith(("http://", "https://", "chrome://", "about:")):
+                url = "https://" + url
+            result = await ws_manager.send_command(
+                "navigate",
+                {
+                    "url": url,
+                    "waitUntil": args.get("waitUntil", "dom-ready"),
+                    "timeout": args.get("timeout", 10000),
+                },
+            )
+            final_url = result.get("url", url)
+            return _json_content(
+                {
+                    "ok": True,
+                    "action": "goto",
+                    "finalUrl": final_url,
+                    "redirected": final_url != url,
+                    "status": result.get("status", "unknown"),
+                    "method": result.get("method", "unknown"),
+                    "elapsed": int((time.monotonic() - started) * 1000),
+                }
+            )
+        elif action == "back":
+            result = await ws_manager.send_command("go_back")
+            return _json_content({
                 "ok": True,
-                "finalUrl": final_url,
-                "redirected": final_url != url,
+                "action": "back",
+                "url": result.get("url"),
                 "status": result.get("status", "unknown"),
-                "method": result.get("method", "unknown"),
-                "elapsed": int((time.monotonic() - started) * 1000),
-            }
-        )
+                "hint": "Navigated back.",
+            })
+        elif action == "forward":
+            result = await ws_manager.send_command("go_forward")
+            return _json_content({
+                "ok": True,
+                "action": "forward",
+                "url": result.get("url"),
+                "status": result.get("status", "unknown"),
+                "hint": "Navigated forward.",
+            })
+        elif action == "reload":
+            result = await ws_manager.send_command("reload")
+            return _json_content({
+                "ok": True,
+                "action": "reload",
+                "status": result.get("status", "unknown"),
+                "hint": "Page reloaded.",
+            })
+        else:
+            return _json_content({"ok": False, "error": f"unknown navigation action: {action}"})
+
+    if name == "browser_tab":
+        action = args.get("action")
+        if action == "new":
+            result = await ws_manager.send_command("agent_browser_tab_new", {
+                "url": args.get("url"),
+                "active": args.get("active", True)
+            })
+            return _json_content({"ok": True, "action": "new", "tabId": result.get("tabId")})
+        elif action == "switch":
+            tab_id = args.get("tabId")
+            if tab_id is None:
+                return _json_content({"ok": False, "error": "tabId is required for switch"})
+            result = await ws_manager.send_command("agent_browser_tab_switch", {"tabId": tab_id})
+            return _json_content({"ok": True, "action": "switch", "tabId": tab_id})
+        elif action == "close":
+            tab_id = args.get("tabId")
+            if tab_id is None:
+                return _json_content({"ok": False, "error": "tabId is required for close"})
+            result = await ws_manager.send_command("agent_browser_tab_close", {"tabId": tab_id})
+            return _json_content({"ok": True, "action": "close", "tabId": tab_id})
+        elif action == "info":
+            result = await ws_manager.send_command("agent_browser_tab_info", {})
+            return _json_content({"ok": True, "action": "info", **result})
+        else:
+            return _json_content({"ok": False, "error": f"unknown tab action: {action}"})
+
+    if name == "browser_session":
+        return _json_content({"ok": False, "error": "not implemented in this phase"})
+
+    if name == "browser_dom_overview":
+        return _json_content(await ws_manager.send_command("dom_overview", args))
+
+    if name == "browser_dom_query":
+        return _json_content(await ws_manager.send_command("dom_query", args))
+
+    if name == "browser_dom_search":
+        return _json_content(await ws_manager.send_command("dom_search", args))
+
+    if name == "browser_dom_get_text":
+        return _json_content({"ok": False, "error": "not implemented in this phase"})
+
+    if name == "browser_dom_diff":
+        return _json_content({"ok": False, "error": "not implemented in this phase"})
 
     if name == "browser_screenshot":
         screenshot = await ws_manager.send_command(
@@ -1001,35 +1102,118 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
             }
         )
 
-    if name in {
-        "dom_overview",
-        "dom_query",
-        "dom_search",
-        "dom_structured_data",
-        "dom_element_detail",
-        "dom_wait_for",
-        "action_click",
-        "action_drag",
-        "action_type",
-        "action_scroll",
-        "action_select",
-        "action_hover",
-        "action_press_key",
-        "action_fill_form",
-        "upload_file",
-        "handle_dialog",
-        "network_capture",
-        "network_list",
-        "network_query",
-        "network_fetch",
-        "network_replay",
-        "console_capture",
-        "console_list",
-        "console_get",
-        "console_clear",
-        "script_evaluate",
-    }:
-        return _json_content(await ws_manager.send_command(name, args))
+    if name == "action_click":
+        return _json_content(await ws_manager.send_command("action_click", args))
+
+    if name == "action_double_click":
+        target = args.get("target")
+        if not target:
+            return _json_content({"ok": False, "error": "target is required"})
+        return _json_content(await ws_manager.send_command("click", {"target": target, "clickCount": 2}))
+
+    if name == "action_hover":
+        return _json_content(await ws_manager.send_command("action_hover", args))
+
+    if name == "action_scroll":
+        return _json_content(await ws_manager.send_command("action_scroll", args))
+
+    if name == "action_drag":
+        return _json_content(await ws_manager.send_command("action_drag", args))
+
+    if name == "action_fill":
+        target = args.get("target")
+        value = args.get("value", "")
+        if not target:
+            return _json_content({"ok": False, "error": "target is required"})
+        params = {
+            "target": target,
+            "text": value,
+            "clearFirst": True,
+            "submitAfter": args.get("submitAfter", "none"),
+        }
+        return _json_content(await ws_manager.send_command("type", params))
+
+    if name == "action_press_key":
+        return _json_content(await ws_manager.send_command("action_press_key", args))
+
+    if name == "upload_file":
+        return _json_content(await ws_manager.send_command("upload_file", args))
+
+    if name == "handle_dialog":
+        return _json_content(await ws_manager.send_command("handle_dialog", args))
+
+    if name == "playwright_run":
+        return _json_content({"ok": False, "error": "not implemented in this phase"})
+
+    if name == "script_evaluate":
+        return _json_content(await ws_manager.send_command("script_evaluate", args))
+
+    if name == "save_as_pdf":
+        return _json_content({"ok": False, "error": "not implemented in this phase"})
+
+    if name == "console_check":
+        action = args.get("action")
+        if action in ("start", "stop", "status", "clear"):
+            return _json_content(await ws_manager.send_command("console_capture", {
+                "action": action,
+                "maxEntries": args.get("maxEntries", 300)
+            }))
+        elif action == "list":
+            return _json_content(await ws_manager.send_command("console_list", {
+                "types": args.get("types"),
+                "limit": args.get("limit", 50)
+            }))
+        elif action == "get":
+            return _json_content(await ws_manager.send_command("console_get", {"id": args.get("id")}))
+        else:
+            return _json_content({"ok": False, "error": f"unknown console action: {action}"})
+
+    if name == "network_check":
+        action = args.get("action")
+        if action in ("start", "stop", "status", "clear"):
+            return _json_content(await ws_manager.send_command("network_capture", {
+                "action": action,
+                "maxEntries": args.get("maxEntries", 500),
+                "includeResponseBody": args.get("includeResponseBody", False)
+            }))
+        elif action == "list":
+            return _json_content(await ws_manager.send_command("network_list", {
+                "limit": args.get("limit", 50),
+                "resourceType": args.get("resourceType"),
+                "status": args.get("status"),
+                "method": args.get("method")
+            }))
+        elif action == "query":
+            return _json_content(await ws_manager.send_command("network_query", {
+                "urlContains": args.get("urlContains"),
+                "method": args.get("method"),
+                "status": args.get("status"),
+                "resourceType": args.get("resourceType"),
+                "hasResponseBody": args.get("hasResponseBody"),
+                "includeBody": args.get("includeBody"),
+                "limit": args.get("limit", 50)
+            }))
+        elif action == "fetch":
+            return _json_content(await ws_manager.send_command("network_fetch", {
+                "url": args.get("url"),
+                "method": args.get("method", "GET"),
+                "headers": args.get("headers"),
+                "body": args.get("body"),
+                "responseType": args.get("responseType", "text")
+            }))
+        elif action == "replay":
+            return _json_content(await ws_manager.send_command("network_replay", {
+                "id": args.get("id"),
+                "requestId": args.get("requestId"),
+                "overrideHeaders": args.get("overrideHeaders"),
+                "overrideBody": args.get("overrideBody")
+            }))
+        else:
+            return _json_content({"ok": False, "error": f"unknown network action: {action}"})
+
+    if name == "browser_scrape_with_scroll":
+        # Reuse the existing implementation for consistent text formatting
+        return await tool_scrape_with_scroll(args)
 
     return _json_content({"ok": False, "error": f"unimplemented tool: {name}"})
 
