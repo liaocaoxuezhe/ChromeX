@@ -1060,6 +1060,9 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
                 return _json_content({"ok": False, "error": "tabId is required for close"})
             result = await ws_manager.send_command("agent_browser_tab_close", {"tabId": tab_id})
             return _json_content({"ok": True, "action": "close", "tabId": tab_id})
+        elif action == "info":
+            result = await ws_manager.send_command("agent_browser_tab_info", {})
+            return _json_content({"ok": True, "action": "info", **result})
         else:
             return _json_content({"ok": False, "error": f"unknown tab action: {action}"})
 
