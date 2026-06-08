@@ -658,6 +658,191 @@ def _obj_schema(properties=None, required=None):
 
 TOOL_DEFINITIONS.extend([
     {
+        "name": "browser.get_mode",
+        "description": "Return the current default browser control mode: dom, cua, or pw.",
+        "inputSchema": _obj_schema(),
+    },
+    {
+        "name": "browser.set_mode",
+        "description": "Set the session default browser control mode. Explicit browser.dom.*, browser.cua.*, and browser.pw.* tools remain callable regardless of this default.",
+        "inputSchema": _obj_schema({
+            "mode": {"type": "string", "enum": ["dom", "cua", "pw"], "description": "Default control mode for this MCP session."},
+        }, ["mode"]),
+    },
+    {
+        "name": "browser.dom.overview",
+        "description": "DOM/CDP mode alias for dom_overview. Use for deterministic, token-efficient page structure.",
+        "inputSchema": _obj_schema({"include": {"type": "array", "items": {"type": "string"}, "description": "Optional categories to include."}}),
+    },
+    {
+        "name": "browser.dom.query",
+        "description": "DOM/CDP mode alias for dom_query. Extract precise selector data as structured JSON.",
+        "inputSchema": _obj_schema({
+            "selector": {"type": "string", "description": "CSS selector."},
+            "attributes": {"type": "array", "items": {"type": "string"}, "description": "Attributes to extract."},
+            "limit": {"type": "integer", "description": "Max elements. Defaults to 50."},
+            "includeHtml": {"type": "boolean", "description": "Include truncated innerHTML if needed."},
+        }, ["selector"]),
+    },
+    {
+        "name": "browser.dom.search",
+        "description": "DOM/CDP mode alias for dom_search. Search visible text and return matching elements.",
+        "inputSchema": _obj_schema({
+            "query": {"type": "string", "description": "Text to search for."},
+            "contextLines": {"type": "integer", "description": "Sibling context count. Defaults to 2."},
+            "limit": {"type": "integer", "description": "Max matches. Defaults to 20."},
+            "caseSensitive": {"type": "boolean", "description": "Case-sensitive match. Defaults to false."},
+        }, ["query"]),
+    },
+    {
+        "name": "browser.dom.click",
+        "description": "DOM/CDP mode alias for action_click. Click by selector, text, aria-label, or CSS pixel coordinate.",
+        "inputSchema": _obj_schema({
+            "target": {"type": "object", "description": "selector, text, ariaLabel, or x/y CSS pixel coordinates."},
+            "method": {"type": "string", "enum": ["js", "cdp"], "description": "Click method hint. Current implementation uses CDP."},
+            "waitForNavigation": {"type": "boolean", "description": "Reserved for navigation waits."},
+            "waitForSelector": {"type": "string", "description": "Selector to wait for after click."},
+        }, ["target"]),
+    },
+    {
+        "name": "browser.dom.type",
+        "description": "DOM/CDP mode alias for action_type. Type text into an input found by selector, name, or placeholder.",
+        "inputSchema": _obj_schema({
+            "target": {"type": "object", "description": "selector, name, or placeholder."},
+            "text": {"type": "string", "description": "Text to enter."},
+            "clearFirst": {"type": "boolean", "description": "Clear existing value first. Defaults to true."},
+            "submitAfter": {"type": "string", "enum": ["enter", "tab", "none"], "description": "Optional key after typing."},
+        }, ["target", "text"]),
+    },
+    {
+        "name": "browser.dom.scroll",
+        "description": "DOM/CDP mode alias for action_scroll. Scroll by amount, to top/bottom, or to a selector.",
+        "inputSchema": _obj_schema({
+            "direction": {"type": "string", "enum": ["down", "up"], "description": "Scroll direction. Defaults to down."},
+            "amount": {"type": "integer", "description": "Pixels to scroll. Defaults to 500."},
+            "to": {"type": "string", "enum": ["top", "bottom"], "description": "Jump to top or bottom."},
+            "toSelector": {"type": "string", "description": "Scroll element into view."},
+            "waitAfter": {"type": "integer", "description": "Wait after scrolling in ms. Defaults to 500."},
+        }),
+    },
+    {
+        "name": "browser.cua.screenshot",
+        "description": "CUA mode screenshot for multimodal agents. Returns base64 image plus DPR and coordinate metadata. Coordinates for browser.cua.* are screenshot pixels.",
+        "inputSchema": _obj_schema({
+            "format": {"type": "string", "enum": ["png", "jpeg"], "description": "Image format. Defaults to png."},
+            "quality": {"type": "integer", "description": "JPEG quality 1-100."},
+        }),
+    },
+    {
+        "name": "browser.cua.click",
+        "description": "CUA mode coordinate click. x/y are screenshot pixels and are converted to CSS pixels before CDP dispatch.",
+        "inputSchema": _obj_schema({
+            "x": {"type": "number", "description": "X coordinate in screenshot pixels."},
+            "y": {"type": "number", "description": "Y coordinate in screenshot pixels."},
+            "button": {"type": "string", "enum": ["left", "right", "middle"], "description": "Mouse button. Defaults to left."},
+            "clickCount": {"type": "integer", "description": "Click count. Defaults to 1."},
+        }, ["x", "y"]),
+    },
+    {
+        "name": "browser.cua.double_click",
+        "description": "CUA mode coordinate double click. x/y are screenshot pixels.",
+        "inputSchema": _obj_schema({
+            "x": {"type": "number", "description": "X coordinate in screenshot pixels."},
+            "y": {"type": "number", "description": "Y coordinate in screenshot pixels."},
+        }, ["x", "y"]),
+    },
+    {
+        "name": "browser.cua.move",
+        "description": "CUA mode pointer move. x/y are screenshot pixels.",
+        "inputSchema": _obj_schema({
+            "x": {"type": "number", "description": "X coordinate in screenshot pixels."},
+            "y": {"type": "number", "description": "Y coordinate in screenshot pixels."},
+        }, ["x", "y"]),
+    },
+    {
+        "name": "browser.cua.type",
+        "description": "CUA mode text input into the currently focused element.",
+        "inputSchema": _obj_schema({
+            "text": {"type": "string", "description": "Text to type."},
+            "clearFirst": {"type": "boolean", "description": "Clear focused field first. Defaults to false."},
+        }, ["text"]),
+    },
+    {
+        "name": "browser.cua.key",
+        "description": "CUA mode keyboard shortcut, e.g. Enter, Escape, Command+C, Control+A.",
+        "inputSchema": _obj_schema({
+            "combo": {"type": "string", "description": "Key or shortcut combo."},
+        }, ["combo"]),
+    },
+    {
+        "name": "browser.cua.scroll",
+        "description": "CUA mode wheel scroll primitive. dx/dy are CSS wheel deltas.",
+        "inputSchema": _obj_schema({
+            "dx": {"type": "number", "description": "Horizontal wheel delta. Defaults to 0."},
+            "dy": {"type": "number", "description": "Vertical wheel delta. Defaults to 500."},
+            "x": {"type": "number", "description": "Optional CSS x wheel origin."},
+            "y": {"type": "number", "description": "Optional CSS y wheel origin."},
+        }),
+    },
+    {
+        "name": "browser.cua.drag",
+        "description": "CUA mode drag. x1/y1/x2/y2 are screenshot pixels and are converted to CSS pixels before CDP dispatch.",
+        "inputSchema": _obj_schema({
+            "x1": {"type": "number", "description": "Start X in screenshot pixels."},
+            "y1": {"type": "number", "description": "Start Y in screenshot pixels."},
+            "x2": {"type": "number", "description": "End X in screenshot pixels."},
+            "y2": {"type": "number", "description": "End Y in screenshot pixels."},
+            "duration": {"type": "integer", "description": "Drag duration in ms. Defaults to 500."},
+        }, ["x1", "y1", "x2", "y2"]),
+    },
+    {
+        "name": "browser.pw.start",
+        "description": "Start or attach the Playwright/CDP plane. Attach mode uses an existing --remote-debugging-port endpoint.",
+        "inputSchema": _obj_schema({
+            "mode": {"type": "string", "enum": ["attach", "launch"], "description": "Attach to CDP endpoint or launch a persistent browser context. Defaults to attach."},
+            "browser": {"type": "string", "enum": ["tabbit", "chrome"], "description": "Target browser. Defaults to chrome."},
+            "cdpUrl": {"type": "string", "description": "Explicit CDP endpoint URL for attach mode."},
+        }),
+    },
+    {
+        "name": "browser.pw.endpoint",
+        "description": "Return the current Playwright/CDP endpoint URL for browser-use or external Playwright connectOverCDP.",
+        "inputSchema": _obj_schema(),
+    },
+    {
+        "name": "browser.pw.stop",
+        "description": "Stop/reset the Playwright/CDP plane state.",
+        "inputSchema": _obj_schema(),
+    },
+    {
+        "name": "browser.pw.goto",
+        "description": "Playwright-mode navigation placeholder. Returns guidance until a Playwright session is connected.",
+        "inputSchema": _obj_schema({"url": {"type": "string", "description": "Destination URL."}}, ["url"]),
+    },
+    {
+        "name": "browser.pw.click",
+        "description": "Playwright-mode selector click placeholder. Returns guidance until a Playwright session is connected.",
+        "inputSchema": _obj_schema({"selector": {"type": "string", "description": "CSS selector."}}, ["selector"]),
+    },
+    {
+        "name": "browser.pw.fill",
+        "description": "Playwright-mode selector fill placeholder. Returns guidance until a Playwright session is connected.",
+        "inputSchema": _obj_schema({
+            "selector": {"type": "string", "description": "CSS selector."},
+            "text": {"type": "string", "description": "Text to fill."},
+        }, ["selector", "text"]),
+    },
+    {
+        "name": "browser.pw.eval",
+        "description": "Playwright-mode JavaScript evaluation placeholder. Returns guidance until a Playwright session is connected.",
+        "inputSchema": _obj_schema({"expr": {"type": "string", "description": "JavaScript expression."}}, ["expr"]),
+    },
+    {
+        "name": "browser.pw.screenshot",
+        "description": "Playwright-mode screenshot placeholder. Returns guidance until a Playwright session is connected.",
+        "inputSchema": _obj_schema(),
+    },
+    {
         "name": "browser_tabs_list",
         "description": "List all open Chrome tabs as structured JSON. Use this first when choosing a target tab.",
         "inputSchema": _obj_schema(),
@@ -933,6 +1118,34 @@ TOOL_DEFINITIONS.extend([
 # tools remain implemented in main.py for compatibility/internal use, but are
 # hidden from list_tools() to reduce agent tool-selection noise.
 PUBLIC_TOOL_NAMES = {
+    # Plan C session modes
+    "browser.get_mode",
+    "browser.set_mode",
+    # Plan C DOM/CDP namespace aliases
+    "browser.dom.overview",
+    "browser.dom.query",
+    "browser.dom.search",
+    "browser.dom.click",
+    "browser.dom.type",
+    "browser.dom.scroll",
+    # Plan C CUA namespace
+    "browser.cua.screenshot",
+    "browser.cua.click",
+    "browser.cua.double_click",
+    "browser.cua.move",
+    "browser.cua.type",
+    "browser.cua.key",
+    "browser.cua.scroll",
+    "browser.cua.drag",
+    # Plan C Playwright/CDP namespace
+    "browser.pw.start",
+    "browser.pw.endpoint",
+    "browser.pw.stop",
+    "browser.pw.goto",
+    "browser.pw.click",
+    "browser.pw.fill",
+    "browser.pw.eval",
+    "browser.pw.screenshot",
     # Browser/tab state
     "browser_tabs_list",
     "browser_tab_info",

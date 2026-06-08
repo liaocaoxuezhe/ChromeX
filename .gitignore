@@ -30,3 +30,6 @@ output/
 
 # Local tool state
 .deepseek/
+.agents/
+.claude/worktrees/
+.codex/

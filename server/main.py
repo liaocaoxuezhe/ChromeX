@@ -26,13 +26,14 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, ImageContent, Tool
 
 from server.hub_client import HubClient
-from server.vision import VisionClient
 from server.dom_compressor import compress_dom
 from server.logger import setup_logging, get_logger, get_operation_logger
 from server.debugger_manager import DebuggerManager
-from server.retry_manager import VisionFallbackHandler, VisionTimeoutError
 from server.script_library import get_script
 from server.tool_descriptions import TOOL_DEFINITIONS
+from server.modes.cua import CuaController
+from server.modes.playwright_plane import PlaywrightPlane
+from server.session.mode import ModeSession
 
 # 加载环境变量
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -48,27 +49,12 @@ op_logger = get_operation_logger()
 
 # 全局实例
 ws_manager = HubClient()
-vision_client = None  # 延迟初始化
 debugger_manager = DebuggerManager(ws_manager=ws_manager)
-vision_fallback_handler = None  # 延迟初始化
+mode_session = ModeSession()
+cua_controller = CuaController(ws_manager)
+playwright_plane = PlaywrightPlane()
 
 app = Server("local-browser")
-
-
-def get_vision_client() -> VisionClient:
-    """延迟初始化视觉模型客户端"""
-    global vision_client
-    if vision_client is None:
-        vision_client = VisionClient()
-    return vision_client
-
-
-def get_vision_fallback_handler() -> VisionFallbackHandler:
-    """延迟初始化 Vision 降级处理器"""
-    global vision_fallback_handler
-    if vision_fallback_handler is None:
-        vision_fallback_handler = VisionFallbackHandler(ws_manager)
-    return vision_fallback_handler
 
 
 # ==================== Tool 定义（从 tool_descriptions.py 加载） ====================
@@ -95,6 +81,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
             result = await tool_diagnose(arguments)
             result_summary = _extract_result_summary(result)
             op_logger.log_operation(name, arguments, result_summary=result_summary)
+            return result
+
+        if name in {"browser.get_mode", "browser.set_mode"}:
+            result = tool_session_mode(name, arguments)
+            op_logger.log_operation(name, arguments, result_summary=_extract_result_summary(result))
+            return result
+
+        if name.startswith("browser.pw."):
+            result = await tool_playwright_plane(name, arguments)
+            op_logger.log_operation(name, arguments, result_summary=_extract_result_summary(result))
             return result
 
         async with ws_manager.operation(name):
@@ -140,6 +136,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                 result = await tool_find_text(arguments)
             elif name == "browser_scrape_with_scroll":
                 result = await tool_scrape_with_scroll(arguments)
+            elif name.startswith("browser.cua."):
+                result = await tool_cua(name, arguments)
             elif name in {
                 "browser_tabs_list",
                 "browser_tab_info",
@@ -174,6 +172,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                 "console_get",
                 "console_clear",
                 "script_evaluate",
+                "browser.dom.overview",
+                "browser.dom.query",
+                "browser.dom.search",
+                "browser.dom.click",
+                "browser.dom.type",
+                "browser.dom.scroll",
             }:
                 result = await tool_agent_first(name, arguments)
             else:
@@ -274,111 +278,6 @@ async def tool_get_screenshot(args: dict) -> list[TextContent | ImageContent]:
             mimeType="image/jpeg",
         )
     ]
-
-
-async def tool_action_vision(args: dict) -> list[TextContent | ImageContent]:
-    """基于视觉模型执行操作"""
-    instruction = args["instruction"]
-
-    # 1. 获取截图和 viewport 信息
-    info = await ws_manager.send_command("get_info")
-    viewport = info.get("viewport", {})
-    client_w = viewport.get("innerWidth", 1280)
-    client_h = viewport.get("innerHeight", 720)
-    dpr = viewport.get("devicePixelRatio", 1)
-
-    screenshot_data = await ws_manager.send_command("screenshot")
-    image_b64 = screenshot_data.get("image", "")
-
-    if not image_b64:
-        return [TextContent(type="text", text="无法获取截图")]
-
-    # 2. 调用视觉模型(带降级处理)
-    vc = get_vision_client()
-    fallback_handler = get_vision_fallback_handler()
-
-    # 截图实际像素尺寸 = client_size * DPR
-    screenshot_w = int(client_w * dpr)
-    screenshot_h = int(client_h * dpr)
-
-    try:
-        action = await vc.analyze(
-            screenshot_b64=image_b64,
-            instruction=instruction,
-            viewport_width=screenshot_w,
-            viewport_height=screenshot_h,
-        )
-    except VisionTimeoutError as e:
-        # Vision API 超时,尝试降级策略
-        logger.warning(f"Vision API 超时,尝试降级: {instruction}")
-        try:
-            fallback_result = await fallback_handler.handle_vision_timeout(instruction, e)
-            return [
-                TextContent(
-                    type="text",
-                    text=(
-                        f"⚠️ Vision API 超时,已使用降级策略\n"
-                        f"方法: {fallback_result['method']}\n"
-                        f"选择器: {fallback_result.get('selector', 'N/A')}\n"
-                        f"结果: {fallback_result['result']}"
-                    )
-                )
-            ]
-        except Exception as fallback_error:
-            logger.error(f"降级策略也失败: {fallback_error}")
-            return [
-                TextContent(
-                    type="text",
-                    text=f"❌ Vision API 超时且降级失败: {fallback_error}"
-                )
-            ]
-
-    result_parts = [f"视觉分析: {action.reasoning}"]
-
-    if action.action == "none":
-        result_parts.append("模型未能确定操作，请尝试更明确的指令。")
-        return [TextContent(type="text", text="\n".join(result_parts))]
-
-    # 3. 坐标校准：模型坐标基于截图像素 → 转换为 CSS 像素
-    if action.x is not None and action.y is not None:
-        css_x = action.x / dpr
-        css_y = action.y / dpr
-        result_parts.append(
-            f"坐标: 模型({action.x}, {action.y}) → CSS({css_x:.0f}, {css_y:.0f})"
-        )
-    else:
-        css_x = client_w // 2
-        css_y = client_h // 2
-
-    # 4. 执行操作
-    if action.action == "click":
-        click_result = await ws_manager.send_command(
-            "click", {"x": css_x, "y": css_y}
-        )
-        result_parts.append(f"已点击 ({css_x:.0f}, {css_y:.0f})")
-
-    elif action.action == "type":
-        # 先点击目标位置
-        await ws_manager.send_command("click", {"x": css_x, "y": css_y})
-        await asyncio.sleep(0.3)
-        # 然后输入文字
-        text = action.text or ""
-        if text:
-            await ws_manager.send_command("type", {"text": text, "clearFirst": True})
-            result_parts.append(f"已在 ({css_x:.0f}, {css_y:.0f}) 输入: {text}")
-        else:
-            result_parts.append("type 操作但无输入文本")
-
-    elif action.action == "scroll":
-        direction = action.direction or "down"
-        delta_y = -500 if direction == "up" else 500
-        await ws_manager.send_command(
-            "scroll", {"x": css_x, "y": css_y, "deltaX": 0, "deltaY": delta_y}
-        )
-        result_parts.append(f"已滚动 {direction}")
-
-    # 返回截图作为执行结果的可视确认
-    return [TextContent(type="text", text="\n".join(result_parts))]
 
 
 async def tool_action_navigate(args: dict) -> list[TextContent | ImageContent]:
@@ -985,8 +884,53 @@ async def tool_scrape_with_scroll(args: dict) -> list[TextContent]:
 
 # ==================== Agent-first PRD Tool 实现 ====================
 
+def tool_session_mode(name: str, args: dict) -> list[TextContent]:
+    if name == "browser.get_mode":
+        return _json_content({"mode": mode_session.get_mode(), "supportedModes": ["dom", "cua", "pw"]})
+    return _json_content(mode_session.set_mode(args["mode"]))
+
+
+async def tool_cua(name: str, args: dict) -> list[TextContent]:
+    action = name.rsplit(".", 1)[-1]
+    handlers = {
+        "screenshot": cua_controller.screenshot,
+        "click": cua_controller.click,
+        "double_click": cua_controller.double_click,
+        "move": cua_controller.move,
+        "type": cua_controller.type,
+        "key": cua_controller.key,
+        "scroll": cua_controller.scroll,
+        "drag": cua_controller.drag,
+    }
+    handler = handlers.get(action)
+    if handler is None:
+        return _json_content({"ok": False, "error": f"unknown CUA action: {action}"})
+    return _json_content(await handler(args))
+
+
+async def tool_playwright_plane(name: str, args: dict) -> list[TextContent]:
+    action = name.rsplit(".", 1)[-1]
+    if action == "start":
+        return _json_content(await playwright_plane.start(args))
+    if action == "endpoint":
+        return _json_content(await playwright_plane.endpoint(args))
+    if action == "stop":
+        return _json_content(await playwright_plane.stop(args))
+    return _json_content(await playwright_plane.command_not_available(action))
+
+
 async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
     """Dispatch the PRD tool namespace and return JSON-only observations."""
+    aliases = {
+        "browser.dom.overview": "dom_overview",
+        "browser.dom.query": "dom_query",
+        "browser.dom.search": "dom_search",
+        "browser.dom.click": "action_click",
+        "browser.dom.type": "action_type",
+        "browser.dom.scroll": "action_scroll",
+    }
+    name = aliases.get(name, name)
+
     if name == "browser_tabs_list":
         raw = await ws_manager.send_command("get_all_tabs")
         tabs = []

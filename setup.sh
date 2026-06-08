@@ -73,11 +73,12 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 else
     echo "  ⚠ 未找到 .env 文件，创建模板..."
     cat > "$PROJECT_DIR/.env" << 'EOF'
-DOUBAO_API_KEY=your-api-key-here
-DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-DOUBAO_MODEL=doubao-seed-1.8-thinking-250528
+LOG_LEVEL=INFO
+LINK2CHROME_BROWSER=chrome
+# 可选：Playwright attach 模式使用
+# PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222
 EOF
-    echo "  请编辑 .env 文件填入你的 API Key"
+    echo "  请按需编辑 .env 文件"
 fi
 
 echo ""
@@ -99,4 +100,4 @@ cat "$PROJECT_DIR/claude_config_snippet.json"
 echo ""
 echo ""
 echo "3. 启动后，扩展会自动连接 WebSocket 服务器"
-echo "   在 Claude Code 中即可使用 browser_* 系列工具"
+echo "   在 MCP 客户端中即可使用 browser.dom.* / browser.cua.* / browser.pw.* 系列工具"
