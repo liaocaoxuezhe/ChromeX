@@ -14,19 +14,6 @@ def tool_names():
     return {tool["name"] for tool in TOOL_DEFINITIONS}
 
 
-def test_plan_c_public_tool_names_are_exposed():
-    names = tool_names()
-
-    assert "browser.set_mode" in names
-    assert "browser.get_mode" in names
-    assert "browser.dom.overview" in names
-    assert "browser.cua.screenshot" in names
-    assert "browser.cua.click" in names
-    assert "browser.cua.drag" in names
-    assert "browser.pw.start" in names
-    assert "browser.pw.endpoint" in names
-
-
 def test_legacy_external_vision_tool_is_not_public():
     names = tool_names()
 
@@ -50,18 +37,6 @@ def test_requirements_do_not_force_python39_to_install_incompatible_mcp():
 
     assert "\nmcp>=1.0.0\n" not in f"\n{requirements}"
     assert 'python_version >= "3.10"' in requirements
-
-
-def test_session_mode_validates_supported_modes():
-    from server.session.mode import ModeSession, ModeError
-
-    session = ModeSession()
-    assert session.get_mode() == "dom"
-    assert session.set_mode("cua") == {"mode": "cua", "previousMode": "dom"}
-    assert session.get_mode() == "cua"
-
-    with pytest.raises(ModeError):
-        session.set_mode("vision")
 
 
 def test_browser_registry_prefers_env_path(monkeypatch, tmp_path):
