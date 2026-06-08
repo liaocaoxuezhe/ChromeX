@@ -27,9 +27,11 @@ from mcp.types import TextContent, ImageContent, Tool
 
 from server.hub_client import HubClient
 from server.dom_compressor import compress_dom
+from server.dom_snapshot_cache import DomSnapshotCache
 from server.logger import setup_logging, get_logger, get_operation_logger
 from server.debugger_manager import DebuggerManager
 from server.script_library import get_script
+from server.session_manager import SessionManager
 from server.tool_descriptions import TOOL_DEFINITIONS
 from server.modes.cua import CuaController
 from server.modes.playwright_plane import PlaywrightPlane
@@ -51,6 +53,8 @@ ws_manager = HubClient()
 debugger_manager = DebuggerManager(ws_manager=ws_manager)
 cua_controller = CuaController(ws_manager)
 playwright_plane = PlaywrightPlane()
+session_manager = SessionManager()
+dom_cache = DomSnapshotCache()
 
 app = Server("local-browser")
 
@@ -1000,6 +1004,20 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
                 },
             )
             final_url = result.get("url", url)
+
+            # Session 集成
+            session = args.get("session")
+            group_title = args.get("group_title")
+            if session:
+                await session_manager.ensure_session(session, group_title, ws_manager)
+                try:
+                    tab_info = await ws_manager.send_command("agent_browser_tab_info", {})
+                    tab_id = tab_info.get("id")
+                    if tab_id is not None:
+                        await session_manager.add_tab_to_session(session, tab_id, ws_manager)
+                except Exception as e:
+                    logger.warning(f"导航后加入 session 失败: {e}")
+
             return _json_content(
                 {
                     "ok": True,
@@ -1009,6 +1027,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
                     "status": result.get("status", "unknown"),
                     "method": result.get("method", "unknown"),
                     "elapsed": int((time.monotonic() - started) * 1000),
+                    "hint": "Page loaded. Use browser_dom_overview to inspect the page structure.",
                 }
             )
         elif action == "back":
@@ -1043,11 +1062,17 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
     if name == "browser_tab":
         action = args.get("action")
         if action == "new":
+            session = args.get("session")
+            group_title = args.get("group_title")
             result = await ws_manager.send_command("agent_browser_tab_new", {
                 "url": args.get("url"),
                 "active": args.get("active", True)
             })
-            return _json_content({"ok": True, "action": "new", "tabId": result.get("tabId")})
+            tab_id = result.get("tabId")
+            if session and tab_id is not None:
+                await session_manager.ensure_session(session, group_title, ws_manager)
+                await session_manager.add_tab_to_session(session, tab_id, ws_manager)
+            return _json_content({"ok": True, "action": "new", "tabId": tab_id})
         elif action == "switch":
             tab_id = args.get("tabId")
             if tab_id is None:
@@ -1067,10 +1092,41 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
             return _json_content({"ok": False, "error": f"unknown tab action: {action}"})
 
     if name == "browser_session":
-        return _json_content({"ok": False, "error": "not implemented in this phase"})
+        action = args.get("action", "list")
+        if action == "list":
+            return _json_content({"ok": True, "sessions": session_manager.list_sessions()})
+        if action == "close":
+            session = args.get("session")
+            if not session:
+                return _json_content({"ok": False, "error": "session name is required for action='close'"})
+            result = await session_manager.close_session(session, ws_manager)
+            return _json_content(result)
+        return _json_content({"ok": False, "error": f"unknown session action: {action}"})
 
     if name == "browser_dom_overview":
-        return _json_content(await ws_manager.send_command("dom_overview", args))
+        raw = await ws_manager.send_command("dom_overview", args)
+        try:
+            info = await ws_manager.send_command("get_info")
+            current_url = info.get("url", "")
+            current_tab_id = info.get("tabId")
+        except Exception:
+            current_url = ""
+            current_tab_id = None
+
+        raw_json = json.dumps(raw, ensure_ascii=False)
+        markdown = compress_dom(raw_json, max_chars=args.get("max_chars", 30000))
+
+        if current_tab_id is not None:
+            dom_cache.save_snapshot(current_tab_id, current_url, markdown)
+
+        return _json_content(
+            {
+                "ok": True,
+                "url": current_url,
+                "overview": markdown,
+                "hint": "Use action_click / action_fill to interact. Use browser_dom_diff after actions to verify changes.",
+            }
+        )
 
     if name == "browser_dom_query":
         return _json_content(await ws_manager.send_command("dom_query", args))
@@ -1079,10 +1135,98 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
         return _json_content(await ws_manager.send_command("dom_search", args))
 
     if name == "browser_dom_get_text":
-        return _json_content({"ok": False, "error": "not implemented in this phase"})
+        selector = args.get("selector")
+        max_chars = args.get("max_chars", 20000)
+        include_meta = args.get("include_meta", False)
+
+        if selector:
+            result = await ws_manager.send_command("dom_get_text", {"selector": selector})
+            text = result.get("text", "")
+            truncated = len(text) > max_chars
+            if truncated:
+                text = text[:max_chars] + "\n...(truncated)"
+
+            payload = {
+                "ok": True,
+                "mode": "element",
+                "selector": selector,
+                "text": text,
+                "charCount": len(text),
+                "truncated": truncated,
+            }
+            if include_meta:
+                payload["meta"] = result.get("meta", {})
+            return _json_content(payload)
+        else:
+            result = await ws_manager.send_command("extract_content", {})
+            if "error" in result:
+                return _json_content({"ok": False, "error": result["error"]})
+
+            title = result.get("title", "")
+            byline = result.get("byline", "")
+            content_html = result.get("content", "")
+            excerpt = result.get("excerpt", "")
+
+            if not content_html:
+                return _json_content({"ok": False, "error": "页面内容为空，Readability 无法提取有效正文。"})
+
+            content_md = md(
+                content_html,
+                heading_style="atx",
+                bullets="-",
+                strip=["img"],
+            )
+            content_md = re.sub(r"\n{3,}", "\n\n", content_md).strip()
+
+            parts = []
+            if title:
+                parts.append(f"# {title}\n")
+            if byline:
+                parts.append(f"> {byline}\n")
+            if excerpt:
+                parts.append(f"*{excerpt}*\n")
+            parts.append(content_md)
+            full_text = "\n".join(parts)
+
+            truncated = len(full_text) > max_chars
+            if truncated:
+                full_text = full_text[:max_chars] + "\n...(truncated)"
+
+            return _json_content(
+                {
+                    "ok": True,
+                    "mode": "readability",
+                    "title": title,
+                    "content": full_text,
+                    "charCount": len(full_text),
+                    "truncated": truncated,
+                }
+            )
 
     if name == "browser_dom_diff":
-        return _json_content({"ok": False, "error": "not implemented in this phase"})
+        try:
+            info = await ws_manager.send_command("get_info")
+            current_url = info.get("url", "")
+            current_tab_id = info.get("tabId")
+        except Exception:
+            return _json_content({"ok": False, "error": "无法获取当前页面信息"})
+
+        if current_tab_id is None:
+            return _json_content({"ok": False, "error": "无法确定当前标签页 ID"})
+
+        raw = await ws_manager.send_command("dom_overview", args)
+        raw_json = json.dumps(raw, ensure_ascii=False)
+        current_overview = compress_dom(raw_json, max_chars=args.get("max_chars", 30000))
+
+        diff = dom_cache.compute_diff(current_tab_id, current_overview, current_url)
+
+        return _json_content(
+            {
+                "ok": True,
+                "diff": diff,
+                "hint": "Positive diff lines (+) are new content. Negative (-) are removed." if diff.startswith("---") else "",
+            }
+        )
 
     if name == "browser_screenshot":
         screenshot = await ws_manager.send_command(
@@ -1214,6 +1358,37 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
     if name == "browser_scrape_with_scroll":
         # Reuse the existing implementation for consistent text formatting
         return await tool_scrape_with_scroll(args)
+
+    # ==================== Legacy DOM/Action tools ====================
+    if name in {
+        "dom_overview",
+        "dom_query",
+        "dom_search",
+        "dom_structured_data",
+        "dom_element_detail",
+        "dom_wait_for",
+        "action_click",
+        "action_drag",
+        "action_type",
+        "action_scroll",
+        "action_select",
+        "action_hover",
+        "action_press_key",
+        "action_fill_form",
+        "upload_file",
+        "handle_dialog",
+        "network_capture",
+        "network_list",
+        "network_query",
+        "network_fetch",
+        "network_replay",
+        "console_capture",
+        "console_list",
+        "console_get",
+        "console_clear",
+        "script_evaluate",
+    }:
+        return _json_content(await ws_manager.send_command(name, args))
 
     return _json_content({"ok": False, "error": f"unimplemented tool: {name}"})
 

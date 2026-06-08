@@ -839,6 +839,18 @@ async function handleCommand(message) {
           wsConnected
         };
         break;
+      case "dom_get_text":
+        response.data = await cmdDomGetText(params);
+        break;
+      case "tab_group_create":
+        response.data = await cmdTabGroupCreate(params);
+        break;
+      case "tab_group_add":
+        response.data = await cmdTabGroupAdd(params);
+        break;
+      case "tab_group_close":
+        response.data = await cmdTabGroupClose(params);
+        break;
       default:
         throw new Error(`未知指令: ${command}`);
     }
@@ -2929,6 +2941,99 @@ async function cmdScriptEvaluate(params) {
     type: typeof result.result,
     elapsed: Date.now() - started
   };
+}
+
+// ==================== Phase 2: Session + DOM Observation Commands ====================
+
+async function cmdDomGetText(params) {
+  const { selector } = params;
+  if (!selector) {
+    throw new Error("dom_get_text requires selector");
+  }
+
+  const script = `
+    (function() {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return JSON.stringify({ error: "selector not found" });
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return JSON.stringify({
+        text: el.innerText || "",
+        charCount: (el.innerText || "").length,
+        meta: {
+          tag: el.tagName.toLowerCase(),
+          role: el.getAttribute("role") || "",
+          ariaLabel: el.getAttribute("aria-label") || "",
+          childCount: el.children.length,
+          visible: rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden"
+        }
+      });
+    })()
+  `;
+
+  const result = await sendCDP("Runtime.evaluate", {
+    expression: script,
+    returnByValue: true
+  });
+
+  if (result.exceptionDetails) {
+    throw new Error("dom_get_text failed: " + JSON.stringify(result.exceptionDetails));
+  }
+
+  const parsed = JSON.parse(result.result.value);
+  if (parsed.error) {
+    throw new Error(parsed.error);
+  }
+  return parsed;
+}
+
+async function cmdTabGroupCreate(params) {
+  const title = params.title || "Link2Chrome Session";
+  // 创建标签组需要一个初始 tab。先获取当前目标 tab 或创建一个临时 tab。
+  let tabId = targetTabId;
+  if (!tabId) {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (tabs.length > 0) {
+      tabId = tabs[0].id;
+    }
+  }
+  if (!tabId) {
+    // 没有可用 tab，创建一个空白标签页
+    const newTab = await chrome.tabs.create({ url: "about:blank" });
+    tabId = newTab.id;
+    targetTabId = tabId;
+  }
+
+  const groupId = await chrome.tabs.group({ tabIds: [tabId] });
+  await chrome.tabGroups.update(groupId, { title, color: "blue" });
+  return { groupId, title };
+}
+
+async function cmdTabGroupAdd(params) {
+  const { tabId, groupId } = params;
+  if (tabId === undefined || groupId === undefined) {
+    throw new Error("tab_group_add requires tabId and groupId");
+  }
+  await chrome.tabs.group({ tabIds: [tabId], groupId });
+  return { ok: true, tabId, groupId };
+}
+
+async function cmdTabGroupClose(params) {
+  const { groupId } = params;
+  if (groupId === undefined) {
+    throw new Error("tab_group_close requires groupId");
+  }
+  const tabs = await chrome.tabs.query({ groupId });
+  const tabIds = tabs.map(t => t.id);
+  if (tabIds.length > 0) {
+    await chrome.tabs.remove(tabIds);
+  }
+  // 清理 targetTabId / attachedTabId
+  for (const tid of tabIds) {
+    if (tid === targetTabId) targetTabId = null;
+    if (tid === attachedTabId) attachedTabId = null;
+  }
+  return { ok: true, closedCount: tabIds.length };
 }
 
 // ==================== 初始化 ====================
