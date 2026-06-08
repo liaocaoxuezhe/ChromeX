@@ -1108,6 +1108,47 @@ TOOL_DEFINITIONS.extend([
             "timeout": {"type": "integer", "description": "Timeout in ms. Defaults to 5000."},
         }, ["expression"]),
     },
+    {
+        "name": "playwright_run",
+        "description": (
+            "Execute Playwright-style JavaScript code against the real browser via a page shim.\n"
+            "【使用场景】\n"
+            "- 需要链式操作（如先 goto 再 click 再 fill）时，比单个 tool 调用更高效\n"
+            "- 需要 Playwright API 语义（locator、waitForSelector、evaluate 等）\n"
+            "- 复杂页面自动化脚本\n"
+            "【可用 API】\n"
+            "- page.goto(url) / page.title() / page.url()\n"
+            "- page.locator(selector) → { click, fill, type, press, textContent, innerText, getAttribute, isVisible, count, first, nth, locator }\n"
+            "- page.getByText(text, opts) / page.getByRole(role, opts) / page.getByLabel(text) / page.getByPlaceholder(text)\n"
+            "- page.waitForSelector(selector, opts) / page.waitForTimeout(ms)\n"
+            "- page.evaluate(fnOrString) / page.screenshot()\n"
+            "【注意】代码在 Extension 端执行，超时后会被强制终止"
+        ),
+        "inputSchema": _obj_schema({
+            "code": {"type": "string", "description": "Playwright-style JavaScript code to execute. The code runs inside an async function with 'page' available. Example: \"await page.goto('https://example.com'); const t = await page.title(); return t;\""},
+            "timeout": {"type": "integer", "description": "Maximum execution time in milliseconds. Default 30000."},
+            "max_result_chars": {"type": "integer", "description": "Maximum number of characters in the returned result. Default 20000."},
+        }, ["code"]),
+    },
+    {
+        "name": "save_as_pdf",
+        "description": (
+            "Render the current page as a PDF file.\n"
+            "【使用场景】\n"
+            "- 保存网页为 PDF 存档\n"
+            "- 打印页面内容到本地文件\n"
+            "【注意】\n"
+            "- 如果未指定 path，会自动生成以页面标题命名的临时文件\n"
+            "- 返回的 PDF 由 MCP Server 写入本地磁盘"
+        ),
+        "inputSchema": _obj_schema({
+            "path": {"type": "string", "description": "Local file path to save the PDF. Optional; if omitted, a temp file is used."},
+            "format": {"type": "string", "enum": ["a4", "letter", "legal", "a3", "tabloid"], "description": "Paper format. Default a4."},
+            "landscape": {"type": "boolean", "description": "Landscape orientation. Default false."},
+            "scale": {"type": "number", "description": "Scale factor. Default 1.0."},
+            "printBackground": {"type": "boolean", "description": "Print background graphics. Default true."},
+        }),
+    },
 ])
 
 
@@ -1182,6 +1223,10 @@ PUBLIC_TOOL_NAMES = {
     "console_clear",
     # Script evaluation
     "script_evaluate",
+    # Playwright runtime
+    "playwright_run",
+    # PDF export
+    "save_as_pdf",
     # Legacy tools with unique value
     "browser_diagnose",
     "browser_extract_content",
