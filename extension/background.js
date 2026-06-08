@@ -831,6 +831,12 @@ async function handleCommand(message) {
       case "script_evaluate":
         response.data = await cmdScriptEvaluate(params);
         break;
+      case "playwright_batch":
+        response.data = await cmdPlaywrightBatch(params);
+        break;
+      case "save_as_pdf":
+        response.data = await cmdSaveAsPdf(params);
+        break;
       case "ping_version":
         response.data = {
           version: BUILD_VERSION,
@@ -2928,6 +2934,305 @@ async function cmdScriptEvaluate(params) {
     error: result.error,
     type: typeof result.result,
     elapsed: Date.now() - started
+  };
+}
+
+// ==================== Playwright Batch Helpers ====================
+
+async function evalInPage(expression, tabId) {
+  const targetId = tabId || await ensureDebuggerAttached();
+  const result = await chrome.debugger.sendCommand(
+    { tabId: targetId },
+    "Runtime.evaluate",
+    { expression, returnByValue: true, awaitPromise: true }
+  );
+  if (result.exceptionDetails) {
+    throw new Error(result.exceptionDetails.exception?.description || String(result.exceptionDetails));
+  }
+  return result.result?.value;
+}
+
+async function waitForSelectorCdp(selector, opts = {}, tabId) {
+  const timeout = opts.timeout || 10000;
+  const script = `
+    new Promise((resolve) => {
+      const deadline = Date.now() + ${timeout};
+      const check = () => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (el) {
+          const r = el.getBoundingClientRect();
+          const st = window.getComputedStyle(el);
+          const visible = r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0';
+          if (visible) { resolve(true); return; }
+        }
+        if (Date.now() > deadline) resolve(false);
+        else setTimeout(check, 150);
+      };
+      check();
+    })
+  `;
+  return evalInPage(script, tabId);
+}
+
+async function captureScreenshot(tabId) {
+  // 优先复用现有的 cmdScreenshot
+  return cmdScreenshot({ format: "png", quality: 80 });
+}
+
+function escapeJsString(str) {
+  return String(str).replace(/["\\]/g, "\\$&");
+}
+
+function createLocatorNth(selector, n, tabId) {
+  // 使用 :nth-of-type 并不总是正确（因为 selector 可能不是单一标签），
+  // 更稳妥的方式是在 JS 中用 querySelectorAll 索引
+  return createLocator(`${selector} [data-l2c-nth]`, tabId);
+}
+
+function createLocatorByText(text, opts = {}, tabId) {
+  const exact = opts.exact === true;
+  const scriptBase = exact
+    ? `Array.from(document.querySelectorAll('*')).find(el => el.textContent.trim() === ${JSON.stringify(text)})`
+    : `Array.from(document.querySelectorAll('*')).find(el => el.textContent.includes(${JSON.stringify(text)}))`;
+  return {
+    click: async (opts) => {
+      const info = await evalInPage(`(() => { const el = ${scriptBase}; if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`, tabId);
+      if (!info) throw new Error(`getByText(${JSON.stringify(text)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+    },
+    fill: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { filled: true };
+    },
+    type: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
+      return { typed: true };
+    },
+    press: async (key) => cmdSendKeys({ keys: key }),
+    textContent: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.textContent : null; })()`, tabId),
+    innerText: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.innerText : null; })()`, tabId),
+    getAttribute: async (name) => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`, tabId),
+    isVisible: async () => evalInPage(`(() => { const el = ${scriptBase}; if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`, tabId),
+    count: async () => evalInPage(`Array.from(document.querySelectorAll('*')).filter(el => el.textContent.includes(${JSON.stringify(text)})).length`, tabId),
+    first: () => createLocatorByText(text, opts, tabId),
+    nth: () => createLocatorByText(text, opts, tabId),
+    locator: (childSel) => createLocator(`${childSel}`, tabId)
+  };
+}
+
+function createLocatorByRole(role, opts = {}, tabId) {
+  const name = opts.name;
+  let scriptBase = `Array.from(document.querySelectorAll('[role=${JSON.stringify(role)}]'))`;
+  if (name !== undefined) {
+    scriptBase += `.filter(el => el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)}))`;
+  }
+  scriptBase = `(Array.from(document.querySelectorAll('[role=${JSON.stringify(role)}]')).filter(el => ${name === undefined ? "true" : `(el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)})`}))[0]`;
+  return {
+    click: async (opts) => {
+      const info = await evalInPage(`(() => { const el = ${scriptBase}; if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`, tabId);
+      if (!info) throw new Error(`getByRole(${JSON.stringify(role)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+    },
+    fill: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { filled: true };
+    },
+    type: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
+      return { typed: true };
+    },
+    press: async (key) => cmdSendKeys({ keys: key }),
+    textContent: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.textContent : null; })()`, tabId),
+    innerText: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.innerText : null; })()`, tabId),
+    getAttribute: async (name) => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`, tabId),
+    isVisible: async () => evalInPage(`(() => { const el = ${scriptBase}; if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`, tabId),
+    count: async () => evalInPage(`Array.from(document.querySelectorAll('[role=${JSON.stringify(role)}]')).filter(el => ${name === undefined ? "true" : `(el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)})`}).length`, tabId),
+    first: () => createLocatorByRole(role, opts, tabId),
+    nth: () => createLocatorByRole(role, opts, tabId),
+    locator: (childSel) => createLocator(`${childSel}`, tabId)
+  };
+}
+
+function createLocatorByLabel(text, tabId) {
+  const scriptBase = `(Array.from(document.querySelectorAll('label')).filter(lbl => lbl.textContent.includes(${JSON.stringify(text)}) || lbl.getAttribute('for') && (document.querySelector('[id="' + lbl.getAttribute('for') + '"]')?.getAttribute('aria-label') === ${JSON.stringify(text)})))[0]`;
+  const targetScript = `(() => { const lbl = ${scriptBase}; if (!lbl) return null; const forId = lbl.getAttribute('for'); return forId ? document.getElementById(forId) : lbl.querySelector('input, textarea, select'); })()`;
+  return {
+    click: async (opts) => {
+      const info = await evalInPage(`(() => { const el = (${targetScript}); if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`, tabId);
+      if (!info) throw new Error(`getByLabel(${JSON.stringify(text)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+    },
+    fill: async (value) => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { filled: true };
+    },
+    type: async (value) => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
+      return { typed: true };
+    },
+    press: async (key) => cmdSendKeys({ keys: key }),
+    textContent: async () => evalInPage(`(() => { const el = (${targetScript}); return el ? el.textContent : null; })()`, tabId),
+    innerText: async () => evalInPage(`(() => { const el = (${targetScript}); return el ? el.innerText : null; })()`, tabId),
+    getAttribute: async (name) => evalInPage(`(() => { const el = (${targetScript}); return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`, tabId),
+    isVisible: async () => evalInPage(`(() => { const el = (${targetScript}); if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`, tabId),
+    count: async () => evalInPage(`Array.from(document.querySelectorAll('label')).filter(lbl => lbl.textContent.includes(${JSON.stringify(text)}) || lbl.getAttribute('for') && (document.querySelector('[id="' + lbl.getAttribute('for') + '"]')?.getAttribute('aria-label') === ${JSON.stringify(text)})).length`, tabId),
+    first: () => createLocatorByLabel(text, tabId),
+    nth: () => createLocatorByLabel(text, tabId),
+    locator: (childSel) => createLocator(`${childSel}`, tabId)
+  };
+}
+
+function createLocatorByPlaceholder(text, tabId) {
+  const scriptBase = `document.querySelector('[placeholder*=${JSON.stringify(text)}]')`;
+  return createLocator(scriptBase, tabId);
+}
+
+function createLocator(selector, tabId) {
+  // 允许 selector 本身是一段 JS 表达式（如 getByText 返回的脚本），
+  // 因此需要区分：如果是纯 CSS 选择器，则直接包装；否则原样使用。
+  const isExpression = selector.includes("document.querySelector") || selector.includes("Array.from");
+  const resolveScript = isExpression
+    ? `(() => { const el = (${selector}); return el ? {x: Math.round(el.getBoundingClientRect().x + el.getBoundingClientRect().width/2), y: Math.round(el.getBoundingClientRect().y + el.getBoundingClientRect().height/2)} : null; })()`
+    : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? {x: Math.round(el.getBoundingClientRect().x + el.getBoundingClientRect().width/2), y: Math.round(el.getBoundingClientRect().y + el.getBoundingClientRect().height/2)} : null; })()`;
+  const countScript = isExpression
+    ? `(typeof (${selector}) !== 'undefined' && (${selector}) !== null && !Array.isArray(${selector}) ? 1 : (Array.isArray(${selector}) ? (${selector}).length : 0))`
+    : `document.querySelectorAll(${JSON.stringify(selector)}).length`;
+
+  const locator = {
+    click: async (opts) => {
+      const info = await evalInPage(resolveScript, tabId);
+      if (!info) throw new Error(`locator.click: element not found for ${selector}`);
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+    },
+    fill: async (value) => {
+      if (isExpression) {
+        await evalInPage(`(() => { const el = (${selector}); if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      } else {
+        await cmdType({ selector, text: value, clearFirst: true });
+      }
+      return { filled: true };
+    },
+    type: async (value) => {
+      if (isExpression) {
+        await evalInPage(`(() => { const el = (${selector}); if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
+      } else {
+        await cmdType({ selector, text: value, clearFirst: false });
+      }
+      return { typed: true };
+    },
+    press: async (key) => cmdSendKeys({ keys: key }),
+    textContent: async () => evalInPage(isExpression
+      ? `(() => { const el = (${selector}); return el ? el.textContent : null; })()`
+      : `document.querySelector(${JSON.stringify(selector)})?.textContent`, tabId),
+    innerText: async () => evalInPage(isExpression
+      ? `(() => { const el = (${selector}); return el ? el.innerText : null; })()`
+      : `document.querySelector(${JSON.stringify(selector)})?.innerText`, tabId),
+    getAttribute: async (name) => evalInPage(isExpression
+      ? `(() => { const el = (${selector}); return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`
+      : `document.querySelector(${JSON.stringify(selector)})?.getAttribute(${JSON.stringify(name)})`, tabId),
+    isVisible: async () => evalInPage(isExpression
+      ? `(() => { const el = (${selector}); if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`
+      : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return !!(el && el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden'); })()`, tabId),
+    count: async () => evalInPage(countScript, tabId),
+    first: () => createLocator(isExpression ? selector : `${selector}:first-child`, tabId),
+    nth: (n) => {
+      if (isExpression) {
+        // 复杂表达式不支持 nth，返回同一个 locator（退化行为）
+        return createLocator(selector, tabId);
+      }
+      return createLocatorNth(selector, n, tabId);
+    },
+    locator: (childSel) => createLocator(isExpression ? `${selector} ${childSel}` : `${selector} ${childSel}`, tabId)
+  };
+  return locator;
+}
+
+function createPageShim(targetTabId) {
+  return {
+    goto: async (url) => cmdNavigate({ url, timeout: 10000, waitUntil: "dom-ready" }),
+    title: async () => evalInPage("document.title", targetTabId),
+    url: async () => evalInPage("window.location.href", targetTabId),
+    locator: (selector) => createLocator(selector, targetTabId),
+    getByText: (text, opts) => createLocatorByText(text, opts, targetTabId),
+    getByRole: (role, opts) => createLocatorByRole(role, opts, targetTabId),
+    getByLabel: (text) => createLocatorByLabel(text, targetTabId),
+    getByPlaceholder: (text) => createLocatorByPlaceholder(text, targetTabId),
+    waitForSelector: async (sel, opts = {}) => waitForSelectorCdp(sel, opts, targetTabId),
+    waitForTimeout: async (ms) => new Promise(r => setTimeout(r, ms)),
+    evaluate: async (fn) => {
+      const expression = typeof fn === "string" ? fn : `(${fn.toString()})()`;
+      return evalInPage(expression, targetTabId);
+    },
+    screenshot: async () => captureScreenshot(targetTabId),
+  };
+}
+
+async function cmdPlaywrightBatch(params) {
+  const { code, timeout = 30000 } = params;
+
+  // 确保当前有附加的 debugger/tab
+  const tabId = await ensureDebuggerAttached();
+  targetTabId = tabId;
+
+  const page = createPageShim(tabId);
+
+  // 构造一个异步函数并执行用户代码
+  // 使用 new Function 而不是 AsyncFunction，兼容性更好
+  const fn = new Function("page", `return (async (page) => { ${code} })(page)`);
+
+  const result = await Promise.race([
+    fn(page),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Playwright timeout")), timeout))
+  ]);
+
+  return { ok: true, result };
+}
+
+async function cmdSaveAsPdf(params) {
+  const {
+    format = "a4",
+    landscape = false,
+    scale = 1.0,
+    printBackground = true
+  } = params;
+
+  const tabId = await ensureDebuggerAttached();
+
+  await chrome.debugger.sendCommand({ tabId }, "Page.enable").catch(() => {});
+
+  const formatSizes = {
+    a4: { paperWidth: 8.27, paperHeight: 11.69 },
+    letter: { paperWidth: 8.5, paperHeight: 11.0 },
+    legal: { paperWidth: 8.5, paperHeight: 14.0 },
+    a3: { paperWidth: 11.69, paperHeight: 16.54 },
+    tabloid: { paperWidth: 11.0, paperHeight: 17.0 }
+  };
+  const size = formatSizes[format] || formatSizes.a4;
+
+  const result = await chrome.debugger.sendCommand(
+    { tabId },
+    "Page.printToPDF",
+    {
+      landscape: !!landscape,
+      printBackground: !!printBackground,
+      scale: Math.max(0.1, Math.min(2.0, scale)),
+      paperWidth: size.paperWidth,
+      paperHeight: size.paperHeight,
+      preferCSSPageSize: false,
+      displayHeaderFooter: false
+    }
+  );
+
+  if (!result || !result.data) {
+    throw new Error("Page.printToPDF returned no data");
+  }
+
+  return {
+    ok: true,
+    data: result.data,
+    format,
+    landscape: !!landscape,
+    scale
   };
 }
 
