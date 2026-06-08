@@ -35,6 +35,7 @@ from server.session_manager import SessionManager
 from server.tool_descriptions import TOOL_DEFINITIONS
 from server.modes.cua import CuaController
 from server.modes.playwright_plane import PlaywrightPlane
+from server.playwright_runtime import PlaywrightRuntime
 
 # 加载环境变量
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -55,6 +56,7 @@ cua_controller = CuaController(ws_manager)
 playwright_plane = PlaywrightPlane()
 session_manager = SessionManager()
 dom_cache = DomSnapshotCache()
+playwright_runtime = PlaywrightRuntime()
 
 app = Server("local-browser")
 
@@ -263,6 +265,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                 "browser_scrape_with_scroll",
             }:
                 result = await tool_agent_first(name, arguments)
+            elif name == "playwright_run":
+                result = await tool_playwright_run(arguments)
+            elif name == "save_as_pdf":
+                result = await tool_save_as_pdf(arguments)
             else:
                 result = _json_content({"ok": False, "error": f"未知工具: {name}"})
 
@@ -1391,6 +1397,74 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
         return _json_content(await ws_manager.send_command(name, args))
 
     return _json_content({"ok": False, "error": f"unimplemented tool: {name}"})
+
+
+async def tool_playwright_run(args: dict) -> list[TextContent]:
+    """执行 Playwright 风格的 JavaScript 代码。"""
+    result = await playwright_runtime.run(
+        code=args["code"],
+        ws_manager=ws_manager,
+        timeout=args.get("timeout", 30000),
+        max_result_chars=args.get("max_result_chars", 20000),
+    )
+    return _json_content(result)
+
+
+async def tool_save_as_pdf(args: dict) -> list[TextContent]:
+    """将当前页面渲染为 PDF 文件。"""
+    import base64
+    import tempfile
+
+    params = {
+        "format": args.get("format", "a4"),
+        "landscape": args.get("landscape", False),
+        "scale": args.get("scale", 1.0),
+        "printBackground": args.get("printBackground", True),
+    }
+
+    output_path = args.get("path")
+    if not output_path:
+        # 使用临时目录，以页面标题作为文件名
+        title = "page"
+        try:
+            info = await ws_manager.send_command("get_info")
+            title = re.sub(r"[^\w\-. ]+", "_", info.get("title", "page")).strip("_") or "page"
+        except Exception:
+            pass
+        output_path = os.path.join(tempfile.gettempdir(), f"{title}-{int(time.time() * 1000)}.pdf")
+
+    result = await ws_manager.send_command("save_as_pdf", params)
+
+    if not result.get("ok"):
+        return _json_content({
+            "ok": False,
+            "error": result.get("error") or "PDF generation failed",
+        })
+
+    pdf_data = result.get("data")
+    if not pdf_data:
+        return _json_content({"ok": False, "error": "PDF data is empty"})
+
+    # 确保目录存在
+    output_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 将 base64 数据写入文件
+    try:
+        decoded = base64.b64decode(pdf_data)
+    except Exception as e:
+        return _json_content({"ok": False, "error": f"Invalid PDF base64 data: {e}"})
+
+    with open(output_path, "wb") as f:
+        f.write(decoded)
+
+    return _json_content({
+        "ok": True,
+        "path": output_path,
+        "sizeBytes": len(decoded),
+        "format": params["format"],
+        "landscape": params["landscape"],
+    })
 
 
 # ==================== 启动 ====================
