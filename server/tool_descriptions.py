@@ -859,20 +859,25 @@ TOOL_DEFINITIONS.extend([
     },
     {
         "name": "browser_tab_new",
-        "description": "Open a URL in a new tab and optionally activate it.",
+        "description": "Open a URL in a new tab and optionally activate it. If session is provided, the new tab is added to that Chrome tab group.",
         "inputSchema": _obj_schema({
             "url": {"type": "string", "description": "URL to open."},
             "active": {"type": "boolean", "description": "Whether to activate the new tab. Defaults to true."},
+            "session": {"type": "string", "description": "Optional session name to add the new tab to."},
+            "group_title": {"type": "string", "description": "Optional tab group title when creating a new session."},
         }, ["url"]),
     },
     {
         "name": "browser_navigate",
-        "description": "Navigate the current target tab and return JSON with finalUrl, redirected, and elapsed. Prefer this over screenshot-driven navigation.",
+        "description": "Navigate the current target tab: goto/back/forward/reload. Returns JSON with finalUrl, redirected, and elapsed. Prefer this over screenshot-driven navigation.",
         "inputSchema": _obj_schema({
-            "url": {"type": "string", "description": "Destination URL."},
+            "action": {"type": "string", "enum": ["goto", "back", "forward", "reload"], "description": "Navigation action. Defaults to goto.", "default": "goto"},
+            "url": {"type": "string", "description": "Destination URL. Required for goto."},
             "waitUntil": {"type": "string", "enum": ["dom-ready", "commit"], "description": "Load wait strategy. Defaults to dom-ready. Use commit to return after CDP navigation is accepted."},
             "timeout": {"type": "integer", "description": "Navigation readiness timeout in ms. Defaults to 10000."},
-        }, ["url"]),
+            "session": {"type": "string", "description": "Optional session name. If provided, the active tab will be added to this Chrome tab group after navigation."},
+            "group_title": {"type": "string", "description": "Optional tab group title when creating a new session."},
+        }),
     },
     {
         "name": "browser_screenshot",
@@ -883,6 +888,38 @@ TOOL_DEFINITIONS.extend([
             "format": {"type": "string", "enum": ["png", "jpeg"], "description": "Image format. Defaults to png."},
             "quality": {"type": "integer", "description": "JPEG quality 1-100."},
         }),
+    },
+    {
+        "name": "browser_dom_overview",
+        "description": "获取当前页面的结构化 DOM 概览，以 markdown 无序列表返回。适合在操作前快速理解页面结构。",
+        "inputSchema": _obj_schema({
+            "include": {"type": "array", "items": {"type": "string"}, "description": "可选包含的类别，如 headings, buttons, inputs, forms, tables, links, images。"},
+            "max_chars": {"type": "integer", "description": "最大输出字符数。默认 30000。", "default": 30000},
+        }),
+    },
+    {
+        "name": "browser_dom_get_text",
+        "description": "提取页面文本。无 selector 时使用 Readability 算法提取正文；有 selector 时提取指定元素的 innerText。",
+        "inputSchema": _obj_schema({
+            "selector": {"type": "string", "description": "CSS 选择器。为空时使用 Readability 模式。"},
+            "max_chars": {"type": "integer", "description": "最大返回字符数。默认 20000。", "default": 20000},
+            "include_meta": {"type": "boolean", "description": "元素模式下是否返回 tag/role/aria-label 等元信息。", "default": False},
+        }),
+    },
+    {
+        "name": "browser_dom_diff",
+        "description": "对比当前页面 DOM 概览与上次快照的差异，返回统一 diff 文本或导航提示。",
+        "inputSchema": _obj_schema({
+            "max_chars": {"type": "integer", "description": "生成当前概览时的最大字符数。默认 30000。", "default": 30000},
+        }),
+    },
+    {
+        "name": "browser_session",
+        "description": "管理浏览器 session（Chrome 标签组）。列出所有活跃 session，或关闭指定 session 及其标签组。",
+        "inputSchema": _obj_schema({
+            "action": {"type": "string", "enum": ["list", "close"], "description": "list=列出活跃 session，close=关闭指定 session。"},
+            "session": {"type": "string", "description": "session 名称。action=close 时必填。"},
+        }, ["action"]),
     },
     {
         "name": "dom_overview",
@@ -1154,12 +1191,17 @@ PUBLIC_TOOL_NAMES = {
     "browser_navigate",
     "browser_screenshot",
     # DOM observations
+    "browser_dom_overview",
+    "browser_dom_get_text",
+    "browser_dom_diff",
     "dom_overview",
     "dom_query",
     "dom_search",
     "dom_structured_data",
     "dom_element_detail",
     "dom_wait_for",
+    # Session management
+    "browser_session",
     # Actions: keep the stable core first; richer actions can be re-enabled
     # after their parameter validation and page-context escaping are hardened.
     "action_click",

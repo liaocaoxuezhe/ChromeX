@@ -20,6 +20,10 @@ def compress_dom(raw_dom: str, max_chars: int = MAX_OUTPUT_CHARS) -> str:
     """
     压缩 DOM JSON 字符串，返回多层级 markdown 无序列表格式。
 
+    支持两种输入：
+    1. Extension get_dom 返回的层级 DOM 树（tag/children）
+    2. Extension dom_overview 返回的概览对象（headings/buttons/inputs/summary）
+
     Args:
         raw_dom: Extension 返回的 DOM JSON 字符串
         max_chars: 最大输出字符数
@@ -40,7 +44,10 @@ def compress_dom(raw_dom: str, max_chars: int = MAX_OUTPUT_CHARS) -> str:
         return "- (empty)"
 
     lines = []
-    _build_markdown(tree, lines, depth=0)
+    if _is_overview(tree):
+        _build_overview_markdown(tree, lines)
+    else:
+        _build_markdown(tree, lines, depth=0)
 
     if not lines:
         return "- (empty)"
@@ -52,6 +59,81 @@ def compress_dom(raw_dom: str, max_chars: int = MAX_OUTPUT_CHARS) -> str:
         result = _truncate_markdown(result, max_chars)
 
     return result
+
+
+def _is_overview(tree: dict) -> bool:
+    """判断是否为 dom_overview 返回的概览结构。"""
+    return any(k in tree for k in ("headings", "buttons", "inputs", "forms", "tables", "links", "images", "summary"))
+
+
+def _build_overview_markdown(tree: dict, lines: list[str]) -> None:
+    """将 dom_overview 的 JSON 对象转为 markdown 列表。"""
+    title = tree.get("title")
+    url = tree.get("url")
+    if title:
+        lines.append(f"- title: '{_escape(title, 200)}'")
+    if url:
+        lines.append(f"- url: {_escape(url, 200)}")
+
+    headings = tree.get("headings")
+    if headings:
+        lines.append("- headings")
+        for h in headings:
+            tag = h.get("tag", "h") if isinstance(h, dict) else "h"
+            text = h.get("text", "") if isinstance(h, dict) else str(h)
+            lines.append(f"  - {str(tag).lower()}: '{_escape(text, 160)}'")
+
+    buttons = tree.get("buttons")
+    if buttons:
+        lines.append("- buttons")
+        for b in buttons:
+            text = b.get("text", "") if isinstance(b, dict) else str(b)
+            visible = b.get("visible", True) if isinstance(b, dict) else True
+            vis = "visible" if visible else "hidden"
+            lines.append(f"  - '{_escape(text, 160)}' ({vis})")
+
+    inputs = tree.get("inputs")
+    if inputs:
+        lines.append("- inputs")
+        for inp in inputs:
+            if not isinstance(inp, dict):
+                lines.append(f"  - {str(inp)}")
+                continue
+            tag = inp.get("tag", "input")
+            itype = inp.get("type", "")
+            name = inp.get("name", "")
+            placeholder = inp.get("placeholder", "")
+            parts = [tag]
+            if itype:
+                parts.append(f"type={itype}")
+            if name:
+                parts.append(f"name={name}")
+            if placeholder:
+                parts.append(f"placeholder='{_escape(placeholder, 60)}'")
+            visible = inp.get("visible", True)
+            vis = "visible" if visible else "hidden"
+            lines.append(f"  - {' '.join(parts)} ({vis})")
+
+    if "forms" in tree:
+        lines.append(f"- forms: {tree['forms']}")
+    if "tables" in tree:
+        lines.append(f"- tables: {tree['tables']}")
+    if "links" in tree:
+        lines.append(f"- links: {tree['links']}")
+    if "images" in tree:
+        lines.append(f"- images: {tree['images']}")
+
+    summary = tree.get("summary")
+    if summary:
+        lines.append(f"- summary: {_escape(summary, 300)}")
+
+
+def _escape(value: Any, max_len: int) -> str:
+    """截断并转义单引号，便于嵌入 markdown。"""
+    text = str(value).replace("'", "\\'")
+    if len(text) > max_len:
+        text = text[:max_len] + "..."
+    return text
 
 
 def _build_markdown(node: Any, lines: list[str], depth: int) -> None:
