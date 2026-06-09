@@ -4,17 +4,31 @@
 
 # Link2Chrome
 
-Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome/Tabbit 扩展、WebSocket 和 MCP Server 将本地 Agent 与真实浏览器连接起来，让 Agent 可以读取页面状态、执行点击输入、滚动、标签页管理，并按需使用 DOM/CDP、CUA 和 Playwright/CDP endpoint 三组并行控制面。
+Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome 扩展、WebSocket 和 MCP Server 将本地 Agent 与真实浏览器连接起来，让 Agent 可以导航页面、执行点击/输入/滚动、读取 DOM、截图、运行 Playwright 风格的自动化脚本，以及管理多任务 Session（标签组）。
 
 ## 功能概览
 
-- 本地 MCP Server：通过 stdio 向 Claude Code 暴露浏览器工具。
-- Chrome/Tabbit 扩展：基于 Manifest V3，通过 `chrome.debugger` 调用 Chrome DevTools Protocol，并用 alarms keepalive 强化连接稳定性。
-- WebSocket 桥接：Server 与扩展之间通过本地 WebSocket 通信。
-- 页面观察：支持 URL、标题、截图、压缩 DOM、正文提取等状态获取。
-- 浏览器操作：支持导航、点击、输入、滚动、拖拽、等待、标签页管理等动作。
-- 三组并行控制面：`browser.dom.*` 面向结构化 DOM/CDP，`browser.cua.*` 面向多模态模型看图后的坐标原语，`browser.pw.*` 面向 Playwright/browser-use 的 CDP endpoint。
-- Code-first runtime：提供 Node ESM client，让 Agent 可以写 JavaScript 组合 Browser、Tab、Locator 和 CUA 对象，而不是只逐个调用 MCP tools。
+- **本地 MCP Server**：通过 stdio 向 Claude Code 暴露 26 个统一浏览器工具。
+- **Chrome 扩展**：基于 Manifest V3，通过 `chrome.debugger` 调用 Chrome DevTools Protocol，并用 alarms keepalive 强化连接稳定性。
+- **WebSocket 桥接**：Server 与扩展之间通过本地 WebSocket 通信。
+- **页面观察**：URL、标题、截图、Markdown 格式 DOM 概览、DOM diff、正文提取、元素查询。
+- **浏览器操作**：导航、点击、双击、悬停、输入、滚动、拖拽、按键、对话框处理、文件上传。
+- **playwright_run**：以代码为动作——向扩展发送 JavaScript 代码片段，通过内置 page shim 执行多步骤自动化，无需切换模式。
+- **Session 机制**：一个任务对应一个 Session，映射到 Chrome 标签组，支持跨标签的多任务并发。
+- **save_as_pdf**：通过 CDP `Page.printToPDF` 将当前页面保存为 PDF 文件。
+- **控制台 & 网络监控**：统一的 `console_check` 和 `network_check` 工具，支持捕获、查询、重放。
+
+## 工具列表（26 个）
+
+| 类别 | 工具 |
+|------|------|
+| 导航 & 标签 | `browser_navigate`, `browser_tab`, `browser_tabs_list`, `browser_session` |
+| DOM 观察 | `browser_dom_overview`, `browser_dom_query`, `browser_dom_search`, `browser_dom_get_text`, `browser_dom_diff` |
+| 截图 & 内容 | `browser_screenshot`, `browser_scrape_with_scroll` |
+| 动作 | `action_click`, `action_double_click`, `action_hover`, `action_scroll`, `action_drag`, `action_fill`, `action_press_key` |
+| 文件 & 对话框 | `upload_file`, `handle_dialog` |
+| 脚本 & 自动化 | `playwright_run`, `script_evaluate`, `save_as_pdf` |
+| 监控 & 诊断 | `console_check`, `network_check`, `browser_diagnose` |
 
 ## 目录结构
 
@@ -22,8 +36,14 @@ Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome/Tab
 .
 ├── extension/                  # Chrome 扩展源码
 ├── server/                     # Python MCP Server
-├── docs/                       # 使用说明和阶段文档
-├── test/                       # 测试与验证脚本
+│   ├── main.py                 # MCP 入口，call_tool 路由
+│   ├── tool_descriptions.py    # 26 个工具定义
+│   ├── session_manager.py      # Session → Chrome 标签组映射
+│   ├── dom_snapshot_cache.py   # DOM 快照与 diff 计算
+│   ├── dom_compressor.py       # DOM → Markdown 压缩
+│   └── playwright_runtime.py  # playwright_run 编排
+├── docs/                       # 使用说明和设计文档
+├── test/                       # 测试脚本（含 test_tools.py）
 ├── claude_config_snippet.json  # Claude Code MCP 配置示例
 ├── setup.sh                    # 本地安装脚本
 └── server/requirements.txt     # Python 依赖
@@ -35,7 +55,7 @@ Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome/Tab
 - Chrome / Chromium
 - Claude Code
 
-当前 MCP Python SDK 要求 Python 3.10 或更高版本。如果本机默认 Python 是 3.9，请先安装 `python3.10`、`python3.11` 或 `python3.12`，再由安装脚本创建隔离虚拟环境，避免污染系统环境。核心纯 Python 模块和测试仍保持 Python 3.9 兼容。
+当前 MCP Python SDK 要求 Python 3.10 或更高版本。如果本机默认 Python 是 3.9，请先安装 `python3.10`、`python3.11` 或 `python3.12`，再由安装脚本创建隔离虚拟环境，避免污染系统环境。
 
 ## 快速开始
 
@@ -57,8 +77,6 @@ server/venv/bin/pip install -r server/requirements.txt
 ```env
 LOG_LEVEL=INFO
 LINK2CHROME_BROWSER=chrome
-# 可选：Playwright attach 模式使用
-PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222
 ```
 
 ## 加载 Chrome 扩展
@@ -82,31 +100,58 @@ node scripts/dev-extension/install.mjs
 
 将 `claude_config_snippet.json` 中的配置合并到 Claude Code 的配置文件中，并根据本机路径调整 `command`、`args` 和 `cwd`。
 
-## Code-first Runtime Client
+## playwright_run 示例
 
-除了 MCP tools，Link2Chrome 也提供 Node ESM runtime client，适合让 Agent 通过代码组织多步浏览器流程：
+对于需要 3 步以上、含条件逻辑或循环的操作，推荐使用 `playwright_run` 一次发送代码，而不是逐个调用 MCP 工具：
 
-```js
-import { createLink2ChromeClient, createWebSocketTransport } from "./runtime/link2chrome-client.mjs";
-
-const link2chrome = createLink2ChromeClient({
-  transport: createWebSocketTransport({ url: "ws://localhost:8766" }),
-});
-
-const browser = await link2chrome.browsers.get("extension");
-const tab = await browser.tabs.selected();
-await tab.goto("https://example.com");
-const snapshot = await tab.playwright.domSnapshot();
-console.log(snapshot);
+```javascript
+// 登录表单示例
+await page.locator('#username').fill('user@example.com');
+await page.locator('#password').fill('secret');
+await page.locator('button[type=submit]').click();
+await page.waitForSelector('.dashboard', { timeout: 5000 });
+const title = await page.title();
+return title;
 ```
 
-runtime 暴露 Playwright-style locator 和 CUA 原语，并复用现有扩展与 server。它不依赖本地 Playwright 包；`browser.pw.*` 仍然是给外部 browser-use / Playwright 客户端使用的 CDP endpoint 控制面。
+```javascript
+// 数据提取示例
+const rows = await page.evaluate(() => {
+  return Array.from(document.querySelectorAll('table tr')).map(r => r.innerText);
+});
+return rows;
+```
+
+page shim 支持的 API：`locator`、`getByText`、`getByRole`、`getByLabel`、`getByPlaceholder`、`waitForSelector`、`waitForTimeout`、`evaluate`、`title`、`url`、`goto`、`screenshot`。
+
+## Session 机制
+
+每个任务可以绑定一个命名 Session，对应 Chrome 中的一个标签组：
+
+```
+# 创建 session
+browser_session(action="create", session="research", group_title="调研")
+
+# 新建标签
+browser_tab(action="new", url="https://example.com")
+
+# 将标签加入 session
+browser_session(action="add", session="research", tabId=123)
+
+# 关闭 session 及其所有标签
+browser_session(action="close", session="research")
+
+# 列出所有活跃 session
+browser_session(action="list")
+```
 
 ## 开发与测试
 
-测试文件统一放在 `test/` 目录中。
-
 ```bash
+# 运行所有工具定义验证（不需要浏览器连接）
+server/venv/bin/python -m pytest test/test_tools.py -v
+
+# 运行完整测试套件
 server/venv/bin/python -m pytest test
 node --test test/runtime-client.test.mjs
 ```
@@ -115,7 +160,6 @@ node --test test/runtime-client.test.mjs
 
 - 不要提交 `.env`、日志、缓存、虚拟环境或运行输出。
 - Chrome 扩展使用 `debugger` 权限，请只在可信环境中加载和运行。
-- CUA 控制面不在服务端调用外部视觉模型；坐标判断由调用方多模态模型完成。
 
 ## License
 

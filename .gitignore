@@ -33,3 +33,4 @@ output/
 .agents/
 .claude/worktrees/
 .codex/
+orchestration/

@@ -155,6 +155,19 @@ def test_network_check_schema():
     assert "action" in props, "network_check must have 'action' property"
 
 
+def test_browser_session_schema():
+    tool = _get_tool("browser_session")
+    props = tool["inputSchema"].get("properties", {})
+    assert "action" in props, "browser_session must have 'action' property"
+    enum = props["action"].get("enum", [])
+    assert set(enum) >= {"create", "add", "close", "list"}, (
+        f"browser_session action enum missing values: {enum}"
+    )
+    assert "session" in props, "browser_session must have 'session' property"
+    assert "group_title" in props, "browser_session must have 'group_title' property"
+    assert "tabId" in props, "browser_session must have 'tabId' property"
+
+
 # ==================== 5. Old tools must NOT be present ====================
 
 FORBIDDEN_TOOLS = {

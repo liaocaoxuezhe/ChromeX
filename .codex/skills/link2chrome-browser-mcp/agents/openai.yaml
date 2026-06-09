@@ -1,4 +1,0 @@
-interface:
-  display_name: "Link2Chrome Browser MCP"
-  short_description: "Guide browser MCP tool use"
-  default_prompt: "Use Link2Chrome Browser MCP to inspect the live Chrome page, reason from DOM evidence, and operate with a tight observe-think-act loop."
