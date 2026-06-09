@@ -34,7 +34,7 @@ await tab.playwright.getByRole("button", { name: "提交" }).click();
 - **CUA**：先 `browser.cua.screenshot`，由主模型看图决定坐标，再用 `browser.cua.click`、`browser.cua.drag`、`browser.cua.type`、`browser.cua.key`、`browser.cua.scroll`
 - **Playwright endpoint**：`browser.pw.start`、`browser.pw.endpoint`、`browser.pw.stop`
 - **网络/控制台**：`network_capture`、`network_query`、`network_replay`、`console_capture`、`console_list`
-- **提取/脚本**：`browser_extract_content`、`browser_scrape_with_scroll`、`script_evaluate`
+- **提取/脚本**：`browser_dom_get_text`、`browser_scrape_with_scroll`、`script_evaluate`
 
 ## CUA 坐标契约
 

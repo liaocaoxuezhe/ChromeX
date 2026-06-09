@@ -49,7 +49,7 @@ Need to use the browser?
 │  ├─ Switch tabs → browser_tab(action='switch', tabId=N)
 │  ├─ Close a tab → browser_tab(action='close', tabId=N)
 │  ├─ See all open tabs → browser_tabs_list
-│  └─ Organize tabs by task → browser_session(action='create'/'add'/'close'/'list')
+│  └─ Organize tabs by task → browser_session(action='create'/'new_tab'/'add'/'close'/'list')
 │
 ├─ INTERACT (single action)
 │  ├─ Click → action_click(target={selector/text/x,y})
@@ -78,31 +78,39 @@ Need to use the browser?
 ## Sessions and Tab Groups
 
 **One task = one session = one Chrome tab group.**
+**MANDATORY: Always create a session BEFORE any browser operation.**
 
-Use `browser_session` to explicitly manage tab groups:
+### Quick start — two ways to use sessions
+
+**Way 1: Active session (recommended).** Create once, then navigate normally — tabs auto-join.
 
 ```
-# 1. Create a session for the task
+# Create session → sets it as "active"
 browser_session(action='create', session='camping-research', group_title='露营装备调研')
 
-# 2. Open tabs normally
+# All subsequent navigate/tab calls auto-join the active session's group
 browser_navigate(action='goto', url='https://google.com/search?q=tents')
-
-# 3. Add the current tab to the session (get tabId from browser_tabs_list)
-browser_session(action='add', session='camping-research', tabId=123)
-
-# 4. Open more tabs and add them
 browser_tab(action='new', url='https://amazon.com/s?k=camping+tent')
-browser_session(action='add', session='camping-research', tabId=124)
+# ↑ Both tabs automatically land in the "露营装备调研" group. No extra calls needed.
 ```
 
-Rules:
-1. **Name the session by TASK, not by site.** Searching on Google, then opening Amazon and REI results = all the same session `camping-research`.
-2. **Use the user's language for `group_title`.** Chinese conversation → Chinese label.
-3. **One task = one session.** Don't create a new session when you navigate to a different site within the same task.
-4. **Multiple sessions only for genuinely unrelated parallel tasks** the user requested simultaneously.
+**Way 2: One-shot new_tab.** Open a URL directly into a session — no active session required.
 
-When the task is done:
+```
+browser_session(action='new_tab', session='camping-research',
+                url='https://google.com/search?q=tents', group_title='露营装备调研')
+```
+
+### Rules
+
+1. **ALWAYS create a session first.** Never call `browser_navigate` without an active session.
+2. **Name the session by TASK, not by site.** Google + Amazon + REI for camping gear = one session `camping-research`.
+3. **Use the user's language for `group_title`.** Chinese conversation → Chinese label.
+4. **One task = one session.** Don't create a new session when you navigate to a different site within the same task.
+5. **Multiple sessions only for genuinely unrelated parallel tasks** the user requested simultaneously.
+
+### When the task is done
+
 - If the user might still want the tabs → **leave them open** (don't call close)
 - If the tabs are just intermediate work → `browser_session(action='close', session='camping-research')`
 
@@ -112,16 +120,14 @@ Follow this pattern for most browser tasks:
 
 ```
 1. browser_diagnose()                           # verify connection
-2. browser_session(action='create',             # create session
+2. browser_session(action='create',             # create session (sets active)
      session='task-name', group_title='任务名')
-3. browser_navigate(action='goto', url='..')    # open page
-4. browser_session(action='add',                # add tab to session
-     session='task-name', tabId=N)
-5. browser_dom_overview()                        # understand the page
-6. action_click / action_fill / ...              # one action at a time
-7. browser_dom_diff()                            # verify what changed
-8. repeat 6-7 as needed
-9. browser_session(action='close',               # or leave tabs open
+3. browser_navigate(action='goto', url='..')    # auto-joins active session
+4. browser_dom_overview()                        # understand the page
+5. action_click / action_fill / ...              # one action at a time
+6. browser_dom_diff()                            # verify what changed
+7. repeat 5-6 as needed
+8. browser_session(action='close',               # or leave tabs open
      session='task-name')
 ```
 
@@ -316,7 +322,7 @@ save_as_pdf(path='/tmp/report.pdf')              # custom path
 
 - **browser_navigate** — Navigate the current tab: goto URL, back, forward, or reload. Always prefer this over screenshot-driven navigation. Returns finalUrl, redirected flag, and elapsed time.
 - **browser_tab** — Manage tabs: create new, switch to existing, or close. Use `action='new'` to open URLs without losing the current page.
-- **browser_session** — Manage tab groups (sessions). Use `action='create'` to start a new task session, `action='add'` to add a tab (by tabId) to the group, `action='close'` to clean up a finished task's tabs, and `action='list'` to see all active sessions.
+- **browser_session** — Manage tab groups (sessions). Use `action='create'` to start a session and set it as active (subsequent navigate/tab calls auto-join), `action='new_tab'` to open a URL directly into a session's group, `action='add'` to add an existing tab by tabId, `action='close'` to clean up, and `action='list'` to see all active sessions.
 - **browser_tabs_list** — List all open tabs with id, title, url, active state, and groupTitle. Use this before switching tabs to get the correct tabId.
 
 ### DOM Observation

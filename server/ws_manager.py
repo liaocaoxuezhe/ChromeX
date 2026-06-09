@@ -28,22 +28,18 @@ CONNECTION_WAIT_TIMEOUT = 10
 READONLY_RETRY_COMMANDS = {
     "ping_version",
     "get_info",
-    "get_dom",
     "get_all_tabs",
     "extract_content",
     "screenshot",
     "agent_browser_tab_info",
-    "agent_browser_history",
     "dom_overview",
     "dom_query",
     "dom_search",
-    "dom_structured_data",
     "dom_element_detail",
     "network_list",
     "network_query",
     "console_list",
     "console_get",
-    "clipboard_read",
 }
 
 

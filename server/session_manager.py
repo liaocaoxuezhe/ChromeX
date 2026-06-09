@@ -18,6 +18,18 @@ class SessionManager:
     def __init__(self):
         # session_name → {group_id, tab_ids: set, group_title}
         self._sessions: dict[str, dict[str, Any]] = {}
+        self._active_session: Optional[str] = None
+
+    @property
+    def active_session(self) -> Optional[str]:
+        return self._active_session
+
+    def set_active(self, session: str) -> None:
+        self._active_session = session
+
+    def clear_active(self, session: Optional[str] = None) -> None:
+        if session is None or self._active_session == session:
+            self._active_session = None
 
     async def ensure_session(
         self,
@@ -51,6 +63,7 @@ class SessionManager:
                 "group_title": title,
             }
             logger.info(f"创建 session '{session}' → group {group_id} (title='{title}')")
+            self.set_active(session)
             return self._sessions[session]
         except Exception as e:
             logger.warning(f"创建标签组异常，降级处理: {e}")
@@ -95,6 +108,7 @@ class SessionManager:
         info = self._sessions.pop(session, None)
         if info is None:
             return {"ok": False, "error": f"Session '{session}' 不存在"}
+        self.clear_active(session)
 
         group_id = info.get("group_id")
         closed_count = 0
@@ -140,6 +154,13 @@ class SessionManager:
             }
             for name, info in self._sessions.items()
         ]
+
+    async def auto_add_tab(self, tab_id: int, ws_manager) -> Optional[str]:
+        """如果有活跃 session，自动将 tab 加入。返回 session 名或 None。"""
+        if self._active_session and self._active_session in self._sessions:
+            await self.add_tab_to_session(self._active_session, tab_id, ws_manager)
+            return self._active_session
+        return None
 
     def get_session_info(self, session: str) -> Optional[dict[str, Any]]:
         """获取单个 session 的信息。"""

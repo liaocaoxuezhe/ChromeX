@@ -699,9 +699,6 @@ async function handleCommand(message) {
       case "drag":
         response.data = await cmdDrag(params);
         break;
-      case "wait":
-        response.data = await cmdWait(params);
-        break;
       case "get_all_tabs":
         response.data = await cmdGetAllTabs();
         break;
@@ -710,15 +707,6 @@ async function handleCommand(message) {
         break;
       case "execute_script":
         response.data = await cmdExecuteScript(params);
-        break;
-      case "wait_for_condition":
-        response.data = await cmdWaitForCondition(params);
-        break;
-      case "detach_debugger":
-        response.data = await cmdDetachDebugger(params);
-        break;
-      case "scroll_until":
-        response.data = await cmdScrollUntil(params);
         break;
       case "send_keys":
         response.data = await cmdSendKeys(params);
@@ -738,21 +726,6 @@ async function handleCommand(message) {
       case "agent_browser_tab_new":
         response.data = await cmdAgentBrowserTabNew(params);
         break;
-      case "agent_browser_tabs_finalize":
-        response.data = await cmdAgentBrowserTabsFinalize(params);
-        break;
-      case "agent_browser_history":
-        response.data = await cmdAgentBrowserHistory(params);
-        break;
-      case "clipboard_read":
-        response.data = await cmdClipboardRead(params);
-        break;
-      case "clipboard_write":
-        response.data = await cmdClipboardWrite(params);
-        break;
-      case "agent_browser_wait":
-        response.data = await cmdAgentBrowserWait(params);
-        break;
       case "dom_overview":
         response.data = await cmdDomOverview(params);
         break;
@@ -761,9 +734,6 @@ async function handleCommand(message) {
         break;
       case "dom_search":
         response.data = await cmdDomSearch(params);
-        break;
-      case "dom_structured_data":
-        response.data = await cmdDomStructuredData(params);
         break;
       case "dom_element_detail":
         response.data = await cmdDomElementDetail(params);
@@ -777,14 +747,8 @@ async function handleCommand(message) {
       case "action_drag":
         response.data = await cmdActionDrag(params);
         break;
-      case "action_type":
-        response.data = await cmdActionType(params);
-        break;
       case "action_scroll":
         response.data = await cmdActionScroll(params);
-        break;
-      case "action_select":
-        response.data = await cmdActionSelect(params);
         break;
       case "action_hover":
         response.data = await cmdActionHover(params);
@@ -797,9 +761,6 @@ async function handleCommand(message) {
         break;
       case "action_press_key":
         response.data = await cmdActionPressKey(params);
-        break;
-      case "action_fill_form":
-        response.data = await cmdActionFillForm(params);
         break;
       case "network_capture":
         response.data = await cmdNetworkCapture(params);
@@ -1446,69 +1407,6 @@ async function cmdDrag(params) {
 }
 
 // -- wait --
-async function cmdWait(params) {
-  const { seconds, selector, text, timeout = 10000 } = params;
-
-  if (seconds) {
-    await new Promise(r => setTimeout(r, seconds * 1000));
-    return { waited: true, type: "time", seconds };
-  }
-
-  if (selector) {
-    const pollScript = `
-      new Promise((resolve) => {
-        const deadline = Date.now() + ${timeout};
-        const check = () => {
-          if (document.querySelector(${JSON.stringify(selector)})) {
-            resolve(true);
-          } else if (Date.now() > deadline) {
-            resolve(false);
-          } else {
-            setTimeout(check, 200);
-          }
-        };
-        check();
-      })
-    `;
-    const result = await sendCDP("Runtime.evaluate", {
-      expression: pollScript,
-      awaitPromise: true,
-      returnByValue: true
-    });
-    const found = result.result.value;
-    return { waited: true, type: "selector", selector, found };
-  }
-
-  if (text) {
-    const pollScript = `
-      new Promise((resolve) => {
-        const deadline = Date.now() + ${timeout};
-        const check = () => {
-          if (document.body.innerText.includes(${JSON.stringify(text)})) {
-            resolve(true);
-          } else if (Date.now() > deadline) {
-            resolve(false);
-          } else {
-            setTimeout(check, 200);
-          }
-        };
-        check();
-      })
-    `;
-    const result = await sendCDP("Runtime.evaluate", {
-      expression: pollScript,
-      awaitPromise: true,
-      returnByValue: true
-    });
-    const found = result.result.value;
-    return { waited: true, type: "text", text, found };
-  }
-
-  await new Promise(r => setTimeout(r, 1000));
-  return { waited: true, type: "default" };
-}
-
-// -- get_all_tabs --
 async function cmdGetAllTabs() {
   const allTabs = await chrome.tabs.query({});
   const windows = {};
@@ -1701,184 +1599,10 @@ async function cmdExecuteScript(params) {
 }
 
 // -- wait_for_condition --
-async function cmdWaitForCondition(params) {
-  const { condition_type, selector, script, timeout = 10000 } = params;
-
-  if (condition_type === "visible") {
-    // 等待元素可见
-    const pollScript = `
-      new Promise((resolve) => {
-        const deadline = Date.now() + ${timeout};
-        const check = () => {
-          const el = document.querySelector(${JSON.stringify(selector)});
-          if (el) {
-            const rect = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            const isVisible = rect.width > 0 && rect.height > 0
-              && style.display !== 'none'
-              && style.visibility !== 'hidden'
-              && style.opacity !== '0';
-            if (isVisible) {
-              resolve({ found: true, visible: true });
-              return;
-            }
-          }
-          if (Date.now() > deadline) {
-            resolve({ found: false, visible: false });
-          } else {
-            setTimeout(check, 200);
-          }
-        };
-        check();
-      })
-    `;
-
-    const result = await sendCDP("Runtime.evaluate", {
-      expression: pollScript,
-      awaitPromise: true,
-      returnByValue: true
-    });
-
-    return {
-      condition_type: "visible",
-      selector: selector,
-      ...result.result.value
-    };
-
-  } else if (condition_type === "custom") {
-    // 自定义 JS 条件
-    const pollScript = `
-      new Promise((resolve) => {
-        const deadline = Date.now() + ${timeout};
-        const check = () => {
-          const condition = ${script};
-          if (condition) {
-            resolve({ satisfied: true });
-          } else if (Date.now() > deadline) {
-            resolve({ satisfied: false, timeout: true });
-          } else {
-            setTimeout(check, 200);
-          }
-        };
-        check();
-      })
-    `;
-
-    const result = await sendCDP("Runtime.evaluate", {
-      expression: pollScript,
-      awaitPromise: true,
-      returnByValue: true
-    });
-
-    return {
-      condition_type: "custom",
-      ...result.result.value
-    };
-  }
-
-  throw new Error(`未知的等待条件类型: ${condition_type}`);
-}
-
-// -- detach_debugger --
-async function cmdDetachDebugger(params) {
-  const { tab_id } = params;
-  const targetId = tab_id !== undefined ? tab_id : attachedTabId;
-
-  if (targetId === null) {
-    return { success: false, error: "没有已附加的 debugger" };
-  }
-
-  try {
-    await chrome.debugger.detach({ tabId: targetId });
-    if (targetId === attachedTabId) {
-      attachedTabId = null;
-    }
-    console.log(`[Link2Chrome] 已主动 detach debugger from tab ${targetId}`);
-    return { success: true, tabId: targetId };
-  } catch (err) {
-    console.error(`[Link2Chrome] Detach 失败: ${err.message}`);
-    return { success: false, error: err.message };
-  }
-}
 
 // ==================== 第二阶段新增命令实现 ====================
 
 // -- scroll_until --
-async function cmdScrollUntil(params) {
-  const { condition, selector, max_scrolls = 20, scroll_delay = 500 } = params;
-
-  let scrollCount = 0;
-  let lastHeight = await sendCDP("Runtime.evaluate", {
-    expression: "document.body.scrollHeight",
-    returnByValue: true
-  }).then(r => r.result.value);
-
-  let noChangeCount = 0;
-  let foundElement = false;
-
-  while (scrollCount < max_scrolls) {
-    // 根据条件类型检查
-    if (condition === "element_visible" && selector) {
-      // 检查元素是否可见
-      const checkScript = `
-        (function() {
-          const el = document.querySelector(${JSON.stringify(selector)});
-          if (!el) return false;
-          const rect = el.getBoundingClientRect();
-          const style = window.getComputedStyle(el);
-          return rect.width > 0 && rect.height > 0 &&
-                 style.display !== 'none' &&
-                 style.visibility !== 'hidden' &&
-                 style.opacity !== '0';
-        })()
-      `;
-      const result = await sendCDP("Runtime.evaluate", {
-        expression: checkScript,
-        returnByValue: true
-      });
-      if (result.result.value === true) {
-        foundElement = true;
-        break;
-      }
-    } else if (condition === "no_more_content") {
-      // 检查页面高度是否不再变化
-      const newHeight = await sendCDP("Runtime.evaluate", {
-        expression: "document.body.scrollHeight",
-        returnByValue: true
-      }).then(r => r.result.value);
-
-      if (newHeight === lastHeight) {
-        noChangeCount++;
-        if (noChangeCount >= 3) {
-          // 高度连续3次不变，认为到底了
-          break;
-        }
-      } else {
-        noChangeCount = 0;
-        lastHeight = newHeight;
-      }
-    }
-
-    // 滚动
-    await sendCDP("Input.dispatchMouseEvent", {
-      type: "mouseWheel",
-      x: 100, y: 100,
-      deltaX: 0, deltaY: 500
-    });
-
-    scrollCount++;
-    await new Promise(r => setTimeout(r, scroll_delay));
-  }
-
-  return {
-    scrolled: scrollCount,
-    condition: condition,
-    reached_condition: condition === "element_visible" ? foundElement : noChangeCount >= 3,
-    final_height: lastHeight
-  };
-}
-
-// -- send_keys --
 async function cmdSendKeys(params) {
   const { keys, selector } = params;
 
@@ -2240,105 +1964,10 @@ async function cmdAgentBrowserTabNew(params) {
   return { ok: true, tabId: tab.id, url: tab.url || params.url || "about:blank" };
 }
 
-async function cmdAgentBrowserTabsFinalize(params) {
-  const keep = Array.isArray(params.keep) ? params.keep : [];
-  const grouped = [];
-  const closed = [];
 
-  for (const item of keep) {
-    const tabId = Number(item.tabId);
-    const status = item.status || "handoff";
-    if (!Number.isInteger(tabId)) continue;
-    let tab;
-    try {
-      tab = await chrome.tabs.get(tabId);
-    } catch (_) {
-      continue;
-    }
 
-    if (status === "deliverable" || status === "handoff") {
-      const groupId = await chrome.tabs.group({ tabIds: [tabId] });
-      await chrome.tabGroups.update(groupId, {
-        title: status === "deliverable" ? "Link2Chrome Deliverable" : "Link2Chrome Handoff",
-        color: status === "deliverable" ? "green" : "blue"
-      });
-      grouped.push({ tabId, groupId, status, windowId: tab.windowId, url: tab.url });
-      continue;
-    }
 
-    if (status === "close" || status === "temporary") {
-      await chrome.tabs.remove(tabId);
-      closed.push({ tabId, status });
-    }
-  }
 
-  return { ok: true, action: "finalize", grouped, closed };
-}
-
-async function cmdAgentBrowserHistory(params) {
-  const maxResults = Math.min(Math.max(Number(params.maxResults ?? params.limit ?? 20), 1), 100);
-  const query = {
-    text: String(params.text ?? ""),
-    maxResults
-  };
-  if (params.startTime !== undefined) query.startTime = Number(params.startTime);
-  if (params.endTime !== undefined) query.endTime = Number(params.endTime);
-
-  const items = await chrome.history.search(query);
-  const entries = items.map((item) => ({
-    id: item.id,
-    url: item.url,
-    title: item.title || "",
-    lastVisitTime: item.lastVisitTime || null,
-    visitCount: item.visitCount || 0,
-    typedCount: item.typedCount || 0
-  }));
-  return { ok: true, entries, count: entries.length };
-}
-
-async function cmdClipboardRead(params) {
-  const result = await sendCDP("Runtime.evaluate", {
-    expression: "navigator.clipboard.readText()",
-    awaitPromise: true,
-    returnByValue: true,
-    timeout: params.timeout || 5000
-  });
-  if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.exception?.description || "clipboard read failed");
-  }
-  return { ok: true, text: result.result?.value || "" };
-}
-
-async function cmdClipboardWrite(params) {
-  const text = String(params.text ?? "");
-  const result = await sendCDP("Runtime.evaluate", {
-    expression: `navigator.clipboard.writeText(${JSON.stringify(text)})`,
-    awaitPromise: true,
-    returnByValue: true,
-    timeout: params.timeout || 5000
-  });
-  if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.exception?.description || "clipboard write failed");
-  }
-  return { ok: true, textLength: text.length };
-}
-
-async function cmdAgentBrowserWait(params) {
-  const started = Date.now();
-  const condition = params.condition || "dom-ready";
-  if (condition === "timeout") {
-    await new Promise(r => setTimeout(r, params.timeout || 1000));
-  } else if (condition === "dom-ready") {
-    if (params.selector) {
-      await cmdDomWaitFor({ selector: params.selector, state: "present", timeout: params.timeout || 10000 });
-    } else {
-      await cmdWait({ selector: "body", timeout: params.timeout || 10000 });
-    }
-  } else {
-    throw new Error(`Unsupported wait condition: ${condition}`);
-  }
-  return { ok: true, elapsed: Date.now() - started, condition };
-}
 
 async function evaluatePageFunction(fn, params = {}) {
   const expression = `(${fn.toString()})(${JSON.stringify(params)})`;
@@ -2460,27 +2089,6 @@ async function cmdDomSearch(params) {
   }, params);
 }
 
-async function cmdDomStructuredData(params) {
-  return evaluatePageFunction(() => {
-    const jsonLd = Array.from(document.querySelectorAll('script[type="application/ld+json"]')).map(s => {
-      try { return JSON.parse(s.textContent); } catch (_) { return null; }
-    }).filter(Boolean);
-    const openGraph = {};
-    document.querySelectorAll('meta[property^="og:"]').forEach(m => {
-      openGraph[m.getAttribute("property").replace(/^og:/, "")] = m.getAttribute("content") || "";
-    });
-    const twitter = {};
-    document.querySelectorAll('meta[name^="twitter:"]').forEach(m => {
-      twitter[m.getAttribute("name").replace(/^twitter:/, "")] = m.getAttribute("content") || "";
-    });
-    const meta = {};
-    document.querySelectorAll("meta[name]").forEach(m => {
-      const name = m.getAttribute("name");
-      if (["description", "keywords", "author", "robots", "viewport"].includes(name)) meta[name] = m.getAttribute("content") || "";
-    });
-    return { jsonLd, openGraph, twitter, meta };
-  }, params);
-}
 
 async function cmdDomElementDetail(params) {
   return evaluatePageFunction((params) => {
@@ -2638,15 +2246,6 @@ async function cmdActionDrag(params) {
   };
 }
 
-async function cmdActionType(params) {
-  const target = params.target || {};
-  let selector = target.selector;
-  if (!selector && target.name) selector = `[name="${cssEscape(target.name)}"]`;
-  if (!selector && target.placeholder) selector = `[placeholder*="${cssEscape(target.placeholder)}"]`;
-  await cmdType({ selector, text: params.text || "", clearFirst: params.clearFirst !== false, pressEnter: params.submitAfter === "enter" });
-  if (params.submitAfter === "tab") await cmdSendKeys({ keys: "Tab" });
-  return { ok: true, target: { ...target, selector }, value: params.text || "", effects: { inputEventFired: true } };
-}
 
 async function cmdActionScroll(params) {
   const started = Date.now();
@@ -2670,21 +2269,6 @@ async function cmdActionScroll(params) {
   return { ok: true, scrollY: info.scrollY, scrollHeight: info.scrollHeight, atBottom: Math.ceil((info.scrollY || 0) + (info.viewportHeight || 0)) >= (info.scrollHeight || 0), elapsed: Date.now() - started };
 }
 
-async function cmdActionSelect(params) {
-  return evaluatePageFunction((params) => {
-    const target = params.target || {};
-    const selector = target.selector || (target.name ? `[name="${cssEscape(target.name)}"]` : null) || (target.ariaLabel ? `[aria-label*="${cssEscape(target.ariaLabel)}"]` : null);
-    const el = document.querySelector(selector);
-    if (!el) return { ok: false, error: "select not found", selector };
-    const options = Array.from(el.options || []);
-    const match = options.find(o => (params.by !== "text" && o.value === params.value) || (params.by !== "value" && o.text.trim() === params.value));
-    if (!match) return { ok: false, error: "option not found", optionsCount: options.length };
-    el.value = match.value;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    return { ok: true, selected: match.value, text: match.text, optionsCount: options.length };
-  }, params);
-}
 
 async function cmdActionHover(params) {
   const target = params.target || {};
@@ -2699,34 +2283,6 @@ async function cmdActionPressKey(params) {
   return { ok: true, key: params.key };
 }
 
-async function cmdActionFillForm(params) {
-  const failed = [];
-  let filled = 0;
-  for (const field of params.fields || []) {
-    try {
-      if (field.type === "select") {
-        const result = await cmdActionSelect({ target: { selector: field.selector, name: field.name }, value: field.value, by: "value" });
-        if (!result.ok) throw new Error(result.error);
-      } else if (field.type === "checkbox" || field.type === "radio") {
-        await cmdClick({ selector: field.selector || `[name="${cssEscape(field.name)}"]` });
-      } else {
-        await cmdActionType({ target: { selector: field.selector, name: field.name }, text: field.value, clearFirst: true });
-      }
-      filled++;
-    } catch (err) {
-      failed.push({ field, error: err.message });
-    }
-  }
-  if (params.submit) {
-    const formSelector = params.formSelector || "form";
-    await evaluatePageFunction((params) => {
-      const form = document.querySelector(params.formSelector);
-      if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
-      return true;
-    }, { formSelector });
-  }
-  return { ok: failed.length === 0, filled, failed, submitted: !!params.submit };
-}
 
 async function cmdUploadFile(params) {
   const selector = params.selector;

@@ -97,17 +97,22 @@ TOOL_DEFINITIONS = [
     {
         "name": "browser_session",
         "description": (
-            "Manage tab groups (sessions). Groups all tabs for one task into a Chrome tab group.\n\n"
+            "Manage tab groups (sessions). Groups all tabs for one task "
+            "into a Chrome tab group.\n\n"
             "**Actions:**\n"
-            "- `create`: Create a new tab group for a task session\n"
-            "- `add`: Add an existing tab to a session's tab group\n"
-            "- `close`: Close all tabs in a session's tab group\n"
-            "- `list`: List all active sessions and their tab counts\n\n"
-            "**Workflow:**\n"
-            "1. Create: browser_session(action='create', session='my-task', group_title='My Task')\n"
-            "2. Open tabs with browser_navigate / browser_tab\n"
-            "3. Add: browser_session(action='add', session='my-task', tabId=123)\n"
-            "4. Close: browser_session(action='close', session='my-task')\n\n"
+            "- `create`: Create a new tab group and set it as the active session. "
+            "Subsequent browser_navigate / browser_tab calls auto-join this group.\n"
+            "- `new_tab`: Open a URL in a new tab AND add it to the session's group in one step.\n"
+            "- `add`: Add an existing tab to a session's tab group.\n"
+            "- `close`: Close all tabs in a session's tab group.\n"
+            "- `list`: List all active sessions and their tab counts.\n\n"
+            "**Typical workflow:**\n"
+            "1. browser_session(action='create', session='research', group_title='调研')\n"
+            "2. browser_navigate / browser_tab → tabs auto-join the active session\n"
+            "3. browser_session(action='close', session='research')\n\n"
+            "**Without active session:**\n"
+            "  browser_session(action='new_tab', session='research', "
+            "url='https://example.com', group_title='调研')\n\n"
             "**When NOT to use:**\n"
             "- Close a single tab → use browser_tab(action='close')"
         ),
@@ -115,16 +120,20 @@ TOOL_DEFINITIONS = [
             {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "add", "close", "list"],
+                    "enum": ["create", "new_tab", "add", "close", "list"],
                     "description": "Tab group operation.",
                 },
                 "session": {
                     "type": "string",
-                    "description": "Session name. Required for 'create', 'add', and 'close'.",
+                    "description": "Session name. Required for create, new_tab, add, close.",
                 },
                 "group_title": {
                     "type": "string",
-                    "description": "Display title for the Chrome tab group. Used with 'create'. Defaults to session name.",
+                    "description": "Display title for the Chrome tab group. Used with create/new_tab. Defaults to session name.",
+                },
+                "url": {
+                    "type": "string",
+                    "description": "URL to open. Required for 'new_tab'.",
                 },
                 "tabId": {
                     "type": "integer",
@@ -267,15 +276,25 @@ TOOL_DEFINITIONS = [
     {
         "name": "browser_screenshot",
         "description": (
-            "Capture a screenshot and save it as a local image file. "
-            "Returns the file path — use the Read tool to view the image. "
-            "Use only when DOM/action tools cannot answer the task."
+            "Capture the current screen as a compressed JPEG without changing pixel dimensions.\n\n"
+            "**When to use:**\n"
+            "- DOM is noisy, incomplete, canvas-based, virtualized, or does not reflect the real screen\n"
+            "- Need visual layout inspection or screenshot-pixel coordinates for click/drag planning\n"
+            "- Use inline=true when the model should see the screenshot directly as ImageContent\n"
+            "- Use inline=false or an explicit path when a local image file is needed\n\n"
+            "**DOM vs screenshot:**\n"
+            "- If DOM is clear and semantic, prefer browser_dom_overview/query/get_text\n"
+            "- If DOM output misses key visual state, call browser_screenshot with inline=true"
         ),
         "inputSchema": _obj_schema(
             {
                 "path": {
                     "type": "string",
-                    "description": "Output file path. Defaults to OS temp dir with page title as filename.",
+                    "description": "Output file path. Defaults to this MCP session's temp screenshot directory.",
+                },
+                "inline": {
+                    "type": "boolean",
+                    "description": "Return compressed JPEG as ImageContent instead of writing a file. Defaults to false.",
                 },
                 "selector": {
                     "type": "string",
@@ -285,9 +304,9 @@ TOOL_DEFINITIONS = [
                 "format": {
                     "type": "string",
                     "enum": ["png", "jpeg"],
-                    "description": "Image format. Defaults to png.",
+                    "description": "Requested browser capture format. Defaults to jpeg; server output is compressed JPEG.",
                 },
-                "quality": {"type": "integer", "description": "JPEG quality 1-100."},
+                "quality": {"type": "integer", "description": "JPEG quality 1-100. Defaults to 70."},
             }
         ),
     },
