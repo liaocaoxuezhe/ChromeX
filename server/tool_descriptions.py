@@ -97,13 +97,17 @@ TOOL_DEFINITIONS = [
     {
         "name": "browser_session",
         "description": (
-            "Manage browser sessions. A session groups all tabs opened during one task into a Chrome tab group.\n\n"
+            "Manage tab groups (sessions). Groups all tabs for one task into a Chrome tab group.\n\n"
             "**Actions:**\n"
+            "- `create`: Create a new tab group for a task session\n"
+            "- `add`: Add an existing tab to a session's tab group\n"
             "- `close`: Close all tabs in a session's tab group\n"
-            "- `list`: List active sessions and their tab counts\n\n"
-            "**When to use:**\n"
-            "- Task complete, clean up tabs: browser_session(action='close', session='my-task')\n"
-            "- Check what sessions are active: browser_session(action='list')\n\n"
+            "- `list`: List all active sessions and their tab counts\n\n"
+            "**Workflow:**\n"
+            "1. Create: browser_session(action='create', session='my-task', group_title='My Task')\n"
+            "2. Open tabs with browser_navigate / browser_tab\n"
+            "3. Add: browser_session(action='add', session='my-task', tabId=123)\n"
+            "4. Close: browser_session(action='close', session='my-task')\n\n"
             "**When NOT to use:**\n"
             "- Close a single tab → use browser_tab(action='close')"
         ),
@@ -111,12 +115,20 @@ TOOL_DEFINITIONS = [
             {
                 "action": {
                     "type": "string",
-                    "enum": ["close", "list"],
-                    "description": "Session operation.",
+                    "enum": ["create", "add", "close", "list"],
+                    "description": "Tab group operation.",
                 },
                 "session": {
                     "type": "string",
-                    "description": "Session name. Required for 'close'.",
+                    "description": "Session name. Required for 'create', 'add', and 'close'.",
+                },
+                "group_title": {
+                    "type": "string",
+                    "description": "Display title for the Chrome tab group. Used with 'create'. Defaults to session name.",
+                },
+                "tabId": {
+                    "type": "integer",
+                    "description": "Tab ID to add to the group. Required for 'add'. Get IDs from browser_tabs_list.",
                 },
             },
             ["action"],
@@ -255,10 +267,16 @@ TOOL_DEFINITIONS = [
     {
         "name": "browser_screenshot",
         "description": (
-            "Capture a screenshot as JSON base64. Use only when DOM/action tools cannot answer the task."
+            "Capture a screenshot and save it as a local image file. "
+            "Returns the file path — use the Read tool to view the image. "
+            "Use only when DOM/action tools cannot answer the task."
         ),
         "inputSchema": _obj_schema(
             {
+                "path": {
+                    "type": "string",
+                    "description": "Output file path. Defaults to OS temp dir with page title as filename.",
+                },
                 "selector": {
                     "type": "string",
                     "description": "Optional element selector. Current implementation captures viewport.",

@@ -1011,19 +1011,6 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
             )
             final_url = result.get("url", url)
 
-            # Session 集成
-            session = args.get("session")
-            group_title = args.get("group_title")
-            if session:
-                await session_manager.ensure_session(session, group_title, ws_manager)
-                try:
-                    tab_info = await ws_manager.send_command("agent_browser_tab_info", {})
-                    tab_id = tab_info.get("id")
-                    if tab_id is not None:
-                        await session_manager.add_tab_to_session(session, tab_id, ws_manager)
-                except Exception as e:
-                    logger.warning(f"导航后加入 session 失败: {e}")
-
             return _json_content(
                 {
                     "ok": True,
@@ -1068,16 +1055,11 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
     if name == "browser_tab":
         action = args.get("action")
         if action == "new":
-            session = args.get("session")
-            group_title = args.get("group_title")
             result = await ws_manager.send_command("agent_browser_tab_new", {
                 "url": args.get("url"),
                 "active": args.get("active", True)
             })
             tab_id = result.get("tabId")
-            if session and tab_id is not None:
-                await session_manager.ensure_session(session, group_title, ws_manager)
-                await session_manager.add_tab_to_session(session, tab_id, ws_manager)
             return _json_content({"ok": True, "action": "new", "tabId": tab_id})
         elif action == "switch":
             tab_id = args.get("tabId")
@@ -1099,14 +1081,34 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
 
     if name == "browser_session":
         action = args.get("action", "list")
-        if action == "list":
-            return _json_content({"ok": True, "sessions": session_manager.list_sessions()})
+        if action == "create":
+            session = args.get("session")
+            if not session:
+                return _json_content({"ok": False, "error": "session is required for 'create'"})
+            group_title = args.get("group_title")
+            info = await session_manager.ensure_session(session, group_title, ws_manager)
+            return _json_content({
+                "ok": True, "action": "create", "session": session,
+                "groupId": info.get("group_id"), "groupTitle": info.get("group_title"),
+            })
+        if action == "add":
+            session = args.get("session")
+            tab_id = args.get("tabId")
+            if not session:
+                return _json_content({"ok": False, "error": "session is required for 'add'"})
+            if tab_id is None:
+                return _json_content({"ok": False, "error": "tabId is required for 'add'"})
+            await session_manager.ensure_session(session, None, ws_manager)
+            await session_manager.add_tab_to_session(session, tab_id, ws_manager)
+            return _json_content({"ok": True, "action": "add", "session": session, "tabId": tab_id})
         if action == "close":
             session = args.get("session")
             if not session:
-                return _json_content({"ok": False, "error": "session name is required for action='close'"})
+                return _json_content({"ok": False, "error": "session is required for 'close'"})
             result = await session_manager.close_session(session, ws_manager)
             return _json_content(result)
+        if action == "list":
+            return _json_content({"ok": True, "sessions": session_manager.list_sessions()})
         return _json_content({"ok": False, "error": f"unknown session action: {action}"})
 
     if name == "browser_dom_overview":
@@ -1235,6 +1237,9 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
         )
 
     if name == "browser_screenshot":
+        import base64 as _b64
+        import tempfile as _tmpf
+
         screenshot = await ws_manager.send_command(
             "screenshot",
             {
@@ -1244,13 +1249,38 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent]:
                 "fullPage": args.get("fullPage", False),
             },
         )
-        return _json_content(
-            {
-                "format": screenshot.get("format", args.get("format", "png")),
-                "data": screenshot.get("image", ""),
-                "note": "Screenshots are high-token fallback observations; prefer DOM/action tools first.",
-            }
+
+        image_b64 = screenshot.get("image", "")
+        if not image_b64:
+            return _json_content({"ok": False, "error": "Screenshot returned no image data"})
+
+        fmt = screenshot.get("format", args.get("format", "png"))
+
+        title = "screenshot"
+        try:
+            info = await ws_manager.send_command("get_info")
+            title = re.sub(r"[^\w\-. ]+", "_", info.get("title", "screenshot")).strip("_") or "screenshot"
+        except Exception:
+            pass
+
+        output_path = args.get("path") or os.path.join(
+            _tmpf.gettempdir(), f"{title}-{int(time.time() * 1000)}.{fmt}"
         )
+
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        os.makedirs(output_dir, exist_ok=True)
+
+        decoded = _b64.b64decode(image_b64)
+        with open(output_path, "wb") as f:
+            f.write(decoded)
+
+        return _json_content({
+            "ok": True,
+            "path": output_path,
+            "format": fmt,
+            "sizeBytes": len(decoded),
+            "note": "Use the Read tool to view this screenshot file.",
+        })
 
     if name == "action_click":
         return _json_content(await ws_manager.send_command("action_click", args))
