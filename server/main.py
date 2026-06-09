@@ -60,6 +60,7 @@ playwright_runtime = PlaywrightRuntime()
 
 _SESSION_TMPDIR = tempfile.mkdtemp(prefix="link2chrome_")
 atexit.register(shutil.rmtree, _SESSION_TMPDIR, True)
+_URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
 app = Server("local-browser")
 
@@ -112,9 +113,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                 "action_press_key",
                 "upload_file",
                 "handle_dialog",
-                "playwright_run",
                 "script_evaluate",
-                "save_as_pdf",
                 "console_check",
                 "network_check",
                 "browser_scrape_with_scroll",
@@ -170,6 +169,13 @@ def _extract_result_summary(result: list) -> str:
 def _json_content(payload: object) -> list[TextContent]:
     """Return a compact JSON tool response, matching the PRD's agent-first contract."""
     return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2))]
+
+
+def _normalize_url(url: str) -> str:
+    """Add https:// only for host-like inputs; preserve explicit schemes such as data:."""
+    if not url:
+        return url
+    return url if _URL_SCHEME_RE.match(url) else "https://" + url
 
 
 def _compress_screenshot_to_jpeg(image_b64: str, quality: int = 70) -> tuple[bytes, int, int]:
@@ -314,8 +320,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         if action == "goto":
             started = time.monotonic()
             url = args.get("url", "")
-            if not url.startswith(("http://", "https://", "chrome://", "about:")):
-                url = "https://" + url
+            url = _normalize_url(url)
             result = await ws_manager.send_command(
                 "navigate",
                 {
@@ -434,8 +439,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 return _json_content({"ok": False, "error": "session is required for 'new_tab'"})
             if not url:
                 return _json_content({"ok": False, "error": "url is required for 'new_tab'"})
-            if not url.startswith(("http://", "https://")):
-                url = "https://" + url
+            url = _normalize_url(url)
             group_title = args.get("group_title")
             info = await session_manager.ensure_session(session, group_title, ws_manager)
             tab_result = await ws_manager.send_command("agent_browser_tab_new", {
@@ -510,7 +514,41 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         include_meta = args.get("include_meta", False)
 
         if selector:
-            result = await ws_manager.send_command("dom_get_text", {"selector": selector})
+            try:
+                result = await ws_manager.send_command("dom_get_text", {"selector": selector})
+            except Exception as e:
+                if "dom_get_text" not in str(e) and "未知指令" not in str(e):
+                    raise
+                result = await ws_manager.send_command(
+                    "script_evaluate",
+                    {
+                        "expression": f"""
+(() => {{
+  const el = document.querySelector({json.dumps(selector, ensure_ascii=False)});
+  if (!el) throw new Error("selector not found");
+  const rect = el.getBoundingClientRect();
+  const style = window.getComputedStyle(el);
+  const text = el.innerText || el.textContent || "";
+  return {{
+    text,
+    charCount: text.length,
+    meta: {{
+      tag: el.tagName.toLowerCase(),
+      role: el.getAttribute("role") || "",
+      ariaLabel: el.getAttribute("aria-label") || "",
+      childCount: el.children.length,
+      visible: rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden"
+    }}
+  }};
+}})()
+""",
+                        "awaitPromise": True,
+                        "timeout": 5000,
+                    },
+                )
+                if not result.get("ok", True):
+                    return _json_content({"ok": False, "error": result.get("error", "dom_get_text fallback failed")})
+                result = result.get("result", result)
             text = result.get("text", "")
             truncated = len(text) > max_chars
             if truncated:

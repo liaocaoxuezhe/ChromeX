@@ -311,7 +311,7 @@ save_as_pdf(path='/tmp/report.pdf')              # custom path
 2. **One action, then verify.** After clicking, filling, or scrolling, check the result with `browser_dom_diff` or `browser_screenshot`. Don't chain blind actions.
 3. **Control output size.** Always set `max_chars` on `browser_dom_get_text` and `browser_dom_overview` to avoid flooding your context. Default to 20000.
 4. **Don't reload unnecessarily.** If a tab is already on the target URL, don't call `browser_navigate(action='goto')` with the same URL — it will reload and may lose in-progress state.
-5. **Prefer DOM over screenshots.** DOM tools are cheaper in tokens and more precise. Use screenshots only when you need visual layout, Canvas content, or to verify visual appearance.
+5. **Choose DOM or screenshot by readability.** Prefer DOM when the page structure is clear and semantic. Use `browser_screenshot(inline=true)` when DOM is noisy, incomplete, canvas-based, virtualized, or when you need visual/layout or screenshot-pixel coordinate checks.
 6. **playwright_run for 3+ steps.** If you're about to call 3+ individual action tools in sequence, write a `playwright_run` instead.
 7. **Diagnose before retrying.** If a tool call fails, call `browser_diagnose` first. Don't blindly retry.
 8. **Respect user sessions.** You're controlling the user's real browser with real login sessions. Don't navigate away from pages the user has open unless they asked you to. Use `browser_tab(action='new')` to open new tabs.
@@ -332,7 +332,7 @@ save_as_pdf(path='/tmp/report.pdf')              # custom path
 - **browser_dom_search** — Find elements by visible text content. Good when you know what text should be on the page but don't know the selector.
 - **browser_dom_get_text** — Extract article text with Mozilla Readability, or read a specific element's text. Use the Readability mode (no selector) for article pages.
 - **browser_dom_diff** — Compare current page with the last snapshot. Shows what changed after your last action. Essential for the observe-act-verify loop.
-- **browser_screenshot** — Capture the page as a base64 image. Use sparingly; prefer DOM tools for most tasks since they are cheaper in tokens.
+- **browser_screenshot** — Capture the current screen as a compressed JPEG without changing pixel dimensions. Use `inline=true` to return ImageContent directly to the model; use `inline=false` or `path` when a local file is needed.
 
 ### Interaction
 

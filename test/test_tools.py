@@ -160,12 +160,25 @@ def test_browser_session_schema():
     props = tool["inputSchema"].get("properties", {})
     assert "action" in props, "browser_session must have 'action' property"
     enum = props["action"].get("enum", [])
-    assert set(enum) >= {"create", "add", "close", "list"}, (
+    assert set(enum) >= {"create", "new_tab", "add", "close", "list"}, (
         f"browser_session action enum missing values: {enum}"
     )
     assert "session" in props, "browser_session must have 'session' property"
     assert "group_title" in props, "browser_session must have 'group_title' property"
+    assert "url" in props, "browser_session must have 'url' property"
     assert "tabId" in props, "browser_session must have 'tabId' property"
+
+
+def test_browser_screenshot_schema_supports_inline_jpeg_defaults():
+    tool = _get_tool("browser_screenshot")
+    props = tool["inputSchema"].get("properties", {})
+    desc = tool["description"]
+
+    assert "inline" in props, "browser_screenshot must support inline ImageContent responses"
+    assert props["format"].get("description", "").lower().find("jpeg") >= 0
+    assert props["quality"].get("description", "").find("70") >= 0
+    assert "inline=true" in desc
+    assert "DOM" in desc
 
 
 # ==================== 5. Old tools must NOT be present ====================

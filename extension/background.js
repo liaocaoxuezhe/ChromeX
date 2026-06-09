@@ -361,6 +361,37 @@ async function findUsableTabId(excludeIds = new Set()) {
   );
 }
 
+function isDebuggerAlreadyAttachedError(err) {
+  return String(err?.message || err).includes("Another debugger is already attached");
+}
+
+async function detachDebuggerTab(tabId) {
+  try {
+    await chrome.debugger.detach({ tabId });
+    await new Promise(r => setTimeout(r, 100));
+    return true;
+  } catch (err) {
+    console.warn(`[Link2Chrome] detach tab ${tabId} 失败: ${err.message}`);
+    return false;
+  }
+}
+
+async function enableCaptureDomainsForAttachedTab(tabId) {
+  if (networkCaptureState.enabled) {
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Network.enable",
+      { maxPostDataSize: 200000 }
+    ).catch((err) => console.warn(`[Link2Chrome] Network.enable 失败: ${err.message}`));
+  }
+  if (consoleCaptureState.enabled) {
+    await chrome.debugger.sendCommand({ tabId }, "Runtime.enable")
+      .catch((err) => console.warn(`[Link2Chrome] Runtime.enable 失败: ${err.message}`));
+    await chrome.debugger.sendCommand({ tabId }, "Log.enable")
+      .catch((err) => console.warn(`[Link2Chrome] Log.enable 失败: ${err.message}`));
+  }
+}
+
 /**
  * 确保 debugger 附加到一个可调试的 tab。
  * 带重试机制：如果 attach 失败（如 chrome-extension:// 错误），排除该 tab 并重试。
@@ -372,6 +403,7 @@ async function ensureDebuggerAttached() {
       const tab = await chrome.tabs.get(attachedTabId);
       if (isDebugableUrl(tab.url)) {
         console.log(`[Link2Chrome] 已附加到有效 tab ${attachedTabId}`);
+        await enableCaptureDomainsForAttachedTab(attachedTabId);
         return attachedTabId;
       }
       // URL 变了（比如被其他扩展劫持），需要重新 attach
@@ -430,14 +462,23 @@ async function ensureDebuggerAttached() {
       attachedTabId = tabId;
       targetTabId = tabId;
       chrome.debugger.sendCommand({ tabId }, "Page.enable").catch(() => {});
+      await enableCaptureDomainsForAttachedTab(tabId);
       console.log(`[Link2Chrome] Debugger 已附加到 tab ${tabId} (${tab.url})`);
       return tabId;
     } catch (err) {
       console.error(`[Link2Chrome] attach tab ${tabId} (${tab.url}) 失败: ${err.message}`);
-      failedIds.add(tabId);
       if (tabId === targetTabId) targetTabId = null;
       attachedTabId = null;
-      // 如果不是 chrome-extension 相关错误，直接抛出
+      if (isDebuggerAlreadyAttachedError(err)) {
+        if (await detachDebuggerTab(tabId)) {
+          failedIds.delete(tabId);
+        } else {
+          failedIds.add(tabId);
+        }
+        continue;
+      }
+      failedIds.add(tabId);
+      // 如果不是可跳过的受限页面错误，直接抛出
       if (!err.message.includes("chrome-extension") && !err.message.includes("Cannot access")) {
         throw new Error(`Debugger attach 失败 (tab=${tabId}, url=${tab.url}): ${err.message}`);
       }
@@ -1063,9 +1104,10 @@ async function navigateWithTabs(url, timeoutMs) {
     return waitForTabsNavigation(tabId, url, timeoutMs);
   }
 
+  await detachDebuggerTab(tabId);
+  attachedTabId = null;
   await chrome.tabs.update(tabId, { url });
   targetTabId = tabId;
-  attachedTabId = null;
   console.log(`[Link2Chrome] tabs 导航: 已更新标签页 ${tabId} 的 URL 为 ${url}`);
   return waitForTabsNavigation(tabId, url, timeoutMs);
 }
