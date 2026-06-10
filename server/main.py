@@ -39,6 +39,11 @@ from server.session_manager import SessionManager
 from server.tool_descriptions import TOOL_DEFINITIONS
 from server.playwright_runtime import PlaywrightRuntime
 
+try:
+    from server.nodejs_runtime_manager import NodeJSRuntimeManager
+except ImportError:
+    NodeJSRuntimeManager = None  # type: ignore
+
 # 加载环境变量
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -57,6 +62,11 @@ debugger_manager = DebuggerManager(ws_manager=ws_manager)
 session_manager = SessionManager()
 dom_cache = DomSnapshotCache()
 playwright_runtime = PlaywrightRuntime()
+
+if NodeJSRuntimeManager is not None:
+    nodejs_runtime: Optional[NodeJSRuntimeManager] = NodeJSRuntimeManager(project_root=_project_root)
+else:
+    nodejs_runtime = None
 
 _SESSION_TMPDIR = tempfile.mkdtemp(prefix="link2chrome_")
 atexit.register(shutil.rmtree, _SESSION_TMPDIR, True)
@@ -738,9 +748,6 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
     if name == "handle_dialog":
         return _json_content(await ws_manager.send_command("handle_dialog", args))
 
-    if name == "playwright_run":
-        return _json_content({"ok": False, "error": "not implemented in this phase"})
-
     if name == "script_evaluate":
         return _json_content(await ws_manager.send_command("script_evaluate", args))
 
@@ -815,12 +822,68 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
 
 
 async def tool_playwright_run(args: dict) -> list[TextContent]:
-    """执行 Playwright 风格的 JavaScript 代码。"""
+    """执行 Playwright 风格的 JavaScript 代码。
+
+    优先通过 NodeJSRuntimeManager 在 Node.js 子进程中执行，
+    若 Node.js 不可用则降级到原有 PlaywrightRuntime（Extension 端执行）。
+    """
+    code = args["code"]
+    timeout = args.get("timeout", 30000)
+    max_result_chars = args.get("max_result_chars", 20000)
+
+    def _truncate_result(raw_result: object) -> dict:
+        """对执行结果进行截断处理，保持与原有 PlaywrightRuntime 一致的返回格式。"""
+        serialized = PlaywrightRuntime._serialize_result(raw_result)
+        truncated = False
+        if len(serialized) > max_result_chars:
+            serialized = serialized[:max_result_chars] + "\n...[truncated]"
+            truncated = True
+        return {
+            "ok": True,
+            "result": serialized if truncated else raw_result,
+            "truncated": truncated,
+            "charCount": len(serialized),
+        }
+
+    # 优先尝试 Node.js Runtime
+    if nodejs_runtime is not None:
+        try:
+            if not nodejs_runtime.is_ready:
+                started = await nodejs_runtime.start()
+                if not started:
+                    logger.warning(
+                        f"Node.js Runtime 启动失败: {nodejs_runtime.startup_error}，"
+                        "降级到 Extension 端 PlaywrightRuntime 执行"
+                    )
+                    result = await playwright_runtime.run(
+                        code=code,
+                        ws_manager=ws_manager,
+                        timeout=timeout,
+                        max_result_chars=max_result_chars,
+                    )
+                    return _json_content(result)
+
+            result = await nodejs_runtime.execute(code, timeout)
+            if result.get("ok"):
+                return _json_content(_truncate_result(result["result"]))
+            else:
+                # Node.js 正常执行但用户代码出错，直接返回错误（含堆栈）
+                return _json_content({
+                    "ok": False,
+                    "error": result.get("error", "未知错误"),
+                    "stack": result.get("stack"),
+                })
+        except Exception as exc:
+            logger.warning(
+                f"Node.js Runtime 异常: {exc}，降级到 Extension 端 PlaywrightRuntime 执行"
+            )
+
+    # 降级路径：原有 Extension 端 PlaywrightRuntime
     result = await playwright_runtime.run(
-        code=args["code"],
+        code=code,
         ws_manager=ws_manager,
-        timeout=args.get("timeout", 30000),
-        max_result_chars=args.get("max_result_chars", 20000),
+        timeout=timeout,
+        max_result_chars=max_result_chars,
     )
     return _json_content(result)
 
@@ -890,8 +953,13 @@ async def run():
     logger.info("MCP adapter 已连接 Browser Hub，等待 Chrome Extension 连接...")
 
     # 启动 MCP StdIO Server
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await app.run(read_stream, write_stream, app.create_initialization_options())
+    finally:
+        if nodejs_runtime is not None:
+            await nodejs_runtime.stop()
+            logger.info("Node.js Playwright Runtime 已停止")
 
 
 def main():
