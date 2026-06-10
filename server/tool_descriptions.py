@@ -569,8 +569,12 @@ TOOL_DEFINITIONS = [
     {
         "name": "playwright_run",
         "description": (
-            "Execute a Playwright-style JavaScript snippet to perform complex multi-step browser automation "
-            "in a single tool call.\n\n"
+            "Execute a Playwright-style JavaScript snippet in a real Node.js subprocess managed by the MCP Server. "
+            "The code runs with async/await support, closures, and cross-call variable persistence (variables declared with 'const' or 'let' in one tool call remain available in subsequent calls).\n\n"
+            "**Execution Environment:**\n"
+            "- Runs in a Node.js subprocess via stdio IPC.\n"
+            "- Pre-injected globals: `browser` (Browser instance), `link2chrome` (client API namespace), `console` (redirected to MCP logs).\n"
+            "- Under the hood, the Node.js process connects to the Browser Hub via WebSocket (ws://localhost:8766) and reuses the Chrome Extension + CDP transport.\n\n"
             "**When to use:**\n"
             "- Multi-step form filling (5+ fields)\n"
             "- Conditional logic (if element exists, do X, else do Y)\n"
@@ -579,13 +583,32 @@ TOOL_DEFINITIONS = [
             "**When NOT to use:**\n"
             "- Single click or type → use action_click / action_fill\n"
             "- Just reading page content → use browser_dom_get_text\n"
-            "- Just taking a screenshot → use browser_screenshot"
+            "- Just taking a screenshot → use browser_screenshot\n\n"
+            "**Examples:**\n"
+            "```javascript\n"
+            "// Navigate and interact with a page\n"
+            "const tab = await browser.tabs.selected();\n"
+            "await tab.goto('https://example.com');\n"
+            "await tab.playwright.locator('input[name=\"q\"]').fill('hello');\n"
+            "await tab.playwright.locator('button[type=\"submit\"]').click();\n"
+            "await tab.playwright.waitForLoadState('networkidle');\n"
+            "return await tab.playwright.domSnapshot();\n"
+            "```\n\n"
+            "```javascript\n"
+            "// Variable persists across tool calls (no 'const' needed in second call)\n"
+            "await tab.playwright.locator('.item').nth(2).click();\n"
+            "return await tab.playwright.locator('.item').count();\n"
+            "```"
         ),
         "inputSchema": _obj_schema(
             {
                 "code": {
                     "type": "string",
-                    "description": "Playwright-style JavaScript code. The 'page' object is pre-bound. Use 'return' to send results back.",
+                    "description": (
+                        "Playwright-style JavaScript code executed in the Node.js runtime. "
+                        "Use the pre-bound `browser` and `link2chrome` objects. "
+                        "Use 'return' to send serializable results back to the MCP client."
+                    ),
                 },
                 "timeout": {
                     "type": "integer",
