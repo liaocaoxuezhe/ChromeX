@@ -705,7 +705,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         target = args.get("target")
         if not target:
             return _json_content({"ok": False, "error": "target is required"})
-        return _json_content(await ws_manager.send_command("click", {"target": target, "clickCount": 2}))
+        return _json_content(await ws_manager.send_command("action_click", {"target": target, "clickCount": 2}))
 
     if name == "action_hover":
         return _json_content(await ws_manager.send_command("action_hover", args))

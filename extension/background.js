@@ -2214,7 +2214,7 @@ async function cmdActionClick(params) {
     const el = found.elements?.find(e => e.visible);
     if (!el) throw new Error(`No visible element found by text: ${target.text}`);
     const started = Date.now();
-    await cmdClick({ x: el.x, y: el.y });
+    await cmdClick({ x: el.x, y: el.y, button: params.button || "left", clickCount: params.clickCount || 1 });
     return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started };
   }
   if (!selector && target.ariaLabel) selector = `[aria-label*="${cssEscape(target.ariaLabel)}"]`;
