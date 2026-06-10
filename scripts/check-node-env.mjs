@@ -5,20 +5,18 @@
  *
  * 检测项：
  * 1. Node.js 版本 >= 18
- * 2. runtime 入口文件存在
+ * 2. runtime 入口文件存在 (runtime/nodejs-playwright-runtime.mjs)
  * 3. link2chrome-client.mjs 存在
- * 4. WebSocket 端口状态（Hub 是否运行）
- * 5. Extension WebSocket 端口状态
+ * 4. WebSocket 端口 8766 可连通（Hub 是否运行）
+ * 5. WebSocket 端口 8765 可连通（Extension 是否连接）
  *
  * 使用方式：
  *   node scripts/check-node-env.mjs
  *   node scripts/check-node-env.mjs --json
  */
 
-import { execSync } from "child_process";
 import fs from "fs";
 import net from "net";
-import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -66,21 +64,35 @@ function checkFiles() {
   checks.clientModule.ok = fs.existsSync(checks.clientModule.path);
 }
 
-async function checkPort(port) {
+/**
+ * 使用 net.connect 检测端口是否可连通。
+ * 连接成功 → 端口被占用（服务在运行）
+ * ECONNREFUSED → 端口未运行
+ */
+async function checkPort(port, timeoutMs = 2000) {
   return new Promise((resolve) => {
-    const server = net.createServer();
-    server.once("error", (err) => {
-      if (err.code === "EADDRINUSE") {
-        resolve(true); // 端口被占用 = 服务在运行
+    const socket = new net.Socket();
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve(false);
+    }, timeoutMs);
+
+    socket.connect(port, "127.0.0.1", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(true);
+    });
+
+    socket.on("error", (err) => {
+      clearTimeout(timer);
+      socket.destroy();
+      if (err.code === "ECONNREFUSED") {
+        resolve(false);
       } else {
+        // 其他错误视为未连通
         resolve(false);
       }
     });
-    server.once("listening", () => {
-      server.close();
-      resolve(false); // 端口空闲 = 服务未运行
-    });
-    server.listen(port, "127.0.0.1");
   });
 }
 
