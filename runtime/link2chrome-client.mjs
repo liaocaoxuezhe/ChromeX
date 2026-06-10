@@ -1299,7 +1299,7 @@ class Locator {
 
   async count() {
     const matcher = this._textMatcher();
-    if (this.target.has || this.target.hasNot || this.target.visibleOnly) {
+    if (this.target.has || this.target.hasNot || this.target.visibleOnly || this.target.hasNotText !== undefined) {
       return this._countWithScriptEvaluate();
     }
     if (matcher && !this.target.selector) {
@@ -1327,6 +1327,12 @@ class Locator {
     const has = this.target.has || "";
     const hasNot = this.target.hasNot || "";
     const visibleOnly = this.target.visibleOnly || false;
+    const hasNotTextMatcher = this.target.hasNotTextMatcher || null;
+    const hasNotText = hasNotTextMatcher
+      ? (hasNotTextMatcher.kind === "regex"
+        ? { kind: "regex", source: hasNotTextMatcher.source, flags: hasNotTextMatcher.flags }
+        : { kind: hasNotTextMatcher.kind, text: hasNotTextMatcher.text })
+      : null;
     const script = `
       (function() {
         const nodes = document.querySelectorAll(${JSON.stringify(selector)});
@@ -1338,6 +1344,15 @@ class Locator {
             const r = el.getBoundingClientRect();
             const st = getComputedStyle(el);
             if (r.width === 0 || r.height === 0 || st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
+          ` : ""}
+          ${hasNotText ? `
+            const text = (el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+            ${hasNotText.kind === "regex"
+              ? `if (new RegExp(${JSON.stringify(hasNotText.source)}, ${JSON.stringify(hasNotText.flags || "")}).test(text)) continue;`
+              : hasNotText.kind === "exact"
+                ? `if (text === ${JSON.stringify(hasNotText.text.toLowerCase())}) continue;`
+                : `if (text.includes(${JSON.stringify(hasNotText.text.toLowerCase())})) continue;`
+            }
           ` : ""}
           count++;
         }
@@ -1609,10 +1624,14 @@ class Locator {
   async _resolveTarget() {
     if (!this._needsResolvedTarget()) return this.target;
     const matcher = this._textMatcher();
+    const hasNotTextMatcher = this.target.hasNotTextMatcher || null;
     const raw = await this._queryResolvableElements(matcher);
-    const elements = matcher
+    let elements = matcher
       ? locatorElements(raw).filter((element) => locatorTextMatches(element, matcher))
       : locatorElements(raw);
+    if (hasNotTextMatcher) {
+      elements = elements.filter((element) => !locatorTextMatches(element, hasNotTextMatcher));
+    }
     const index = this.target.index ?? 0;
     const element = this.target.last ? elements.at(-1) : elements[index];
     if (!element) {
@@ -1629,7 +1648,8 @@ class Locator {
     const matcher = this._textMatcher();
     return this.target.index !== undefined
       || this.target.last
-      || (matcher && matcher.kind !== "contains");
+      || (matcher && matcher.kind !== "contains")
+      || this.target.hasNotText !== undefined;
   }
 
   _textMatcher() {
@@ -1650,7 +1670,7 @@ class Locator {
 
   _queryResolvableElements(matcher) {
     if (this.target.selector) {
-      const limit = matcher || this.target.last ? 100 : this.target.index + 1;
+      const limit = matcher || this.target.last ? 100 : (this.target.index ?? 0) + 1;
       return this._transport.command("browser.dom.query", {
         selector: this.target.selector,
         limit,
@@ -1662,7 +1682,7 @@ class Locator {
     }
     return this._transport.command("browser.dom.search", {
       query: this.target.text,
-      limit: this.target.last ? 100 : this.target.index + 1,
+      limit: this.target.last ? 100 : (this.target.index ?? 0) + 1,
     });
   }
 }
