@@ -753,6 +753,32 @@ function cleanNumber(value) {
   return Number.isInteger(value) ? value : Number(value.toFixed(3));
 }
 
+class Link2ChromeError extends Error {
+  constructor(message, props = {}) {
+    super(message);
+    this.name = this.constructor.name;
+    Object.assign(this, props);
+  }
+}
+
+export class LocatorNotFoundError extends Link2ChromeError {
+  constructor(selector, url) {
+    super(`Locator did not match any element: ${selector}`, { selector, url });
+  }
+}
+
+export class StrictModeError extends Link2ChromeError {
+  constructor(selector, url, count) {
+    super(`Strict mode violation: locator resolved to ${count} elements: ${selector}`, { selector, url, count });
+  }
+}
+
+export class TimeoutError extends Link2ChromeError {
+  constructor(message, selector, url) {
+    super(message, { selector, url });
+  }
+}
+
 function roleSelector(role) {
   const normalized = String(role || "").toLowerCase();
   const selectors = {
@@ -946,7 +972,8 @@ class PlaywrightSurface {
   }
 
   async domSnapshot(options = {}) {
-    return this._transport.command("browser.dom.overview", options);
+    const raw = await this._transport.command("browser.dom.overview", options);
+    return formatDomSnapshot(raw);
   }
 
   async screenshot(options = {}) {
@@ -961,6 +988,26 @@ class PlaywrightSurface {
   }
 
   async waitForLoadState(state = "load", options = {}) {
+    const timeoutMs = options.timeoutMs ?? options.timeout ?? 30000;
+    const deadline = Date.now() + timeoutMs;
+    const sleepMs = 250;
+
+    const readyScripts = {
+      load: "document.readyState === 'complete'",
+      domcontentloaded: "document.readyState !== 'loading'",
+      networkidle: "(function(){const e=performance.getEntriesByType('resource');const n=performance.now();return e.filter(r=>n-r.startTime<500).length===0&&document.readyState==='complete';})()",
+    };
+
+    if (readyScripts[state]) {
+      while (Date.now() < deadline) {
+        const result = await this._evalBoolean(readyScripts[state]);
+        if (result === true) return;
+        if (result === undefined) break; // transport doesn't support script_evaluate, fallback
+        await new Promise((resolve) => setTimeout(resolve, sleepMs));
+      }
+    }
+
+    // Fallback to browser.wait for unknown states or when script_evaluate unavailable
     const condition = state === "networkidle" ? "network-idle" : "dom-ready";
     return this._transport.command("browser.wait", {
       condition,
@@ -969,14 +1016,64 @@ class PlaywrightSurface {
     });
   }
 
+  async waitForURL(pattern, options = {}) {
+    const timeoutMs = options.timeoutMs ?? options.timeout ?? 30000;
+    const deadline = Date.now() + timeoutMs;
+    const sleepMs = 250;
+    const matcher = globToRegex(pattern);
+    const tabUrl = this._tab?.url;
+    if (tabUrl && matcher.test(tabUrl)) return;
+
+    while (Date.now() < deadline) {
+      let currentUrl;
+      try {
+        const info = await this._tab?.info?.();
+        currentUrl = info?.url;
+      } catch {
+        currentUrl = this._tab?.url;
+      }
+      if (currentUrl && matcher.test(currentUrl)) return;
+      await new Promise((resolve) => setTimeout(resolve, sleepMs));
+    }
+    throw new TimeoutError(`waitForURL('${pattern}') timed out after ${timeoutMs}ms`, pattern, this._tab?.url);
+  }
+
+  async expectNavigation(action, options = {}) {
+    const timeoutMs = options.timeoutMs ?? options.timeout ?? 30000;
+    let before;
+    try {
+      const info = await this._tab?.info?.();
+      before = info?.url;
+    } catch {
+      before = this._tab?.url;
+    }
+
+    await action();
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      let after;
+      try {
+        const info = await this._tab?.info?.();
+        after = info?.url;
+      } catch {
+        after = this._tab?.url;
+      }
+      if (after && after !== before) return { from: before, to: after };
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new TimeoutError(`expectNavigation timed out after ${timeoutMs}ms`, null, before);
+  }
+
   locator(selector) {
-    return new Locator({ transport: this._transport, safety: this._safety, target: { selector } });
+    return new Locator({ transport: this._transport, safety: this._safety, tab: this._tab, target: { selector } });
   }
 
   getByText(text, options = {}) {
     return new Locator({
       transport: this._transport,
       safety: this._safety,
+      tab: this._tab,
       target: { text, textMatcher: normalizeTextMatcher(text, options) },
     });
   }
@@ -985,8 +1082,24 @@ class PlaywrightSurface {
     return new Locator({
       transport: this._transport,
       safety: this._safety,
+      tab: this._tab,
       target: { selector: roleSelector(role), role, text: options.name },
     });
+  }
+
+  getByLabel(label) {
+    const escaped = cssStringEscape(label);
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: { selector: `[aria-label="${escaped}"]`, label },
+    });
+  }
+
+  getByPlaceholder(placeholder) {
+    const escaped = cssStringEscape(placeholder);
+    return this.locator(`[placeholder="${escaped}"]`);
   }
 
   getByTestId(testId) {
@@ -1006,6 +1119,63 @@ class PlaywrightSurface {
       ...commandOptions,
     });
   }
+
+  async _evalBoolean(script) {
+    try {
+      const raw = await this._transport.command("script_evaluate", { script, awaitPromise: false, timeout: 5000 });
+      if (typeof raw === "boolean") return raw;
+      if (raw && typeof raw === "object" && typeof raw.result === "boolean") return raw.result;
+    } catch {
+      // ignore
+    }
+    return undefined;
+  }
+}
+
+function formatDomSnapshot(raw = {}) {
+  const lines = [];
+  lines.push(`# ${raw.title || "Page"}`);
+  lines.push(`- URL: ${raw.url || ""}`);
+  lines.push("");
+
+  const section = (title, items, formatter) => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    lines.push(`## ${title}`);
+    for (const item of items.slice(0, 50)) {
+      lines.push(`- ${formatter(item)}`);
+    }
+    lines.push("");
+  };
+
+  section("Headings", raw.headings, (h) => `${h.tag}: ${h.text || ""}`);
+  section("Buttons", raw.buttons, (b) => `${b.text || ""}${b.visible === false ? " (hidden)" : ""}`);
+  section("Inputs", raw.inputs, (i) => `${i.tag}${i.type ? `[type=${i.type}]` : ""}${i.name ? ` name="${i.name}"` : ""}${i.placeholder ? ` placeholder="${i.placeholder}"` : ""}`);
+  section("Links", raw.linksDetailed, (l) => `${l.text || ""} → ${l.href || ""}`);
+
+  if (raw.forms !== undefined || raw.tables !== undefined || raw.links !== undefined || raw.images !== undefined) {
+    lines.push("## Summary");
+    if (raw.forms !== undefined) lines.push(`- Forms: ${raw.forms}`);
+    if (raw.tables !== undefined) lines.push(`- Tables: ${raw.tables}`);
+    if (raw.links !== undefined) lines.push(`- Links: ${raw.links}`);
+    if (raw.images !== undefined) lines.push(`- Images: ${raw.images}`);
+    lines.push("");
+  }
+
+  if (raw.summary) {
+    lines.push(`> ${raw.summary}`);
+  }
+
+  return lines.join("\n").trim();
+}
+
+function globToRegex(pattern) {
+  const escaped = String(pattern)
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "<<<DOUBLESTAR>>>")
+    .replace(/\*/g, "[^/]*")
+    .replace(/<<<DOUBLESTAR>>>/g, ".*")
+    .replace(/\?/g, ".");
+  return new RegExp(`^${escaped}$`);
 }
 
 class FileChooser {
@@ -1037,9 +1207,10 @@ class FileChooser {
 }
 
 class Locator {
-  constructor({ transport, safety, target }) {
+  constructor({ transport, safety, tab, target }) {
     this._transport = transport;
     this._safety = safety;
+    this._tab = tab;
     this.target = target;
   }
 
@@ -1051,6 +1222,7 @@ class Locator {
     return new Locator({
       transport: this._transport,
       safety: this._safety,
+      tab: this._tab,
       target: { ...this.target, last: true },
     });
   }
@@ -1062,23 +1234,74 @@ class Locator {
     return new Locator({
       transport: this._transport,
       safety: this._safety,
+      tab: this._tab,
       target: { ...this.target, index },
     });
   }
 
-  filter(options = {}) {
-    if (options.hasText === undefined) {
+  and(other) {
+    const otherSelector = other?.target?.selector;
+    if (!this.target.selector || !otherSelector) {
       return this;
     }
     return new Locator({
       transport: this._transport,
       safety: this._safety,
-      target: { ...this.target, text: options.hasText, textMatcher: normalizeTextMatcher(options.hasText) },
+      tab: this._tab,
+      target: { ...this.target, selector: `:is(${this.target.selector}):is(${otherSelector})` },
+    });
+  }
+
+  or(other) {
+    const otherSelector = other?.target?.selector;
+    if (!this.target.selector || !otherSelector) {
+      return this;
+    }
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: { ...this.target, selector: `:is(${this.target.selector}, ${otherSelector})` },
+    });
+  }
+
+  filter(options = {}) {
+    const next = { ...this.target };
+    if (options.hasText !== undefined) {
+      next.text = options.hasText;
+      next.textMatcher = normalizeTextMatcher(options.hasText);
+    }
+    if (options.hasNotText !== undefined) {
+      next.hasNotText = options.hasNotText;
+      next.hasNotTextMatcher = normalizeTextMatcher(options.hasNotText);
+    }
+    if (options.has !== undefined) {
+      const hasSelector = options.has?.target?.selector || String(options.has);
+      next.has = hasSelector;
+    }
+    if (options.hasNot !== undefined) {
+      const hasNotSelector = options.hasNot?.target?.selector || String(options.hasNot);
+      next.hasNot = hasNotSelector;
+    }
+    if (options.visible === true) {
+      next.visibleOnly = true;
+    }
+    if (Object.keys(next).length === Object.keys(this.target).length) {
+      return this;
+    }
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: next,
     });
   }
 
   async count() {
     const matcher = this._textMatcher();
+    if (this.target.has || this.target.hasNot || this.target.visibleOnly || this.target.hasNotText !== undefined) {
+      return this._countWithScriptEvaluate();
+    }
     if (matcher && !this.target.selector) {
       if (matcher.kind === "contains") {
         const raw = await this._transport.command("browser.dom.search", { query: matcher.text });
@@ -1099,18 +1322,63 @@ class Locator {
     return elements.length || Number(raw.count || 0);
   }
 
+  async _countWithScriptEvaluate() {
+    const selector = this.target.selector || "*";
+    const has = this.target.has || "";
+    const hasNot = this.target.hasNot || "";
+    const visibleOnly = this.target.visibleOnly || false;
+    const hasNotTextMatcher = this.target.hasNotTextMatcher || null;
+    const hasNotText = hasNotTextMatcher
+      ? (hasNotTextMatcher.kind === "regex"
+        ? { kind: "regex", source: hasNotTextMatcher.source, flags: hasNotTextMatcher.flags }
+        : { kind: hasNotTextMatcher.kind, text: hasNotTextMatcher.text })
+      : null;
+    const script = `
+      (function() {
+        const nodes = document.querySelectorAll(${JSON.stringify(selector)});
+        let count = 0;
+        for (const el of nodes) {
+          ${has ? `if (!el.querySelector(${JSON.stringify(has)})) continue;` : ""}
+          ${hasNot ? `if (el.querySelector(${JSON.stringify(hasNot)})) continue;` : ""}
+          ${visibleOnly ? `
+            const r = el.getBoundingClientRect();
+            const st = getComputedStyle(el);
+            if (r.width === 0 || r.height === 0 || st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
+          ` : ""}
+          ${hasNotText ? `
+            const text = (el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+            ${hasNotText.kind === "regex"
+              ? `if (new RegExp(${JSON.stringify(hasNotText.source)}, ${JSON.stringify(hasNotText.flags || "")}).test(text)) continue;`
+              : hasNotText.kind === "exact"
+                ? `if (text === ${JSON.stringify(hasNotText.text.toLowerCase())}) continue;`
+                : `if (text.includes(${JSON.stringify(hasNotText.text.toLowerCase())})) continue;`
+            }
+          ` : ""}
+          count++;
+        }
+        return count;
+      })()
+    `;
+    const raw = await this._transport.command("script_evaluate", { script });
+    if (typeof raw === "number") return raw;
+    if (raw && typeof raw === "object" && typeof raw.result === "number") return raw.result;
+    return 0;
+  }
+
   async click(options = {}) {
+    await this._strictCheck(options);
     const target = await this._resolveTarget();
     await this._safety?.confirm({
       type: "click",
       target,
       safety: options.safety,
     });
-    const { safety, ...commandOptions } = options;
+    const { safety, strict, ...commandOptions } = options;
     return this._transport.command("browser.dom.click", { target, ...commandOptions });
   }
 
   async fill(text, options = {}) {
+    await this._strictCheck(options);
     const target = await this._resolveTarget();
     await this._safety?.confirm({
       type: "fill",
@@ -1126,14 +1394,17 @@ class Locator {
   }
 
   async hover(options = {}) {
+    await this._strictCheck(options);
     const target = await this._resolveTarget();
+    const { strict, ...commandOptions } = options;
     return this._transport.command("action_hover", {
       target,
-      ...options,
+      ...commandOptions,
     });
   }
 
   async press(key, options = {}) {
+    await this._strictCheck(options);
     const target = await this._resolveTarget();
     await this._safety?.confirm({
       type: "press",
@@ -1141,7 +1412,7 @@ class Locator {
       key,
       safety: options.safety,
     });
-    const { safety, ...commandOptions } = options;
+    const { safety, strict, ...commandOptions } = options;
     return this._transport.command("action_press_key", {
       target,
       key,
@@ -1150,6 +1421,7 @@ class Locator {
   }
 
   async selectOption(value, options = {}) {
+    await this._strictCheck(options);
     const target = await this._resolveTarget();
     await this._safety?.confirm({
       type: "selectOption",
@@ -1157,10 +1429,61 @@ class Locator {
       value,
       safety: options.safety,
     });
-    const { safety, ...commandOptions } = options;
+    const { safety, strict, ...commandOptions } = options;
     return this._transport.command("action_select", {
       target,
       value,
+      ...commandOptions,
+    });
+  }
+
+  async check(options = {}) {
+    return this.setChecked(true, options);
+  }
+
+  async uncheck(options = {}) {
+    return this.setChecked(false, options);
+  }
+
+  async setChecked(checked, options = {}) {
+    await this._strictCheck(options);
+    const target = await this._resolveTarget();
+    await this._safety?.confirm({
+      type: checked ? "check" : "uncheck",
+      target,
+      safety: options.safety,
+    });
+    const { safety, strict, ...commandOptions } = options;
+    return this._transport.command("script_evaluate", {
+      script: `
+        (function() {
+          const el = document.querySelector(${JSON.stringify(target.selector)});
+          if (!el) throw new Error('Element not found: ${target.selector}');
+          if (el.tagName !== 'INPUT' || (el.type !== 'checkbox' && el.type !== 'radio')) {
+            throw new Error('Element is not a checkbox or radio: ' + el.tagName);
+          }
+          el.checked = ${checked};
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return el.checked;
+        })()
+      `,
+      ...commandOptions,
+    });
+  }
+
+  async dblclick(options = {}) {
+    await this._strictCheck(options);
+    const target = await this._resolveTarget();
+    await this._safety?.confirm({
+      type: "dblclick",
+      target,
+      safety: options.safety,
+    });
+    const { safety, strict, ...commandOptions } = options;
+    return this._transport.command("browser.dom.click", {
+      target,
+      clickCount: 2,
       ...commandOptions,
     });
   }
@@ -1174,6 +1497,7 @@ class Locator {
   }
 
   async setFiles(paths, options = {}) {
+    await this._strictCheck(options);
     const normalizedPaths = Array.isArray(paths) ? paths : [paths];
     await this._safety?.confirm({
       type: "filechooser.setFiles",
@@ -1181,7 +1505,7 @@ class Locator {
       paths: normalizedPaths,
       safety: options.safety,
     });
-    const { safety, ...commandOptions } = options;
+    const { safety, strict, ...commandOptions } = options;
     return this._transport.command("upload_file", {
       selector: this.target.selector,
       paths: normalizedPaths,
@@ -1266,18 +1590,53 @@ class Locator {
     return (await this._resolveTarget()).selector;
   }
 
+  async _strictCheck(options = {}) {
+    if (options.strict === false) return;
+    // User explicitly narrowed with nth() or last() — respect that choice
+    if (this.target.index !== undefined || this.target.last) return;
+    let count;
+    try {
+      count = await this.count();
+    } catch {
+      return;
+    }
+    if (count === 0) {
+      try {
+        const raw = await this._transport.command("browser.dom.query", {
+          selector: this.target.selector,
+          limit: 1,
+          ...(this.target.text ? { attributes: ["text", "ariaLabel"] } : {}),
+        });
+        const hasValidResponse = raw && (
+          Array.isArray(raw.results) || Array.isArray(raw.elements) || Array.isArray(raw.matches) || typeof raw.count === "number"
+        );
+        if (!hasValidResponse) return; // fake or unsupported transport, skip strict check
+      } catch {
+        return;
+      }
+      throw new LocatorNotFoundError(this.target.selector || this.target.text, this._tab?.url);
+    }
+    if (count > 1) {
+      throw new StrictModeError(this.target.selector || this.target.text, this._tab?.url, count);
+    }
+  }
+
   async _resolveTarget() {
     if (!this._needsResolvedTarget()) return this.target;
     const matcher = this._textMatcher();
+    const hasNotTextMatcher = this.target.hasNotTextMatcher || null;
     const raw = await this._queryResolvableElements(matcher);
-    const elements = matcher
+    let elements = matcher
       ? locatorElements(raw).filter((element) => locatorTextMatches(element, matcher))
       : locatorElements(raw);
+    if (hasNotTextMatcher) {
+      elements = elements.filter((element) => !locatorTextMatches(element, hasNotTextMatcher));
+    }
     const index = this.target.index ?? 0;
     const element = this.target.last ? elements.at(-1) : elements[index];
     if (!element) {
-      const description = this.target.last ? "locator.last()" : `locator.nth(${index})`;
-      throw new Error(`${description} did not match an element`);
+      const selector = this.target.selector || this.target.text || String(this.target);
+      throw new LocatorNotFoundError(selector, this._tab?.url);
     }
     return {
       ...(element.selector ? { selector: element.selector } : this.target),
@@ -1289,7 +1648,8 @@ class Locator {
     const matcher = this._textMatcher();
     return this.target.index !== undefined
       || this.target.last
-      || (matcher && matcher.kind !== "contains");
+      || (matcher && matcher.kind !== "contains")
+      || this.target.hasNotText !== undefined;
   }
 
   _textMatcher() {
@@ -1310,7 +1670,7 @@ class Locator {
 
   _queryResolvableElements(matcher) {
     if (this.target.selector) {
-      const limit = matcher || this.target.last ? 100 : this.target.index + 1;
+      const limit = matcher || this.target.last ? 100 : (this.target.index ?? 0) + 1;
       return this._transport.command("browser.dom.query", {
         selector: this.target.selector,
         limit,
@@ -1322,7 +1682,7 @@ class Locator {
     }
     return this._transport.command("browser.dom.search", {
       query: this.target.text,
-      limit: this.target.last ? 100 : this.target.index + 1,
+      limit: this.target.last ? 100 : (this.target.index ?? 0) + 1,
     });
   }
 }

@@ -994,9 +994,9 @@ test("locator hover press and selectOption map to action commands", async () => 
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
   const [tab] = await browser.tabs.list();
 
-  await tab.playwright.locator("button.help").hover();
-  await tab.playwright.locator("input[name=q]").press("Enter");
-  await tab.playwright.locator("select[name=country]").selectOption("US");
+  await tab.playwright.locator("button.help").hover({ strict: false });
+  await tab.playwright.locator("input[name=q]").press("Enter", { strict: false });
+  await tab.playwright.locator("select[name=country]").selectOption("US", { strict: false });
 
   assert.deepEqual(transport.calls.slice(-3), [
     { name: "action_hover", args: { target: { selector: "button.help" } } },
@@ -1106,6 +1106,56 @@ test("locator filter hasText reuses DOM query text filtering", async () => {
     name: "browser.dom.query",
     args: { selector: "button", limit: 100, attributes: ["text", "ariaLabel"] },
   });
+});
+
+test("locator filter hasNotText uses script_evaluate for client-side filtering", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "script_evaluate") {
+        return 1;
+      }
+      return { tabs: [{ id: 7, active: true }] };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const count = await tab.playwright.locator("button").filter({ hasNotText: "Delete" }).count();
+
+  assert.equal(count, 1);
+  const scriptCall = transport.calls.find((c) => c.name === "script_evaluate");
+  assert.ok(scriptCall, "expected script_evaluate to be called for hasNotText count");
+  assert.ok(scriptCall.args.script.includes("delete"), "expected script to reference hasNotText logic");
+});
+
+test("locator filter hasNotText resolves target via script_evaluate strict mode", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "script_evaluate") {
+        return 1;
+      }
+      if (name === "browser.dom.query") {
+        return { results: [{ text: "Save" }], count: 1 };
+      }
+      if (name === "browser.dom.click") {
+        return { ok: true };
+      }
+      return { tabs: [{ id: 7, active: true }] };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  await tab.playwright.locator("button").filter({ hasNotText: "Delete" }).click();
+
+  const scriptCall = transport.calls.find((c) => c.name === "script_evaluate");
+  assert.ok(scriptCall, "expected script_evaluate for strict check with hasNotText");
+  const clickCall = transport.calls.find((c) => c.name === "browser.dom.click");
+  assert.ok(clickCall, "expected browser.dom.click to be called");
 });
 
 test("locator textContent reads text from dom_query results", async () => {
@@ -1335,10 +1385,10 @@ test("playwright waitForLoadState maps load states to browser waits", async () =
   await tab.playwright.waitForLoadState("domcontentloaded", { timeout: 3000 });
   await tab.playwright.waitForLoadState("networkidle");
 
-  assert.deepEqual(transport.calls.slice(-2), [
-    { name: "browser.wait", args: { condition: "dom-ready", state: "domcontentloaded", timeout: 3000 } },
-    { name: "browser.wait", args: { condition: "network-idle", state: "networkidle" } },
-  ]);
+  const browserWaits = transport.calls.filter((c) => c.name === "browser.wait");
+  assert.equal(browserWaits.length, 2);
+  assert.deepEqual(browserWaits[0], { name: "browser.wait", args: { condition: "dom-ready", state: "domcontentloaded", timeout: 3000 } });
+  assert.deepEqual(browserWaits[1], { name: "browser.wait", args: { condition: "network-idle", state: "networkidle" } });
 });
 
 test("getByText count maps to browser.dom.search", async () => {
