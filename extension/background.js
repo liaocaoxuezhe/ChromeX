@@ -833,6 +833,9 @@ async function handleCommand(message) {
       case "script_evaluate":
         response.data = await cmdScriptEvaluate(params);
         break;
+      case "frame_evaluate":
+        response.data = await cmdFrameEvaluate(params);
+        break;
       case "ping_version":
         response.data = {
           version: BUILD_VERSION,
@@ -2544,6 +2547,51 @@ async function cmdScriptEvaluate(params) {
     error: result.error,
     type: typeof result.result,
     elapsed: Date.now() - started
+  };
+}
+
+async function cmdFrameEvaluate(params) {
+  const { frameSelectors, script } = params;
+  if (!Array.isArray(frameSelectors) || frameSelectors.length === 0) {
+    throw new Error("frameSelectors is required");
+  }
+  if (typeof script !== "string") {
+    throw new Error("script is required");
+  }
+
+  // 按 frameSelectors 逐层下钻，通过 contentDocument 进入同源 iframe
+  let drillScript = `
+    (function() {
+      let doc = document;
+  `;
+  for (const sel of frameSelectors) {
+    drillScript += `
+      {
+        const frame = doc.querySelector(${JSON.stringify(sel)});
+        if (!frame) throw new Error('Frame not found: ' + ${JSON.stringify(sel)});
+        const nextDoc = frame.contentDocument;
+        if (!nextDoc) throw new Error('cross-origin iframe not supported: ' + ${JSON.stringify(sel)});
+        doc = nextDoc;
+      }
+    `;
+  }
+  drillScript += `
+      return (function(document) { ${script} })(doc);
+    })()
+  `;
+
+  const result = await cmdExecuteScript({
+    script: drillScript,
+    awaitPromise: params.awaitPromise !== false,
+    timeout: params.timeout || 30000,
+  });
+
+  if (!result.success) {
+    throw new Error(result.error || "frame_evaluate failed");
+  }
+  return {
+    ok: true,
+    result: result.result,
   };
 }
 

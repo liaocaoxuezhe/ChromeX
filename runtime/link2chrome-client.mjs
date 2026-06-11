@@ -1200,6 +1200,10 @@ class PlaywrightSurface {
     return new Locator({ transport: this._transport, safety: this._safety, tab: this._tab, target: { selector } });
   }
 
+  frameLocator(selector) {
+    return new FrameLocator({ transport: this._transport, safety: this._safety, tab: this._tab, frameSelectors: [selector] });
+  }
+
   getByText(text, options = {}) {
     return new Locator({
       transport: this._transport,
@@ -1278,6 +1282,103 @@ class PlaywrightSurface {
       // ignore
     }
     return undefined;
+  }
+}
+
+class FrameLocator {
+  constructor({ transport, safety, tab, frameSelectors = [] }) {
+    this._transport = transport;
+    this._safety = safety;
+    this._tab = tab;
+    this._frameSelectors = frameSelectors;
+  }
+
+  frameLocator(selector) {
+    return new FrameLocator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      frameSelectors: [...this._frameSelectors, selector],
+    });
+  }
+
+  locator(selector, options = {}) {
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: { selector, frameContext: this._frameSelectors },
+    });
+  }
+
+  getByText(text, options = {}) {
+    const matcher = normalizeTextMatcher(text, options);
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: { selector: "*", text: typeof text === "string" ? text : undefined, textMatcher: matcher, frameContext: this._frameSelectors },
+    });
+  }
+
+  getByRole(role, options = {}) {
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: { selector: roleSelector(role), role, text: options.name, frameContext: this._frameSelectors },
+    });
+  }
+
+  getByLabel(label, options = {}) {
+    const matcher = normalizeTextMatcher(label, options);
+    if (matcher.kind === "regex" || matcher.kind === "contains") {
+      return new Locator({
+        transport: this._transport,
+        safety: this._safety,
+        tab: this._tab,
+        target: { selector: "[aria-label]", textMatcher: matcher, frameContext: this._frameSelectors },
+      });
+    }
+    const escaped = cssStringEscape(matcher.text);
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: { selector: `[aria-label="${escaped}"]`, label: matcher.text, textMatcher: matcher, frameContext: this._frameSelectors },
+    });
+  }
+
+  getByPlaceholder(placeholder, options = {}) {
+    const matcher = normalizeTextMatcher(placeholder, options);
+    if (matcher.kind === "regex" || matcher.kind === "contains") {
+      return new Locator({
+        transport: this._transport,
+        safety: this._safety,
+        tab: this._tab,
+        target: { selector: "[placeholder]", textMatcher: matcher, frameContext: this._frameSelectors },
+      });
+    }
+    const escaped = cssStringEscape(matcher.text);
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: { selector: `[placeholder="${escaped}"]`, frameContext: this._frameSelectors },
+    });
+  }
+
+  getByTestId(testId) {
+    const escaped = String(testId).replaceAll('"', '\\"');
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: {
+        selector: `[data-testid="${escaped}"], [data-test-id="${escaped}"], [data-test="${escaped}"]`,
+        frameContext: this._frameSelectors,
+      },
+    });
   }
 }
 
@@ -1361,6 +1462,21 @@ class Locator {
     this._safety = safety;
     this._tab = tab;
     this.target = target;
+  }
+
+  _hasFrameContext() {
+    return Array.isArray(this.target.frameContext) && this.target.frameContext.length > 0;
+  }
+
+  _frameSelectors() {
+    return this.target.frameContext || [];
+  }
+
+  _withFrameContext(args = {}) {
+    if (this._hasFrameContext()) {
+      return { ...args, frameContext: this._frameSelectors() };
+    }
+    return args;
   }
 
   first() {
@@ -1456,17 +1572,17 @@ class Locator {
     }
     if (matcher && !this.target.selector) {
       if (matcher.kind === "contains") {
-        const raw = await this._transport.command("browser.dom.search", { query: matcher.text });
+        const raw = await this._transport.command("browser.dom.search", this._withFrameContext({ query: matcher.text }));
         return (raw.matches || raw.elements || []).length;
       }
       const raw = await this._queryTextMatches(matcher);
       return locatorElements(raw).filter((element) => locatorTextMatches(element, matcher)).length;
     }
-    const raw = await this._transport.command("browser.dom.query", {
+    const raw = await this._transport.command("browser.dom.query", this._withFrameContext({
       selector: this.target.selector,
       limit: 100,
       ...(matcher ? { attributes: ["text", "ariaLabel"] } : {}),
-    });
+    }));
     const elements = locatorElements(raw);
     if (matcher) {
       return elements.filter((element) => locatorTextMatches(element, matcher)).length;
@@ -1517,6 +1633,12 @@ class Locator {
         return count;
       })()
     `;
+    if (this._hasFrameContext()) {
+      const raw = await this._transport.command("frame_evaluate", { frameSelectors: this._frameSelectors(), script });
+      if (typeof raw === "number") return raw;
+      if (raw && typeof raw === "object" && typeof raw.result === "number") return raw.result;
+      return 0;
+    }
     const raw = await this._transport.command("script_evaluate", { script });
     if (typeof raw === "number") return raw;
     if (raw && typeof raw === "object" && typeof raw.result === "number") return raw.result;
@@ -1532,7 +1654,7 @@ class Locator {
       safety: options.safety,
     });
     const { safety, strict, ...commandOptions } = options;
-    return this._transport.command("browser.dom.click", { target, ...commandOptions });
+    return this._transport.command("browser.dom.click", this._withFrameContext({ target, ...commandOptions }));
   }
 
   async fill(text, options = {}) {
@@ -1544,21 +1666,21 @@ class Locator {
       text,
       safety: options.safety,
     });
-    return this._transport.command("browser.dom.type", {
+    return this._transport.command("browser.dom.type", this._withFrameContext({
       target,
       text,
       clearFirst: options.clearFirst ?? true,
-    });
+    }));
   }
 
   async hover(options = {}) {
     await this._strictCheck(options);
     const target = await this._resolveTarget();
     const { strict, ...commandOptions } = options;
-    return this._transport.command("action_hover", {
+    return this._transport.command("action_hover", this._withFrameContext({
       target,
       ...commandOptions,
-    });
+    }));
   }
 
   async press(key, options = {}) {
@@ -1571,11 +1693,11 @@ class Locator {
       safety: options.safety,
     });
     const { safety, strict, ...commandOptions } = options;
-    return this._transport.command("action_press_key", {
+    return this._transport.command("action_press_key", this._withFrameContext({
       target,
       key,
       ...commandOptions,
-    });
+    }));
   }
 
   async selectOption(value, options = {}) {
@@ -1588,11 +1710,11 @@ class Locator {
       safety: options.safety,
     });
     const { safety, strict, ...commandOptions } = options;
-    return this._transport.command("action_select", {
+    return this._transport.command("action_select", this._withFrameContext({
       target,
       value,
       ...commandOptions,
-    });
+    }));
   }
 
   async check(options = {}) {
@@ -1612,22 +1734,23 @@ class Locator {
       safety: options.safety,
     });
     const { safety, strict, ...commandOptions } = options;
-    return this._transport.command("script_evaluate", {
-      script: `
-        (function() {
-          const el = document.querySelector(${JSON.stringify(target.selector)});
-          if (!el) throw new Error('Element not found: ${target.selector}');
-          if (el.tagName !== 'INPUT' || (el.type !== 'checkbox' && el.type !== 'radio')) {
-            throw new Error('Element is not a checkbox or radio: ' + el.tagName);
-          }
-          el.checked = ${checked};
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          return el.checked;
-        })()
-      `,
-      ...commandOptions,
-    });
+    const script = `
+      (function() {
+        const el = document.querySelector(${JSON.stringify(target.selector)});
+        if (!el) throw new Error('Element not found: ${target.selector}');
+        if (el.tagName !== 'INPUT' || (el.type !== 'checkbox' && el.type !== 'radio')) {
+          throw new Error('Element is not a checkbox or radio: ' + el.tagName);
+        }
+        el.checked = ${checked};
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return el.checked;
+      })()
+    `;
+    if (this._hasFrameContext()) {
+      return this._transport.command("frame_evaluate", { frameSelectors: this._frameSelectors(), script, ...commandOptions });
+    }
+    return this._transport.command("script_evaluate", { script, ...commandOptions });
   }
 
   async dblclick(options = {}) {
@@ -1639,11 +1762,11 @@ class Locator {
       safety: options.safety,
     });
     const { safety, strict, ...commandOptions } = options;
-    return this._transport.command("browser.dom.click", {
+    return this._transport.command("browser.dom.click", this._withFrameContext({
       target,
       clickCount: 2,
       ...commandOptions,
-    });
+    }));
   }
 
   async waitFor(options = {}) {
@@ -1652,12 +1775,12 @@ class Locator {
     if (!allowedStates.includes(state)) {
       throw new Error(`Locator.waitFor state must be one of ${allowedStates.join(", ")}, got: ${state}`);
     }
-    const args = {
+    const args = this._withFrameContext({
       condition: options.condition || "dom-ready",
       selector: this.target.selector,
       state,
       ...options,
-    };
+    });
     if (args.timeoutMs === undefined && args.timeout === undefined) {
       args.timeoutMs = 30000;
     }
@@ -1674,11 +1797,11 @@ class Locator {
       safety: options.safety,
     });
     const { safety, strict, ...commandOptions } = options;
-    return this._transport.command("upload_file", {
+    return this._transport.command("upload_file", this._withFrameContext({
       selector: this.target.selector,
       paths: normalizedPaths,
       ...commandOptions,
-    });
+    }));
   }
 
   async textContent() {
@@ -1686,11 +1809,11 @@ class Locator {
       return this.target.text;
     }
     const selector = await this._resolveSelector();
-    const raw = await this._transport.command("browser.dom.query", {
+    const raw = await this._transport.command("browser.dom.query", this._withFrameContext({
       selector,
       limit: 1,
       attributes: ["text"],
-    });
+    }));
     const first = locatorElements(raw)[0];
     return first?.text || first?.textContent || "";
   }
@@ -1699,11 +1822,11 @@ class Locator {
     if (this.target.text && !this.target.selector) {
       return [this.target.text];
     }
-    const raw = await this._transport.command("browser.dom.query", {
+    const raw = await this._transport.command("browser.dom.query", this._withFrameContext({
       selector: this.target.selector,
       limit: 100,
       attributes: ["text", "ariaLabel"],
-    });
+    }));
     return locatorElements(raw)
       .map((element) => element.text ?? element.textContent ?? element.ariaLabel ?? "")
       .filter((text) => text !== "");
@@ -1711,11 +1834,11 @@ class Locator {
 
   async getAttribute(name) {
     const selector = await this._resolveSelector();
-    const raw = await this._transport.command("browser.dom.query", {
+    const raw = await this._transport.command("browser.dom.query", this._withFrameContext({
       selector,
       limit: 1,
       attributes: [name],
-    });
+    }));
     const first = locatorElements(raw)[0];
     return first?.[name] ?? null;
   }
@@ -1726,28 +1849,28 @@ class Locator {
 
   async isVisible() {
     const selector = await this._resolveSelector();
-    const detail = await this._transport.command("dom_element_detail", {
+    const detail = await this._transport.command("dom_element_detail", this._withFrameContext({
       selector,
       include: ["position"],
-    });
+    }));
     return Boolean(detail.ok && detail.position?.visible);
   }
 
   async isEnabled() {
     const selector = await this._resolveSelector();
-    const detail = await this._transport.command("dom_element_detail", {
+    const detail = await this._transport.command("dom_element_detail", this._withFrameContext({
       selector,
       include: ["position", "accessibility"],
-    });
+    }));
     return Boolean(detail.ok && detail.position?.visible && detail.accessibility?.focusable);
   }
 
   async boundingBox() {
     const selector = await this._resolveSelector();
-    const detail = await this._transport.command("dom_element_detail", {
+    const detail = await this._transport.command("dom_element_detail", this._withFrameContext({
       selector,
       include: ["position"],
-    });
+    }));
     if (!detail.ok || !detail.position?.visible) return null;
     const { x, y, width, height } = detail.position;
     return { x, y, width, height };
@@ -1758,13 +1881,20 @@ class Locator {
       return this.target.text;
     }
     const selector = await this._resolveSelector();
+    const script = `
+      (function() {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        return el ? el.innerText : "";
+      })()
+    `;
+    if (this._hasFrameContext()) {
+      const raw = await this._transport.command("frame_evaluate", { frameSelectors: this._frameSelectors(), script, timeout: options.timeoutMs ?? options.timeout ?? 30000 });
+      if (typeof raw === "string") return raw;
+      if (raw && typeof raw === "object" && typeof raw.result === "string") return raw.result;
+      return String(raw ?? "");
+    }
     const raw = await this._transport.command("script_evaluate", {
-      script: `
-        (function() {
-          const el = document.querySelector(${JSON.stringify(selector)});
-          return el ? el.innerText : "";
-        })()
-      `,
+      script,
       awaitPromise: false,
       timeout: options.timeoutMs ?? options.timeout ?? 30000,
     });
@@ -1782,11 +1912,11 @@ class Locator {
       text,
       safety: options.safety,
     });
-    return this._transport.command("browser.dom.type", {
+    return this._transport.command("browser.dom.type", this._withFrameContext({
       target,
       text,
       clearFirst: false,
-    });
+    }));
   }
 
   async all() {
@@ -1805,6 +1935,7 @@ class Locator {
       ...(this.target.visibleOnly ? { visibleOnly: this.target.visibleOnly } : {}),
       ...(this.target.hiddenOnly ? { hiddenOnly: this.target.hiddenOnly } : {}),
       ...(this.target.hasNotText !== undefined ? { hasNotText: this.target.hasNotText, hasNotTextMatcher: this.target.hasNotTextMatcher } : {}),
+      ...(this.target.frameContext ? { frameContext: this.target.frameContext } : {}),
     };
 
     if (options.hasText !== undefined) {
@@ -1843,6 +1974,7 @@ class Locator {
         selector: `${baseSelector} *`,
         text: typeof text === "string" ? text : undefined,
         textMatcher: matcher,
+        ...(this.target.frameContext ? { frameContext: this.target.frameContext } : {}),
       },
     });
   }
@@ -1857,6 +1989,7 @@ class Locator {
         selector: `${baseSelector} ${roleSelector(role)}`,
         role,
         text: options.name,
+        ...(this.target.frameContext ? { frameContext: this.target.frameContext } : {}),
       },
     });
   }
@@ -1872,6 +2005,7 @@ class Locator {
         target: {
           selector: `${baseSelector} [aria-label]`,
           textMatcher: matcher,
+          ...(this.target.frameContext ? { frameContext: this.target.frameContext } : {}),
         },
       });
     }
@@ -1884,6 +2018,7 @@ class Locator {
         selector: `${baseSelector} [aria-label="${escaped}"]`,
         label: matcher.text,
         textMatcher: matcher,
+        ...(this.target.frameContext ? { frameContext: this.target.frameContext } : {}),
       },
     });
   }
@@ -1899,6 +2034,7 @@ class Locator {
         target: {
           selector: `${baseSelector} [placeholder]`,
           textMatcher: matcher,
+          ...(this.target.frameContext ? { frameContext: this.target.frameContext } : {}),
         },
       });
     }
@@ -1909,6 +2045,7 @@ class Locator {
       tab: this._tab,
       target: {
         selector: `${baseSelector} [placeholder="${escaped}"]`,
+        ...(this.target.frameContext ? { frameContext: this.target.frameContext } : {}),
       },
     });
   }
@@ -1922,6 +2059,7 @@ class Locator {
       tab: this._tab,
       target: {
         selector: `${baseSelector} [data-testid="${escaped}"], ${baseSelector} [data-test-id="${escaped}"], ${baseSelector} [data-test="${escaped}"]`,
+        ...(this.target.frameContext ? { frameContext: this.target.frameContext } : {}),
       },
     });
   }
@@ -1982,6 +2120,7 @@ class Locator {
     return {
       ...(element.selector ? { selector: element.selector } : this.target),
       ...(this.target.text ? { text: this.target.text } : {}),
+      ...(this._hasFrameContext() ? { frameContext: this.target.frameContext } : {}),
     };
   }
 
@@ -2001,31 +2140,31 @@ class Locator {
 
   _queryTextMatches(matcher) {
     if (matcher.kind === "exact") {
-      return this._transport.command("browser.dom.search", { query: matcher.text, limit: 100 });
+      return this._transport.command("browser.dom.search", this._withFrameContext({ query: matcher.text, limit: 100 }));
     }
-    return this._transport.command("browser.dom.query", {
+    return this._transport.command("browser.dom.query", this._withFrameContext({
       selector: "*",
       limit: 100,
       attributes: ["text", "ariaLabel"],
-    });
+    }));
   }
 
   _queryResolvableElements(matcher) {
     if (this.target.selector) {
       const limit = matcher || this.target.last ? 100 : (this.target.index ?? 0) + 1;
-      return this._transport.command("browser.dom.query", {
+      return this._transport.command("browser.dom.query", this._withFrameContext({
         selector: this.target.selector,
         limit,
         attributes: matcher ? ["text", "ariaLabel"] : ["text"],
-      });
+      }));
     }
     if (matcher) {
       return this._queryTextMatches(matcher);
     }
-    return this._transport.command("browser.dom.search", {
+    return this._transport.command("browser.dom.search", this._withFrameContext({
       query: this.target.text,
       limit: this.target.last ? 100 : (this.target.index ?? 0) + 1,
-    });
+    }));
   }
 }
 
