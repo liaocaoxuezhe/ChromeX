@@ -141,7 +141,7 @@ test("PlaywrightSurface.screenshot 默认返回 Uint8Array", async () => {
   assert.deepEqual(result, new Uint8Array([119, 111, 114, 108, 100]));
 });
 
-test("agent.documentation.get 抛出占位错误", async () => {
+test("agent.documentation.get 返回真实文档内容", async () => {
   const transport = mockTransport();
   const { agent } = setupLink2ChromeRuntime({
     globals: {},
@@ -150,9 +150,22 @@ test("agent.documentation.get 抛出占位错误", async () => {
   });
 
   assert.equal(typeof agent.documentation.get, "function");
+  const content = await agent.documentation.get("api");
+  assert.equal(typeof content, "string");
+  assert.ok(content.length >= 5000, "api 文档长度应 >= 5000");
+});
+
+test("agent.documentation.get 对不存在的文档名抛错", async () => {
+  const transport = mockTransport();
+  const { agent } = setupLink2ChromeRuntime({
+    globals: {},
+    transport,
+    overwrite: true,
+  });
+
   await assert.rejects(
-    agent.documentation.get("browser"),
-    /documentation 将在后续版本提供/
+    agent.documentation.get("nonexistent"),
+    /not found/
   );
 });
 
