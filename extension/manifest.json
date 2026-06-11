@@ -15,7 +15,8 @@
     "tabGroups",
     "clipboardRead",
     "clipboardWrite",
-    "nativeMessaging"
+    "nativeMessaging",
+    "downloads"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

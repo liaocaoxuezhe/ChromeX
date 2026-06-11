@@ -124,17 +124,13 @@ async function main() {
     assertTrue(elapsed >= 40, `expected at least ~50ms, got ${elapsed}ms`);
   });
 
-  // === waitForEvent download 错误 ===
-  await test("waitForEvent('download') throws explicit task-8 message", async () => {
-    let threw = false;
-    try {
-      await tab.playwright.waitForEvent("download");
-    } catch (error) {
-      threw = true;
-      assertIncludes(error.message, "task-8", "error should mention task-8");
-    assertIncludes(error.message, "Unsupported playwright event", "error should mention Unsupported");
-    }
-    assertTrue(threw, "should have thrown");
+  // === waitForEvent download 真实实现（task-8）===
+  await test("waitForEvent('download') sends wait_for_download command", async () => {
+    mock.commands.length = 0;
+    await tab.playwright.waitForEvent("download", { timeoutMs: 5000 });
+    const cmd = mock.commands.find((c) => c.name === "wait_for_download");
+    assertTrue(cmd !== undefined, "wait_for_download command should be sent");
+    assertEqual(cmd.args.timeout, 5000, "timeout mismatch");
   });
 
   // === Locator 存在性断言 ===

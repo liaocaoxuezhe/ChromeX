@@ -1101,7 +1101,8 @@ class PlaywrightSurface {
 
   async waitForEvent(eventName, options = {}) {
     if (eventName === "download") {
-      throw new Error(`Unsupported playwright event: download. download 事件将在 task-8 实现`);
+      const timeoutMs = options.timeoutMs ?? options.timeout ?? 30000;
+      return this._transport.command("wait_for_download", { timeout: timeoutMs });
     }
     if (eventName !== "filechooser") {
       throw new Error(`Unsupported playwright event: ${eventName}`);
@@ -1922,6 +1923,44 @@ class Locator {
   async all() {
     const count = await this.count();
     return Array.from({ length: count }, (_, i) => this.nth(i));
+  }
+
+  async downloadMedia(options = {}) {
+    await this._strictCheck(options);
+    const target = await this._resolveTarget();
+    const script = `
+      (function() {
+        const el = document.querySelector(${JSON.stringify(target.selector)});
+        if (!el) throw new Error('Element not found: ${target.selector}');
+        const url = el.src || el.href || '';
+        if (!url) throw new Error('Element has no src or href');
+        return url;
+      })()
+    `;
+    const getUrl = this._hasFrameContext()
+      ? await this._transport.command("frame_evaluate", { frameSelectors: this._frameSelectors(), script, timeout: options.timeoutMs ?? options.timeout ?? 30000 })
+      : await this._transport.command("script_evaluate", { script, awaitPromise: false, timeout: options.timeoutMs ?? options.timeout ?? 30000 });
+    const resolvedUrl = typeof getUrl === "string" ? getUrl : (getUrl?.result || "");
+    if (!resolvedUrl) throw new Error("downloadMedia: element has no src or href");
+
+    const downloadScript = `
+      (function() {
+        const a = document.createElement('a');
+        a.href = ${JSON.stringify(resolvedUrl)};
+        a.download = ${JSON.stringify(options.suggestedFilename || "")};
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return true;
+      })()
+    `;
+    if (this._hasFrameContext()) {
+      await this._transport.command("frame_evaluate", { frameSelectors: this._frameSelectors(), script: downloadScript, timeout: 10000 });
+    } else {
+      await this._transport.command("script_evaluate", { script: downloadScript, awaitPromise: false, timeout: 10000 });
+    }
+    return { url: resolvedUrl, suggestedFilename: options.suggestedFilename || null };
   }
 
   locator(selector, options = {}) {
