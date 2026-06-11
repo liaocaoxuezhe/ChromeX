@@ -824,8 +824,8 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
 async def tool_playwright_run(args: dict) -> list[TextContent]:
     """执行 Playwright 风格的 JavaScript 代码。
 
-    优先通过 NodeJSRuntimeManager 在 Node.js 子进程中执行，
-    若 Node.js 不可用则降级到原有 PlaywrightRuntime（Extension 端执行）。
+    强制通过 NodeJSRuntimeManager 在 Node.js 子进程中执行；
+    Node.js 不可用时返回明确错误，不再降级到 Extension 端执行。
     """
     code = args["code"]
     timeout = args.get("timeout", 30000)
@@ -845,7 +845,7 @@ async def tool_playwright_run(args: dict) -> list[TextContent]:
             "charCount": len(serialized),
         }
 
-    # 优先尝试 Node.js Runtime
+    # 强制 Node.js Runtime 优先策略（P0-1）
     if nodejs_runtime is not None:
         try:
             if not nodejs_runtime.is_ready:
@@ -853,15 +853,17 @@ async def tool_playwright_run(args: dict) -> list[TextContent]:
                 if not started:
                     logger.warning(
                         f"Node.js Runtime 启动失败: {nodejs_runtime.startup_error}，"
-                        "降级到 Extension 端 PlaywrightRuntime 执行"
+                        "拒绝降级到 Extension 端 PlaywrightRuntime"
                     )
-                    result = await playwright_runtime.run(
-                        code=code,
-                        ws_manager=ws_manager,
-                        timeout=timeout,
-                        max_result_chars=max_result_chars,
-                    )
-                    return _json_content(result)
+                    return _json_content({
+                        "ok": False,
+                        "error": (
+                            f"{nodejs_runtime.startup_error}\n"
+                            "Playwright 高级功能需要 Node.js Runtime，"
+                            "请安装 Node.js (>=18) 并确保 node 命令在 PATH 中，然后重启 MCP Server。"
+                            "可运行 node scripts/check-node-env.mjs 诊断环境。"
+                        ),
+                    })
 
             result = await nodejs_runtime.execute(code, timeout)
             if result.get("ok"):
@@ -875,17 +877,27 @@ async def tool_playwright_run(args: dict) -> list[TextContent]:
                 })
         except Exception as exc:
             logger.warning(
-                f"Node.js Runtime 异常: {exc}，降级到 Extension 端 PlaywrightRuntime 执行"
+                f"Node.js Runtime 异常: {exc}，拒绝降级到 Extension 端 PlaywrightRuntime"
             )
-
-    # 降级路径：原有 Extension 端 PlaywrightRuntime
-    result = await playwright_runtime.run(
-        code=code,
-        ws_manager=ws_manager,
-        timeout=timeout,
-        max_result_chars=max_result_chars,
-    )
-    return _json_content(result)
+            return _json_content({
+                "ok": False,
+                "error": (
+                    f"Node.js Runtime 异常: {exc}\n"
+                    "Playwright 高级功能需要 Node.js Runtime，"
+                    "请安装 Node.js (>=18) 并确保 node 命令在 PATH 中，然后重启 MCP Server。"
+                    "可运行 node scripts/check-node-env.mjs 诊断环境。"
+                ),
+            })
+    else:
+        logger.warning("Node.js Playwright Runtime 未配置，拒绝执行 playwright_run")
+        return _json_content({
+            "ok": False,
+            "error": (
+                "Node.js Playwright Runtime 未配置，无法执行 playwright_run。\n"
+                "请安装 Node.js (>=18) 并确保 node 命令在 PATH 中，然后重启 MCP Server。"
+                "可运行 node scripts/check-node-env.mjs 诊断环境。"
+            ),
+        })
 
 
 async def tool_save_as_pdf(args: dict) -> list[TextContent]:
