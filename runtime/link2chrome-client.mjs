@@ -167,11 +167,7 @@ class ScriptSurface {
       const context = {
         agent: {
           browsers: this._client.browsers,
-          documentation: {
-            async get(name) {
-              throw new Error("documentation 将在后续版本提供");
-            },
-          },
+          documentation: createDocumentationSurface(),
         },
         link2chrome: this._client,
         browser: runtimeBrowser,
