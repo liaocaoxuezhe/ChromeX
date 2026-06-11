@@ -924,6 +924,12 @@ async function handleCommand(message) {
       case "browser.clipboard.write":
         response.data = await cmdClipboardWrite(params);
         break;
+      case "page_assets_list":
+        response.data = await cmdPageAssetsList(params);
+        break;
+      case "page_assets_bundle":
+        response.data = await cmdPageAssetsBundle(params);
+        break;
       default:
         throw new Error(`未知指令: ${command}`);
     }
@@ -3374,6 +3380,71 @@ async function cmdClipboardWrite(params) {
     throw new Error(errMsg);
   }
   return result.result;
+}
+
+// -- pageAssets --
+async function cmdPageAssetsList(params) {
+  const script = `
+    (function() {
+      const entries = performance.getEntriesByType("resource");
+      return entries.map(function(r) {
+        return {
+          name: r.name,
+          type: r.initiatorType,
+          size: r.transferSize
+        };
+      });
+    })()
+  `;
+  const result = await cmdExecuteScript({ script, awaitPromise: false, timeout: 10000 });
+  if (!result.success) {
+    throw new Error(result.error || "page_assets_list failed");
+  }
+  return result.result || [];
+}
+
+async function cmdPageAssetsBundle(params) {
+  const { urls } = params;
+  const MAX_TOTAL_SIZE = 50 * 1024 * 1024; // 50MB
+
+  const list = await cmdPageAssetsList(params);
+  const targets = urls && urls.length > 0
+    ? list.filter(function(item) { return urls.includes(item.name); })
+    : list;
+
+  const assets = [];
+  const errors = [];
+  let totalSize = 0;
+
+  for (const item of targets) {
+    try {
+      const response = await fetch(item.name, { credentials: "omit" });
+      if (!response.ok) {
+        errors.push({ name: item.name, reason: "HTTP " + response.status });
+        continue;
+      }
+      const blob = await response.blob();
+      const arrayBuffer = await blob.arrayBuffer();
+      const size = arrayBuffer.byteLength;
+
+      if (totalSize + size > MAX_TOTAL_SIZE) {
+        errors.push({ name: item.name, reason: "exceeds total size limit (50MB)" });
+        continue;
+      }
+      totalSize += size;
+
+      const base64 = arrayBufferToBase64(arrayBuffer);
+      assets.push({
+        name: item.name,
+        base64,
+        mimeType: blob.type || "application/octet-stream"
+      });
+    } catch (err) {
+      errors.push({ name: item.name, reason: err.message || "fetch failed" });
+    }
+  }
+
+  return { assets, errors };
 }
 
 // ==================== 初始化 ====================
