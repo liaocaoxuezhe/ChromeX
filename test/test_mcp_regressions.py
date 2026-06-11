@@ -100,13 +100,21 @@ def test_browser_navigate_preserves_data_url(monkeypatch):
 
 
 def test_playwright_run_dispatch_reaches_runtime(monkeypatch):
-    fake = FakeWsManager()
-    monkeypatch.setattr(main, "ws_manager", fake)
+    """playwright_run 强制 Node.js 优先，mock ready 后应走 nodejs_runtime.execute。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_nodejs = MagicMock()
+    mock_nodejs.is_ready = True
+    mock_nodejs.startup_error = None
+    mock_nodejs.start = AsyncMock(return_value=True)
+    mock_nodejs.execute = AsyncMock(return_value={"ok": True, "result": {"ran": True}})
+    monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
     result = asyncio.run(main.call_tool("playwright_run", {"code": "return { ran: true };"}))
 
     assert _payload(result)["ok"] is True
-    assert fake.commands[0][0] == "playwright_batch"
+    assert _payload(result)["result"] == {"ran": True}
+    mock_nodejs.execute.assert_awaited_once()
 
 
 def test_dom_get_text_selector_falls_back_when_extension_command_is_missing(monkeypatch):
