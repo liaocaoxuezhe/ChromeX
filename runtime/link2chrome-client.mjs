@@ -1042,15 +1042,39 @@ class PlaywrightSurface {
     return result;
   }
 
+  async evaluate(pageFunction, arg, options = {}) {
+    const script = typeof pageFunction === "string"
+      ? pageFunction
+      : `(${pageFunction.toString()})(${JSON.stringify(arg)})`;
+    const timeout = options.timeoutMs ?? options.timeout ?? 30000;
+    return this._transport.command("script_evaluate", { script, awaitPromise: true, timeout });
+  }
+
+  async waitForTimeout(timeoutMs) {
+    return new Promise((resolve) => setTimeout(resolve, timeoutMs));
+  }
+
   async waitForEvent(eventName, options = {}) {
+    if (eventName === "download") {
+      throw new Error(`Unsupported playwright event: download. download 事件将在 task-8 实现`);
+    }
     if (eventName !== "filechooser") {
       throw new Error(`Unsupported playwright event: ${eventName}`);
     }
     return new FileChooser({ transport: this._transport, safety: this._safety, selector: options.selector });
   }
 
-  async waitForLoadState(state = "load", options = {}) {
-    const timeoutMs = options.timeoutMs ?? options.timeout ?? 30000;
+  async waitForLoadState(stateOrOptions = "load", options = {}) {
+    let state;
+    let opts;
+    if (typeof stateOrOptions === "object" && stateOrOptions !== null) {
+      state = stateOrOptions.state ?? "load";
+      opts = stateOrOptions;
+    } else {
+      state = stateOrOptions ?? "load";
+      opts = options;
+    }
+    const timeoutMs = opts.timeoutMs ?? opts.timeout ?? 30000;
     const deadline = Date.now() + timeoutMs;
     const sleepMs = 250;
 
@@ -1074,7 +1098,7 @@ class PlaywrightSurface {
     return this._transport.command("browser.wait", {
       condition,
       state,
-      ...options,
+      ...opts,
     });
   }
 
@@ -1149,18 +1173,36 @@ class PlaywrightSurface {
     });
   }
 
-  getByLabel(label) {
-    const escaped = cssStringEscape(label);
+  getByLabel(label, options = {}) {
+    const matcher = normalizeTextMatcher(label, options);
+    if (matcher.kind === "regex" || matcher.kind === "contains") {
+      return new Locator({
+        transport: this._transport,
+        safety: this._safety,
+        tab: this._tab,
+        target: { selector: "[aria-label]", textMatcher: matcher },
+      });
+    }
+    const escaped = cssStringEscape(matcher.text);
     return new Locator({
       transport: this._transport,
       safety: this._safety,
       tab: this._tab,
-      target: { selector: `[aria-label="${escaped}"]`, label },
+      target: { selector: `[aria-label="${escaped}"]`, label: matcher.text, textMatcher: matcher },
     });
   }
 
-  getByPlaceholder(placeholder) {
-    const escaped = cssStringEscape(placeholder);
+  getByPlaceholder(placeholder, options = {}) {
+    const matcher = normalizeTextMatcher(placeholder, options);
+    if (matcher.kind === "regex" || matcher.kind === "contains") {
+      return new Locator({
+        transport: this._transport,
+        safety: this._safety,
+        tab: this._tab,
+        target: { selector: "[placeholder]", textMatcher: matcher },
+      });
+    }
+    const escaped = cssStringEscape(matcher.text);
     return this.locator(`[placeholder="${escaped}"]`);
   }
 
@@ -1348,6 +1390,9 @@ class Locator {
     if (options.visible === true) {
       next.visibleOnly = true;
     }
+    if (options.visible === false) {
+      next.hiddenOnly = true;
+    }
     if (Object.keys(next).length === Object.keys(this.target).length) {
       return this;
     }
@@ -1361,7 +1406,7 @@ class Locator {
 
   async count() {
     const matcher = this._textMatcher();
-    if (this.target.has || this.target.hasNot || this.target.visibleOnly || this.target.hasNotText !== undefined) {
+    if (this.target.has || this.target.hasNot || this.target.visibleOnly || this.target.hiddenOnly || this.target.hasNotText !== undefined) {
       return this._countWithScriptEvaluate();
     }
     if (matcher && !this.target.selector) {
@@ -1389,6 +1434,7 @@ class Locator {
     const has = this.target.has || "";
     const hasNot = this.target.hasNot || "";
     const visibleOnly = this.target.visibleOnly || false;
+    const hiddenOnly = this.target.hiddenOnly || false;
     const hasNotTextMatcher = this.target.hasNotTextMatcher || null;
     const hasNotText = hasNotTextMatcher
       ? (hasNotTextMatcher.kind === "regex"
@@ -1406,6 +1452,11 @@ class Locator {
             const r = el.getBoundingClientRect();
             const st = getComputedStyle(el);
             if (r.width === 0 || r.height === 0 || st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
+          ` : ""}
+          ${hiddenOnly ? `
+            const r = el.getBoundingClientRect();
+            const st = getComputedStyle(el);
+            if (!(r.width === 0 || r.height === 0 || st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) continue;
           ` : ""}
           ${hasNotText ? `
             const text = (el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
@@ -1551,11 +1602,21 @@ class Locator {
   }
 
   async waitFor(options = {}) {
-    return this._transport.command("browser.wait", {
+    const state = options.state || "visible";
+    const allowedStates = ["attached", "detached", "visible", "hidden"];
+    if (!allowedStates.includes(state)) {
+      throw new Error(`Locator.waitFor state must be one of ${allowedStates.join(", ")}, got: ${state}`);
+    }
+    const args = {
       condition: options.condition || "dom-ready",
       selector: this.target.selector,
+      state,
       ...options,
-    });
+    };
+    if (args.timeoutMs === undefined && args.timeout === undefined) {
+      args.timeoutMs = 30000;
+    }
+    return this._transport.command("browser.wait", args);
   }
 
   async setFiles(paths, options = {}) {
@@ -1647,6 +1708,179 @@ class Locator {
     return { x, y, width, height };
   }
 
+  async innerText(options = {}) {
+    if (this.target.text && !this.target.selector) {
+      return this.target.text;
+    }
+    const selector = await this._resolveSelector();
+    const raw = await this._transport.command("script_evaluate", {
+      script: `
+        (function() {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          return el ? el.innerText : "";
+        })()
+      `,
+      awaitPromise: false,
+      timeout: options.timeoutMs ?? options.timeout ?? 30000,
+    });
+    if (typeof raw === "string") return raw;
+    if (raw && typeof raw === "object" && typeof raw.result === "string") return raw.result;
+    return String(raw ?? "");
+  }
+
+  async type(text, options = {}) {
+    await this._strictCheck(options);
+    const target = await this._resolveTarget();
+    await this._safety?.confirm({
+      type: "type",
+      target,
+      text,
+      safety: options.safety,
+    });
+    return this._transport.command("browser.dom.type", {
+      target,
+      text,
+      clearFirst: false,
+    });
+  }
+
+  async all() {
+    const count = await this.count();
+    return Array.from({ length: count }, (_, i) => this.nth(i));
+  }
+
+  locator(selector, options = {}) {
+    const childSelector = String(selector);
+    const nextTarget = {
+      ...(this.target.selector ? { selector: `${this.target.selector} ${childSelector}` } : { selector: childSelector }),
+      ...(this.target.index !== undefined ? { index: this.target.index } : {}),
+      ...(this.target.last ? { last: this.target.last } : {}),
+      ...(this.target.has ? { has: this.target.has } : {}),
+      ...(this.target.hasNot ? { hasNot: this.target.hasNot } : {}),
+      ...(this.target.visibleOnly ? { visibleOnly: this.target.visibleOnly } : {}),
+      ...(this.target.hiddenOnly ? { hiddenOnly: this.target.hiddenOnly } : {}),
+      ...(this.target.hasNotText !== undefined ? { hasNotText: this.target.hasNotText, hasNotTextMatcher: this.target.hasNotTextMatcher } : {}),
+    };
+
+    if (options.hasText !== undefined) {
+      nextTarget.text = options.hasText;
+      nextTarget.textMatcher = normalizeTextMatcher(options.hasText);
+    }
+    if (options.hasNotText !== undefined) {
+      nextTarget.hasNotText = options.hasNotText;
+      nextTarget.hasNotTextMatcher = normalizeTextMatcher(options.hasNotText);
+    }
+    if (options.has !== undefined) {
+      const hasSelector = options.has?.target?.selector || String(options.has);
+      nextTarget.has = hasSelector;
+    }
+    if (options.hasNot !== undefined) {
+      const hasNotSelector = options.hasNot?.target?.selector || String(options.hasNot);
+      nextTarget.hasNot = hasNotSelector;
+    }
+
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: nextTarget,
+    });
+  }
+
+  getByText(text, options = {}) {
+    const matcher = normalizeTextMatcher(text, options);
+    const baseSelector = this.target.selector || "*";
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: {
+        selector: `${baseSelector} *`,
+        text: typeof text === "string" ? text : undefined,
+        textMatcher: matcher,
+      },
+    });
+  }
+
+  getByRole(role, options = {}) {
+    const baseSelector = this.target.selector || "*";
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: {
+        selector: `${baseSelector} ${roleSelector(role)}`,
+        role,
+        text: options.name,
+      },
+    });
+  }
+
+  getByLabel(label, options = {}) {
+    const matcher = normalizeTextMatcher(label, options);
+    const baseSelector = this.target.selector || "*";
+    if (matcher.kind === "regex" || matcher.kind === "contains") {
+      return new Locator({
+        transport: this._transport,
+        safety: this._safety,
+        tab: this._tab,
+        target: {
+          selector: `${baseSelector} [aria-label]`,
+          textMatcher: matcher,
+        },
+      });
+    }
+    const escaped = cssStringEscape(matcher.text);
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: {
+        selector: `${baseSelector} [aria-label="${escaped}"]`,
+        label: matcher.text,
+        textMatcher: matcher,
+      },
+    });
+  }
+
+  getByPlaceholder(placeholder, options = {}) {
+    const matcher = normalizeTextMatcher(placeholder, options);
+    const baseSelector = this.target.selector || "*";
+    if (matcher.kind === "regex" || matcher.kind === "contains") {
+      return new Locator({
+        transport: this._transport,
+        safety: this._safety,
+        tab: this._tab,
+        target: {
+          selector: `${baseSelector} [placeholder]`,
+          textMatcher: matcher,
+        },
+      });
+    }
+    const escaped = cssStringEscape(matcher.text);
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: {
+        selector: `${baseSelector} [placeholder="${escaped}"]`,
+      },
+    });
+  }
+
+  getByTestId(testId) {
+    const escaped = String(testId).replaceAll('"', '\\"');
+    const baseSelector = this.target.selector || "*";
+    return new Locator({
+      transport: this._transport,
+      safety: this._safety,
+      tab: this._tab,
+      target: {
+        selector: `${baseSelector} [data-testid="${escaped}"], ${baseSelector} [data-test-id="${escaped}"], ${baseSelector} [data-test="${escaped}"]`,
+      },
+    });
+  }
+
   async _resolveSelector() {
     if (!this._needsResolvedTarget()) return this.target.selector;
     return (await this._resolveTarget()).selector;
@@ -1711,7 +1945,8 @@ class Locator {
     return this.target.index !== undefined
       || this.target.last
       || (matcher && matcher.kind !== "contains")
-      || this.target.hasNotText !== undefined;
+      || this.target.hasNotText !== undefined
+      || this.target.hiddenOnly;
   }
 
   _textMatcher() {
