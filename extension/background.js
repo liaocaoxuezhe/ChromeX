@@ -2686,7 +2686,8 @@ function escapeJsString(str) {
 }
 
 function createLocatorNth(selector, n, tabId) {
-  return createLocator(`${selector} [data-l2c-nth]`, tabId);
+  const nthResolve = `document.querySelectorAll(${JSON.stringify(selector)})[${n}]`;
+  return createLocator(nthResolve, tabId);
 }
 
 function createLocatorByText(text, opts = {}, tabId) {
@@ -2694,9 +2695,13 @@ function createLocatorByText(text, opts = {}, tabId) {
   const scriptBase = exact
     ? `Array.from(document.querySelectorAll('*')).find(el => el.textContent.trim() === ${JSON.stringify(text)})`
     : `Array.from(document.querySelectorAll('*')).find(el => el.textContent.includes(${JSON.stringify(text)}))`;
+  const makePoint = `(() => { const el = ${scriptBase}; if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`;
+  const makeAll = exact
+    ? `Array.from(document.querySelectorAll('*')).filter(el => el.textContent.trim() === ${JSON.stringify(text)})`
+    : `Array.from(document.querySelectorAll('*')).filter(el => el.textContent.includes(${JSON.stringify(text)}))`;
   return {
     click: async (opts) => {
-      const info = await evalInPage(`(() => { const el = ${scriptBase}; if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`, tabId);
+      const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByText(${JSON.stringify(text)}): element not found`);
       return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
     },
@@ -2710,12 +2715,51 @@ function createLocatorByText(text, opts = {}, tabId) {
     },
     press: async (key) => cmdSendKeys({ keys: key }),
     textContent: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.textContent : null; })()`, tabId),
+    allTextContents: async () => evalInPage(`(() => { const arr = ${makeAll}; return arr.map(el => el?.textContent || ''); })()`, tabId),
     innerText: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.innerText : null; })()`, tabId),
     getAttribute: async (name) => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`, tabId),
     isVisible: async () => evalInPage(`(() => { const el = ${scriptBase}; if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`, tabId),
+    isEnabled: async () => evalInPage(`(() => { const el = ${scriptBase}; if (!el) return false; return !el.disabled && el.getAttribute('aria-disabled') !== 'true'; })()`, tabId),
     count: async () => evalInPage(`Array.from(document.querySelectorAll('*')).filter(el => el.textContent.includes(${JSON.stringify(text)})).length`, tabId),
     first: () => createLocatorByText(text, opts, tabId),
+    last: () => createLocatorByText(text, opts, tabId),
     nth: () => createLocatorByText(text, opts, tabId),
+    and: (other) => createLocator(`Array.from([(${scriptBase})]).filter(el => el && el.matches(${JSON.stringify(other)}))[0]`, tabId),
+    or: (other) => createLocator(`(${scriptBase}) || document.querySelector(${JSON.stringify(other)})`, tabId),
+    filter: (opts2 = {}) => {
+      const { hasText } = opts2;
+      if (hasText !== undefined) {
+        return createLocator(`(() => { const el = ${scriptBase}; return (el && el.textContent.includes(${JSON.stringify(hasText)})) ? el : null; })()`, tabId);
+      }
+      return createLocatorByText(text, opts, tabId);
+    },
+    check: async () => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = true; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: true };
+    },
+    uncheck: async () => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = false; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { unchecked: true };
+    },
+    setChecked: async (checked) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = ${!!checked}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: !!checked };
+    },
+    selectOption: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.tagName === 'SELECT') { el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { selected: value };
+    },
+    hover: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByText(${JSON.stringify(text)}): element not found`);
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      return { hovered: true };
+    },
+    dblclick: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByText(${JSON.stringify(text)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+    },
     locator: (childSel) => createLocator(`${childSel}`, tabId)
   };
 }
@@ -2727,9 +2771,11 @@ function createLocatorByRole(role, opts = {}, tabId) {
     scriptBase += `.filter(el => el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)}))`;
   }
   scriptBase = `(Array.from(document.querySelectorAll('[role=${JSON.stringify(role)}]')).filter(el => ${name === undefined ? "true" : `(el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)})`}))[0]`;
+  const makePoint = `(() => { const el = ${scriptBase}; if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`;
+  const makeAll = `Array.from(document.querySelectorAll('[role=${JSON.stringify(role)}]')).filter(el => ${name === undefined ? "true" : `(el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)})`})`;
   return {
     click: async (opts) => {
-      const info = await evalInPage(`(() => { const el = ${scriptBase}; if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`, tabId);
+      const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByRole(${JSON.stringify(role)}): element not found`);
       return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
     },
@@ -2743,12 +2789,51 @@ function createLocatorByRole(role, opts = {}, tabId) {
     },
     press: async (key) => cmdSendKeys({ keys: key }),
     textContent: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.textContent : null; })()`, tabId),
+    allTextContents: async () => evalInPage(`(() => { const arr = ${makeAll}; return arr.map(el => el?.textContent || ''); })()`, tabId),
     innerText: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.innerText : null; })()`, tabId),
     getAttribute: async (name) => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`, tabId),
     isVisible: async () => evalInPage(`(() => { const el = ${scriptBase}; if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`, tabId),
+    isEnabled: async () => evalInPage(`(() => { const el = ${scriptBase}; if (!el) return false; return !el.disabled && el.getAttribute('aria-disabled') !== 'true'; })()`, tabId),
     count: async () => evalInPage(`Array.from(document.querySelectorAll('[role=${JSON.stringify(role)}]')).filter(el => ${name === undefined ? "true" : `(el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)})`}).length`, tabId),
     first: () => createLocatorByRole(role, opts, tabId),
+    last: () => createLocatorByRole(role, opts, tabId),
     nth: () => createLocatorByRole(role, opts, tabId),
+    and: (other) => createLocator(`Array.from([(${scriptBase})]).filter(el => el && el.matches(${JSON.stringify(other)}))[0]`, tabId),
+    or: (other) => createLocator(`(${scriptBase}) || document.querySelector(${JSON.stringify(other)})`, tabId),
+    filter: (opts2 = {}) => {
+      const { hasText } = opts2;
+      if (hasText !== undefined) {
+        return createLocator(`(() => { const el = ${scriptBase}; return (el && el.textContent.includes(${JSON.stringify(hasText)})) ? el : null; })()`, tabId);
+      }
+      return createLocatorByRole(role, opts, tabId);
+    },
+    check: async () => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = true; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: true };
+    },
+    uncheck: async () => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = false; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { unchecked: true };
+    },
+    setChecked: async (checked) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = ${!!checked}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: !!checked };
+    },
+    selectOption: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.tagName === 'SELECT') { el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { selected: value };
+    },
+    hover: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByRole(${JSON.stringify(role)}): element not found`);
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      return { hovered: true };
+    },
+    dblclick: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByRole(${JSON.stringify(role)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+    },
     locator: (childSel) => createLocator(`${childSel}`, tabId)
   };
 }
@@ -2756,9 +2841,11 @@ function createLocatorByRole(role, opts = {}, tabId) {
 function createLocatorByLabel(text, tabId) {
   const scriptBase = `(Array.from(document.querySelectorAll('label')).filter(lbl => lbl.textContent.includes(${JSON.stringify(text)}) || lbl.getAttribute('for') && (document.querySelector('[id="' + lbl.getAttribute('for') + '"]')?.getAttribute('aria-label') === ${JSON.stringify(text)})))[0]`;
   const targetScript = `(() => { const lbl = ${scriptBase}; if (!lbl) return null; const forId = lbl.getAttribute('for'); return forId ? document.getElementById(forId) : lbl.querySelector('input, textarea, select'); })()`;
+  const makePoint = `(() => { const el = (${targetScript}); if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`;
+  const makeAll = `Array.from(document.querySelectorAll('label')).filter(lbl => lbl.textContent.includes(${JSON.stringify(text)}) || lbl.getAttribute('for') && (document.querySelector('[id="' + lbl.getAttribute('for') + '"]')?.getAttribute('aria-label') === ${JSON.stringify(text)})))`;
   return {
     click: async (opts) => {
-      const info = await evalInPage(`(() => { const el = (${targetScript}); if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`, tabId);
+      const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByLabel(${JSON.stringify(text)}): element not found`);
       return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
     },
@@ -2772,12 +2859,51 @@ function createLocatorByLabel(text, tabId) {
     },
     press: async (key) => cmdSendKeys({ keys: key }),
     textContent: async () => evalInPage(`(() => { const el = (${targetScript}); return el ? el.textContent : null; })()`, tabId),
+    allTextContents: async () => evalInPage(`(() => { const arr = ${makeAll}; return arr.map(el => el?.textContent || ''); })()`, tabId),
     innerText: async () => evalInPage(`(() => { const el = (${targetScript}); return el ? el.innerText : null; })()`, tabId),
     getAttribute: async (name) => evalInPage(`(() => { const el = (${targetScript}); return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`, tabId),
     isVisible: async () => evalInPage(`(() => { const el = (${targetScript}); if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`, tabId),
+    isEnabled: async () => evalInPage(`(() => { const el = (${targetScript}); if (!el) return false; return !el.disabled && el.getAttribute('aria-disabled') !== 'true'; })()`, tabId),
     count: async () => evalInPage(`Array.from(document.querySelectorAll('label')).filter(lbl => lbl.textContent.includes(${JSON.stringify(text)}) || lbl.getAttribute('for') && (document.querySelector('[id="' + lbl.getAttribute('for') + '"]')?.getAttribute('aria-label') === ${JSON.stringify(text)})).length`, tabId),
     first: () => createLocatorByLabel(text, tabId),
+    last: () => createLocatorByLabel(text, tabId),
     nth: () => createLocatorByLabel(text, tabId),
+    and: (other) => createLocator(`Array.from([(${targetScript})]).filter(el => el && el.matches(${JSON.stringify(other)}))[0]`, tabId),
+    or: (other) => createLocator(`(${targetScript}) || document.querySelector(${JSON.stringify(other)})`, tabId),
+    filter: (opts2 = {}) => {
+      const { hasText } = opts2;
+      if (hasText !== undefined) {
+        return createLocator(`(() => { const el = (${targetScript}); return (el && el.textContent.includes(${JSON.stringify(hasText)})) ? el : null; })()`, tabId);
+      }
+      return createLocatorByLabel(text, tabId);
+    },
+    check: async () => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el && el.type === 'checkbox') { el.checked = true; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: true };
+    },
+    uncheck: async () => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el && el.type === 'checkbox') { el.checked = false; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { unchecked: true };
+    },
+    setChecked: async (checked) => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el && el.type === 'checkbox') { el.checked = ${!!checked}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: !!checked };
+    },
+    selectOption: async (value) => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el && el.tagName === 'SELECT') { el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { selected: value };
+    },
+    hover: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByLabel(${JSON.stringify(text)}): element not found`);
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      return { hovered: true };
+    },
+    dblclick: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByLabel(${JSON.stringify(text)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+    },
     locator: (childSel) => createLocator(`${childSel}`, tabId)
   };
 }
@@ -2822,6 +2948,9 @@ function createLocator(selector, tabId) {
     textContent: async () => evalInPage(isExpression
       ? `(() => { const el = (${selector}); return el ? el.textContent : null; })()`
       : `document.querySelector(${JSON.stringify(selector)})?.textContent`, tabId),
+    allTextContents: async () => evalInPage(isExpression
+      ? `(() => { const arr = Array.isArray(${selector}) ? (${selector}) : ((${selector}) ? [(${selector})] : []); return arr.map(el => el?.textContent || ''); })()`
+      : `Array.from(document.querySelectorAll(${JSON.stringify(selector)})).map(el => el.textContent)`, tabId),
     innerText: async () => evalInPage(isExpression
       ? `(() => { const el = (${selector}); return el ? el.innerText : null; })()`
       : `document.querySelector(${JSON.stringify(selector)})?.innerText`, tabId),
@@ -2831,13 +2960,80 @@ function createLocator(selector, tabId) {
     isVisible: async () => evalInPage(isExpression
       ? `(() => { const el = (${selector}); if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`
       : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return !!(el && el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden'); })()`, tabId),
+    isEnabled: async () => evalInPage(isExpression
+      ? `(() => { const el = (${selector}); if (!el) return false; return !el.disabled && el.getAttribute('aria-disabled') !== 'true'; })()`
+      : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return !!(el && !el.disabled && el.getAttribute('aria-disabled') !== 'true'); })()`, tabId),
     count: async () => evalInPage(countScript, tabId),
-    first: () => createLocator(isExpression ? selector : `${selector}:first-child`, tabId),
+    first: () => {
+      if (isExpression) return createLocator(selector, tabId);
+      return createLocator(`document.querySelector(${JSON.stringify(selector)})`, tabId);
+    },
+    last: () => {
+      if (isExpression) return createLocator(selector, tabId);
+      return createLocator(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).slice(-1)[0]`, tabId);
+    },
     nth: (n) => {
       if (isExpression) {
         return createLocator(selector, tabId);
       }
       return createLocatorNth(selector, n, tabId);
+    },
+    and: (other) => {
+      if (isExpression) {
+        return createLocator(`Array.from([(${selector})]).filter(el => el && el.matches(${JSON.stringify(other)}))[0]`, tabId);
+      }
+      return createLocator(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter(el => el.matches(${JSON.stringify(other)}))[0]`, tabId);
+    },
+    or: (other) => {
+      if (isExpression) {
+        return createLocator(`(${selector}) || document.querySelector(${JSON.stringify(other)})`, tabId);
+      }
+      return createLocator(`${selector}, ${other}`, tabId);
+    },
+    filter: (opts = {}) => {
+      const { hasText } = opts;
+      if (hasText !== undefined) {
+        if (isExpression) {
+          return createLocator(`(() => { const el = (${selector}); return (el && el.textContent.includes(${JSON.stringify(hasText)})) ? el : null; })()`, tabId);
+        }
+        return createLocator(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter(el => el.textContent.includes(${JSON.stringify(hasText)}))[0]`, tabId);
+      }
+      return createLocator(selector, tabId);
+    },
+    check: async () => {
+      await evalInPage(isExpression
+        ? `(() => { const el = (${selector}); if (el && el.type === 'checkbox') { el.checked = true; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`
+        : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el && el.type === 'checkbox') { el.checked = true; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: true };
+    },
+    uncheck: async () => {
+      await evalInPage(isExpression
+        ? `(() => { const el = (${selector}); if (el && el.type === 'checkbox') { el.checked = false; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`
+        : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el && el.type === 'checkbox') { el.checked = false; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { unchecked: true };
+    },
+    setChecked: async (checked) => {
+      await evalInPage(isExpression
+        ? `(() => { const el = (${selector}); if (el && el.type === 'checkbox') { el.checked = ${!!checked}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`
+        : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el && el.type === 'checkbox') { el.checked = ${!!checked}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: !!checked };
+    },
+    selectOption: async (value) => {
+      await evalInPage(isExpression
+        ? `(() => { const el = (${selector}); if (el && el.tagName === 'SELECT') { el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('change', {bubbles: true})); } })()`
+        : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el && el.tagName === 'SELECT') { el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { selected: value };
+    },
+    hover: async () => {
+      const info = await evalInPage(resolveScript, tabId);
+      if (!info) throw new Error(`locator.hover: element not found for ${selector}`);
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      return { hovered: true };
+    },
+    dblclick: async () => {
+      const info = await evalInPage(resolveScript, tabId);
+      if (!info) throw new Error(`locator.dblclick: element not found for ${selector}`);
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
     },
     locator: (childSel) => createLocator(isExpression ? `${selector} ${childSel}` : `${selector} ${childSel}`, tabId)
   };
@@ -2854,8 +3050,56 @@ function createPageShim(targetTabId) {
     getByRole: (role, opts) => createLocatorByRole(role, opts, targetTabId),
     getByLabel: (text) => createLocatorByLabel(text, targetTabId),
     getByPlaceholder: (text) => createLocatorByPlaceholder(text, targetTabId),
+    getByTestId: (testId) => createLocator(`[data-testid=${JSON.stringify(testId)}]`, targetTabId),
     waitForSelector: async (sel, opts = {}) => waitForSelectorCdp(sel, opts, targetTabId),
     waitForTimeout: async (ms) => new Promise(r => setTimeout(r, ms)),
+    waitForLoadState: async (state) => {
+      const targetState = state === "load" ? "complete" : (state === "domcontentloaded" ? "interactive" : "complete");
+      const script = `
+        new Promise((resolve) => {
+          const deadline = Date.now() + 30000;
+          const check = () => {
+            if (document.readyState === ${JSON.stringify(targetState)}) { resolve(true); return; }
+            if (Date.now() > deadline) resolve(false);
+            else setTimeout(check, 100);
+          };
+          check();
+        })
+      `;
+      return evalInPage(script, targetTabId);
+    },
+    waitForURL: async (pattern) => {
+      const script = `
+        new Promise((resolve) => {
+          const deadline = Date.now() + 30000;
+          const pat = ${JSON.stringify(String(pattern))};
+          const check = () => {
+            if (location.href.includes(pat) || location.href === pat) { resolve(true); return; }
+            if (Date.now() > deadline) resolve(false);
+            else setTimeout(check, 100);
+          };
+          check();
+        })
+      `;
+      return evalInPage(script, targetTabId);
+    },
+    expectNavigation: async (action) => {
+      const beforeUrl = await evalInPage("window.location.href", targetTabId);
+      await action();
+      const script = `
+        new Promise((resolve) => {
+          const deadline = Date.now() + 30000;
+          const before = ${JSON.stringify(beforeUrl)};
+          const check = () => {
+            if (location.href !== before) { resolve({ navigated: true, url: location.href }); return; }
+            if (Date.now() > deadline) resolve({ navigated: false, url: location.href, error: "timeout" });
+            else setTimeout(check, 100);
+          };
+          check();
+        })
+      `;
+      return evalInPage(script, targetTabId);
+    },
     evaluate: async (fn) => {
       const expression = typeof fn === "string" ? fn : `(${fn.toString()})()`;
       return evalInPage(expression, targetTabId);
