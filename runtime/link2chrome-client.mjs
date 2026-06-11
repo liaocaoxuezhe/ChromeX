@@ -855,6 +855,7 @@ function cssStringEscape(value) {
 class Browser {
   constructor({ kind, transport, safety }) {
     this.kind = kind;
+    this.browserId = kind;
     this._transport = transport;
     this._safety = safety;
     this.tabs = new Tabs({ browser: this, transport, safety });
@@ -2514,6 +2515,11 @@ class DevSurface {
     this._transport = transport;
     this.console = new ConsoleDevSurface({ transport });
     this.network = new NetworkDevSurface({ transport });
+  }
+
+  // Codex TabDevAPI.logs(options): 读取该 tab 已捕获的 console 日志
+  async logs(options = {}) {
+    return this._transport.command("console_list", options);
   }
 }
 
