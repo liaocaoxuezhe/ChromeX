@@ -30,10 +30,12 @@ Only the `playwright_run` tool can be used to control the Chrome extension runti
 Start with the directions in the Bootstrap section above. Use `await agent.documentation.get("<name>")` when you need information about the specific topic they cover:
 
 - `api-troubleshooting`: read when you run into issues during bootstrap or when interacting with the browser library
+- `chrome-troubleshooting`: if Chrome 连接、扩展安装或通信失败，你**必须**立即完整读这篇，再重试、切换浏览器选择器或采取其它恢复动作
 - `confirmations`: you MUST read this before asking the user for confirmation
 - `file-management`: read when you need to upload or download files
 - `playwright`: guidance on using the `tab.playwright` API effectively
 - `screenshots`: read when the user asks you for screenshots
+- `capabilities/tab/pageAssets`: 需要列举或打包页面已加载资源时读这篇
 
 For example, this will give you guidance about confirmations:
 
@@ -269,6 +271,21 @@ node scripts/setup-playwright-runtime.mjs
 - `check-node-env.mjs` 检查 Node.js 版本（≥18）、ESM 支持、WebSocket 可用性
 - `setup-playwright-runtime.mjs` 提供完整诊断输出，并尝试自动修复常见问题
 - Node.js Runtime 不可用时，`playwright_run` 返回**明确错误信息**（含安装指引），不再默默降级到 Extension
+
+### Chrome 连接 / 扩展 / 通信失败
+
+当报命令超时、扩展无响应、找不到浏览器或标签页为空时，**先读 `await agent.documentation.get("chrome-troubleshooting")` 再重试**，不要反复重试同一操作。然后按需运行诊断脚本：
+
+```bash
+# 一次性体检（优先）：用 MCP 工具 browser_diagnose 查看 Hub/Extension/WebSocket/标签页/debugger 状态
+# 环境检测脚本：
+node scripts/diagnostics/chrome-is-running.mjs          # Chrome 是否运行
+node scripts/diagnostics/installed-browsers.mjs         # 默认与已安装浏览器
+node scripts/diagnostics/check-extension-installed.mjs  # Extension 是否安装并启用
+node scripts/diagnostics/check-native-host-manifest.mjs # native host manifest（native messaging 模式）
+```
+
+排查顺序由近及远：Node.js Runtime → WebSocket Hub → Extension 安装/启用 → Chrome 运行。完整场景与命令速查见 `chrome-troubleshooting` 文档。
 
 ## Browser Safety
 

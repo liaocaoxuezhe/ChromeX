@@ -83,6 +83,8 @@ async function main() {
     "confirmations",
     "file-management",
     "api-troubleshooting",
+    "chrome-troubleshooting",
+    "capabilities/tab/pageAssets",
   ];
 
   for (const name of docNames) {

@@ -2687,7 +2687,13 @@ class PageAssetsCapability {
   }
 
   async documentation() {
-    return `# pageAssets 能力
+    // 文档源在 runtime/docs/capabilities/tab/pageAssets.md（与 agent.documentation.get 同源）；
+    // 读取失败时回退到内嵌精简版，保证离线/打包环境仍可用。
+    try {
+      const fileUrl = new URL("./docs/capabilities/tab/pageAssets.md", import.meta.url);
+      return readFileSync(fileUrl, "utf-8");
+    } catch {
+      return `# pageAssets 能力
 
 列举并打包当前页面已加载的资源。
 
@@ -2708,6 +2714,7 @@ const list = await cap.list();
 const { files, errors } = await cap.bundle({ outputDir: "/tmp/page-assets" });
 \`\`\`
 `;
+    }
   }
 
   _extractFilename(name) {
@@ -2747,6 +2754,8 @@ export function createDocumentationSurface() {
     "confirmations",
     "file-management",
     "api-troubleshooting",
+    "chrome-troubleshooting",
+    "capabilities/tab/pageAssets",
   ]);
   return {
     async get(name) {
