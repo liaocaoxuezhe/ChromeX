@@ -918,6 +918,12 @@ async function handleCommand(message) {
       case "save_as_pdf":
         response.data = await cmdSaveAsPdf(params);
         break;
+      case "browser.clipboard.read":
+        response.data = await cmdClipboardRead(params);
+        break;
+      case "browser.clipboard.write":
+        response.data = await cmdClipboardWrite(params);
+        break;
       default:
         throw new Error(`未知指令: ${command}`);
     }
@@ -3283,6 +3289,91 @@ async function cmdSaveAsPdf(params) {
     landscape: !!landscape,
     scale
   };
+}
+
+// -- clipboard --
+async function cmdClipboardRead() {
+  const script = `
+    (async () => {
+      if (!window.isSecureContext && location.protocol !== "https:" && location.hostname !== "localhost") {
+        throw new Error("剪贴板访问被拒绝：需要 HTTPS 或 localhost，且需要用户交互");
+      }
+      const items = await navigator.clipboard.read();
+      const result = [];
+      for (const item of items) {
+        const entries = [];
+        for (const type of item.types) {
+          const blob = await item.getType(type);
+          if (type.startsWith("text/")) {
+            const text = await blob.text();
+            entries.push({ mimeType: type, text });
+          } else {
+            const base64 = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result.split(",")[1]);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+            entries.push({ mimeType: type, base64 });
+          }
+        }
+        result.push({ entries });
+      }
+      return result;
+    })()
+  `;
+  const result = await cmdExecuteScript({ script, awaitPromise: true, timeout: 10000 });
+  if (!result.success) {
+    const errMsg = result.error || "剪贴板读取失败";
+    if (errMsg.includes("NotAllowedError") || errMsg.includes("Permission denied") || errMsg.includes("剪贴板访问被拒绝")) {
+      throw new Error("剪贴板访问被拒绝：需要 HTTPS 或 localhost，且需要用户交互");
+    }
+    throw new Error(errMsg);
+  }
+  return result.result;
+}
+
+async function cmdClipboardWrite(params) {
+  const { items } = params;
+  if (!Array.isArray(items)) {
+    throw new Error("items must be an array");
+  }
+  const script = `
+    (async () => {
+      if (!window.isSecureContext && location.protocol !== "https:" && location.hostname !== "localhost") {
+        throw new Error("剪贴板访问被拒绝：需要 HTTPS 或 localhost，且需要用户交互");
+      }
+      const clipboardItems = [];
+      const rawItems = ${JSON.stringify(items)};
+      for (const item of rawItems) {
+        const blobMap = {};
+        for (const entry of item.entries) {
+          if (entry.text !== undefined) {
+            blobMap[entry.mimeType] = new Blob([entry.text], { type: entry.mimeType });
+          } else if (entry.base64 !== undefined) {
+            const binary = atob(entry.base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+              bytes[i] = binary.charCodeAt(i);
+            }
+            blobMap[entry.mimeType] = new Blob([bytes], { type: entry.mimeType });
+          }
+        }
+        clipboardItems.push(new ClipboardItem(blobMap));
+      }
+      await navigator.clipboard.write(clipboardItems);
+      return { ok: true };
+    })()
+  `;
+  const result = await cmdExecuteScript({ script, awaitPromise: true, timeout: 10000 });
+  if (!result.success) {
+    const errMsg = result.error || "剪贴板写入失败";
+    if (errMsg.includes("NotAllowedError") || errMsg.includes("Permission denied") || errMsg.includes("剪贴板访问被拒绝")) {
+      throw new Error("剪贴板访问被拒绝：需要 HTTPS 或 localhost，且需要用户交互");
+    }
+    throw new Error(errMsg);
+  }
+  return result.result;
 }
 
 // ==================== 初始化 ====================

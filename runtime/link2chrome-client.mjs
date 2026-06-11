@@ -2537,6 +2537,18 @@ class ClipboardSurface {
     const { safety, ...commandOptions } = options;
     return this._transport.command("browser.clipboard.writeText", { text, ...commandOptions });
   }
+
+  async read() {
+    return this._transport.command("browser.clipboard.read", {});
+  }
+
+  async write(items) {
+    await this._safety?.confirm({
+      type: "clipboard.write",
+      items,
+    });
+    return this._transport.command("browser.clipboard.write", { items });
+  }
 }
 
 class DialogSurface {
