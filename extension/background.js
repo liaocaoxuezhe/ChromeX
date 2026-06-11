@@ -41,6 +41,11 @@ const consoleCaptureState = {
 let currentDialog = null;
 let networkSequence = 0;
 let consoleSequence = 0;
+const downloadState = {
+  pending: new Map(),
+  completed: new Map(),
+};
+let downloadsFallbackRegistered = false;
 
 // 不可调试的 URL 前缀
 const UNDEBUGABLE_PREFIXES = [
@@ -463,6 +468,15 @@ async function ensureDebuggerAttached() {
       targetTabId = tabId;
       chrome.debugger.sendCommand({ tabId }, "Page.enable").catch(() => {});
       await enableCaptureDomainsForAttachedTab(tabId);
+      try {
+        await chrome.debugger.sendCommand({ tabId }, "Browser.setDownloadBehavior", {
+          behavior: "allowAndName",
+          eventsEnabled: true,
+        });
+      } catch (err) {
+        console.warn(`[Link2Chrome] Browser.setDownloadBehavior failed, falling back to chrome.downloads: ${err.message}`);
+        setupDownloadsFallback();
+      }
       console.log(`[Link2Chrome] Debugger 已附加到 tab ${tabId} (${tab.url})`);
       return tabId;
     } catch (err) {
@@ -515,6 +529,28 @@ function withTimeout(promise, timeoutMs, message) {
 
 function cssEscape(value) {
   return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function setupDownloadsFallback() {
+  if (downloadsFallbackRegistered) return;
+  downloadsFallbackRegistered = true;
+  chrome.downloads.onCreated.addListener((item) => {
+    downloadState.pending.set(String(item.id), {
+      guid: String(item.id),
+      url: item.url,
+      suggestedFilename: item.filename || "",
+      startedAt: Date.now(),
+    });
+  });
+  chrome.downloads.onChanged.addListener((delta) => {
+    if (delta.state?.current === "complete") {
+      const pending = downloadState.pending.get(String(delta.id));
+      if (pending) {
+        downloadState.completed.set(pending.guid, pending);
+        downloadState.pending.delete(String(delta.id));
+      }
+    }
+  });
 }
 
 // 监听 debugger detach 事件
@@ -602,6 +638,23 @@ function handleDebuggerEvent(source, method, params) {
     };
   } else if (method === "Page.javascriptDialogClosed") {
     currentDialog = null;
+  }
+
+  if (method === "Page.downloadWillBegin") {
+    downloadState.pending.set(params.guid, {
+      guid: params.guid,
+      url: params.url,
+      suggestedFilename: params.suggestedFilename || "",
+      startedAt: Date.now(),
+    });
+  } else if (method === "Page.downloadProgress") {
+    if (params.state === "completed") {
+      const pending = downloadState.pending.get(params.guid);
+      if (pending) {
+        downloadState.completed.set(params.guid, pending);
+        downloadState.pending.delete(params.guid);
+      }
+    }
   }
 }
 
@@ -799,6 +852,9 @@ async function handleCommand(message) {
         break;
       case "handle_dialog":
         response.data = await cmdHandleDialog(params);
+        break;
+      case "wait_for_download":
+        response.data = await cmdWaitForDownload(params);
         break;
       case "action_press_key":
         response.data = await cmdActionPressKey(params);
@@ -2372,6 +2428,24 @@ async function cmdHandleDialog(params) {
   });
   currentDialog = null;
   return { ok: true, action, dialog };
+}
+
+async function cmdWaitForDownload(params) {
+  const timeout = params.timeout || 30000;
+  const deadline = Date.now() + timeout;
+  const pollInterval = 100;
+
+  while (Date.now() < deadline) {
+    const firstKey = downloadState.completed.keys().next().value;
+    if (firstKey !== undefined) {
+      const download = downloadState.completed.get(firstKey);
+      downloadState.completed.delete(firstKey);
+      return { ok: true, download };
+    }
+    await sleep(pollInterval);
+  }
+
+  throw new Error(`wait_for_download timed out after ${timeout}ms`);
 }
 
 async function cmdNetworkCapture(params) {
