@@ -797,6 +797,49 @@ export class TimeoutError extends Link2ChromeError {
   }
 }
 
+// ===== CapabilityCollection 能力发现框架 =====
+const browserCapabilityRegistry = new Map();
+const tabCapabilityRegistry = new Map();
+
+export function registerBrowserCapability(id, description, factory) {
+  browserCapabilityRegistry.set(id, { description, factory });
+}
+
+export function registerTabCapability(id, description, factory) {
+  tabCapabilityRegistry.set(id, { description, factory });
+}
+
+class CapabilityCollection {
+  constructor({ scope, registry, owner, transport, safety }) {
+    this._scope = scope;
+    this._registry = registry || new Map();
+    this._owner = owner;
+    this._transport = transport;
+    this._safety = safety;
+  }
+
+  async list() {
+    const result = [];
+    for (const [id, entry] of this._registry.entries()) {
+      result.push({ id, description: entry.description || "" });
+    }
+    return result;
+  }
+
+  async get(id) {
+    const entry = this._registry.get(id);
+    if (!entry) {
+      const available = Array.from(this._registry.keys());
+      const availableStr = available.length > 0 ? available.join(", ") : "(无)";
+      throw new Error(`Capability "${id}" not found in ${this._scope} scope. Available capabilities: ${availableStr}`);
+    }
+    const context = this._scope === "browser"
+      ? { browser: this._owner, transport: this._transport, safety: this._safety }
+      : { tab: this._owner, transport: this._transport, safety: this._safety };
+    return entry.factory(context);
+  }
+}
+
 function roleSelector(role) {
   const normalized = String(role || "").toLowerCase();
   const selectors = {
@@ -821,6 +864,7 @@ class Browser {
     this._safety = safety;
     this.tabs = new Tabs({ browser: this, transport, safety });
     this.user = new UserSurface({ browser: this, transport, safety });
+    this.capabilities = new CapabilityCollection({ scope: "browser", registry: browserCapabilityRegistry, owner: this, transport, safety });
   }
 
   async nameSession(name) {
@@ -946,6 +990,7 @@ class Tab {
     this.dev = new DevSurface({ tab: this, transport });
     this.clipboard = new ClipboardSurface({ tab: this, transport, safety });
     this.dialog = new DialogSurface({ tab: this, transport, safety });
+    this.capabilities = new CapabilityCollection({ scope: "tab", registry: tabCapabilityRegistry, owner: this, transport, safety });
   }
 
   async url() {
