@@ -1,4 +1,6 @@
 import { spawn as defaultSpawn } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import { basename, extname, join } from "node:path";
 import {
   discoverLocalBrowserEnvironment,
   openLocalBrowserWindow,
@@ -2644,3 +2646,95 @@ class NetworkDevSurface {
     return this._transport.command("network_replay", options);
   }
 }
+
+class PageAssetsCapability {
+  constructor({ tab, transport, safety }) {
+    this._tab = tab;
+    this._transport = transport;
+    this._safety = safety;
+  }
+
+  async list() {
+    return this._transport.command("page_assets_list", {});
+  }
+
+  async bundle({ outputDir } = {}) {
+    if (!outputDir) {
+      throw new Error("bundle requires outputDir");
+    }
+    const result = await this._transport.command("page_assets_bundle", {});
+    const assets = Array.isArray(result) ? result : (result?.assets || []);
+    const errors = Array.isArray(result) ? [] : (result?.errors || []);
+
+    await mkdir(outputDir, { recursive: true });
+
+    const seen = new Set();
+    const files = [];
+
+    for (const asset of assets) {
+      const filename = this._dedupeFilename(this._extractFilename(asset.name || "resource"), seen);
+      const filepath = join(outputDir, filename);
+      const buf = Buffer.from(asset.base64 || "", "base64");
+      await writeFile(filepath, buf);
+      files.push(filepath);
+    }
+
+    return { outputDir, files, errors };
+  }
+
+  async documentation() {
+    return `# pageAssets 能力
+
+列举并打包当前页面已加载的资源。
+
+## 方法
+
+- \`await capability.list()\`
+  返回当前页面已加载资源列表，每项包含 \`{ name, type, size }\`。
+
+- \`await capability.bundle({ outputDir })\`
+  将资源下载为 base64 并写入 \`outputDir\`（自动创建目录）。
+  返回 \`{ outputDir, files: [路径数组], errors: [{ name, reason }] }\`。
+
+## 示例
+
+\`\`\`js
+const cap = await tab.capabilities.get("pageAssets");
+const list = await cap.list();
+const { files, errors } = await cap.bundle({ outputDir: "/tmp/page-assets" });
+\`\`\`
+`;
+  }
+
+  _extractFilename(name) {
+    try {
+      const url = new URL(name);
+      const pathname = url.pathname;
+      const base = pathname.split("/").pop() || "resource";
+      return base.replace(/[<>:"/\\|?*]+/g, "_");
+    } catch {
+      return "resource";
+    }
+  }
+
+  _dedupeFilename(filename, seen) {
+    if (!seen.has(filename)) {
+      seen.add(filename);
+      return filename;
+    }
+    const ext = extname(filename);
+    const base = basename(filename, ext);
+    let counter = 1;
+    let candidate = `${base}_${counter}${ext}`;
+    while (seen.has(candidate)) {
+      counter++;
+      candidate = `${base}_${counter}${ext}`;
+    }
+    seen.add(candidate);
+    return candidate;
+  }
+}
+
+registerTabCapability("pageAssets", "列举并打包当前页面已加载的资源", ({ tab, transport, safety }) => {
+  return new PageAssetsCapability({ tab, transport, safety });
+});

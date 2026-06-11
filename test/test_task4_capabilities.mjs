@@ -48,7 +48,7 @@ test("browser.capabilities.list() 空注册表返回 [] 不抛错", async () => 
   assert.deepEqual(list, [], "空注册表应返回 []");
 });
 
-test("tab.capabilities.list() 空注册表返回 [] 不抛错", async () => {
+test("tab.capabilities.list() 含 pageAssets 不抛错", async () => {
   const transport = mockTransport({
     browser_tab_info: () => ({ url: "https://example.com", title: "Example" }),
   });
@@ -56,7 +56,9 @@ test("tab.capabilities.list() 空注册表返回 [] 不抛错", async () => {
   const browser = await client.browsers.get("extension");
   const tab = await browser.tabs.selected();
   const list = await tab.capabilities.list();
-  assert.deepEqual(list, [], "空注册表应返回 []");
+  assert.ok(Array.isArray(list), "list 应返回数组");
+  const hasPageAssets = list.some((c) => c.id === "pageAssets");
+  assert.ok(hasPageAssets, "list 应包含 pageAssets");
 });
 
 test("browser.capabilities.get('nonexistent') 抛出含可用 id 列表的错误", async () => {
@@ -80,7 +82,7 @@ test("tab.capabilities.get('nonexistent') 抛出含可用 id 列表的错误", a
 
   await assert.rejects(
     async () => await tab.capabilities.get("nonexistent"),
-    /Capability "nonexistent" not found in tab scope\. Available capabilities: \(无\)/
+    /Capability "nonexistent" not found in tab scope\. Available capabilities: pageAssets/
   );
 });
 
@@ -126,9 +128,10 @@ test("registerTabCapability 注册后 list() 含该项、get() 返回实例且�
   const browser = await client.browsers.get("extension");
   const tab = await browser.tabs.selected();
   const list = await tab.capabilities.list();
-  assert.equal(list.length, 1, "list 应包含 1 项");
-  assert.equal(list[0].id, "testTabCap", "id 匹配");
-  assert.equal(list[0].description, "Test tab capability", "description 匹配");
+  assert.equal(list.length, 2, "list 应包含 2 项（pageAssets + testTabCap）");
+  const testCap = list.find((c) => c.id === "testTabCap");
+  assert.ok(testCap, "testTabCap 应在列表中");
+  assert.equal(testCap.description, "Test tab capability", "description 匹配");
 
   const instance = await tab.capabilities.get("testTabCap");
   assert.equal(typeof instance.documentation, "function", "实例应含 documentation 方法");
@@ -147,6 +150,6 @@ test("get('nonexistent') 在已有注册项时列出可用 id", async () => {
 
   await assert.rejects(
     async () => await tab.capabilities.get("missing"),
-    /Available capabilities: testTabCap/
+    /Available capabilities: pageAssets, testTabCap/
   );
 });
