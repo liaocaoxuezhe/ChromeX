@@ -27,7 +27,14 @@ export function setupLink2ChromeRuntime({
     confirmAction,
     localEnvironment,
   });
-  const agent = { browsers: link2chrome.browsers };
+  const agent = {
+    browsers: link2chrome.browsers,
+    documentation: {
+      async get(name) {
+        throw new Error("documentation 将在后续版本提供");
+      },
+    },
+  };
   if (overwrite || globals.link2chrome === undefined) {
     globals.link2chrome = link2chrome;
   }
@@ -159,7 +166,14 @@ class ScriptSurface {
     const execute = async ({ browser = options.browser, lease = options.lease } = {}) => {
       const runtimeBrowser = browser || await this._client.browsers.get(options.browser || "extension");
       const context = {
-        agent: { browsers: this._client.browsers },
+        agent: {
+          browsers: this._client.browsers,
+          documentation: {
+            async get(name) {
+              throw new Error("documentation 将在后续版本提供");
+            },
+          },
+        },
         link2chrome: this._client,
         browser: runtimeBrowser,
         lease,
@@ -601,15 +615,15 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
         const raw = await send("get_all_tabs", args);
         const tabs = [];
         for (const windowTabs of Object.values(raw.windows || {})) {
-          for (const tab of windowTabs) {
+          for (const { id, windowId, active, url, title, status, favIconUrl } of windowTabs) {
             tabs.push({
-              id: tab.id,
-              windowId: tab.windowId,
-              active: tab.active,
-              url: tab.url,
-              title: tab.title,
-              status: tab.status || "unknown",
-              favicon: tab.favIconUrl,
+              id,
+              windowId,
+              active,
+              url,
+              title,
+              status: status || "unknown",
+              favicon: favIconUrl,
             });
           }
         }
@@ -918,8 +932,8 @@ class Tab {
     this._transport = transport;
     this._safety = safety;
     this.id = data.id;
-    this.url = data.url;
-    this.title = data.title;
+    this._url = data.url;
+    this._title = data.title;
     this.active = data.active;
     this.raw = raw;
     this.playwright = new PlaywrightSurface({ tab: this, transport, safety });
@@ -930,6 +944,24 @@ class Tab {
     this.dialog = new DialogSurface({ tab: this, transport, safety });
   }
 
+  async url() {
+    try {
+      const info = await this._transport.command("browser_tab_info", {});
+      return info.url ?? this._url;
+    } catch {
+      return this._url;
+    }
+  }
+
+  async title() {
+    try {
+      const info = await this._transport.command("browser_tab_info", {});
+      return info.title ?? this._title;
+    } catch {
+      return this._title;
+    }
+  }
+
   async goto(url) {
     return this._transport.command("browser_navigate", { url });
   }
@@ -937,6 +969,14 @@ class Tab {
   async reload() {
     const current = await this.info();
     return this.goto(current.url);
+  }
+
+  async back() {
+    return this.goBack();
+  }
+
+  async forward() {
+    return this.goForward();
   }
 
   async goBack() {
@@ -952,7 +992,16 @@ class Tab {
   }
 
   async screenshot(options = {}) {
-    return this._transport.command("browser.cua.screenshot", options);
+    const result = await this._transport.command("browser.cua.screenshot", options);
+    if (options.raw === true) {
+      return result;
+    }
+    const base64 = result?.data ?? result?.base64;
+    if (typeof base64 === "string" && base64.length > 0) {
+      const buf = Buffer.from(base64, "base64");
+      return new Uint8Array(buf);
+    }
+    return result;
   }
 
   async waitFor(options = {}) {
@@ -977,7 +1026,16 @@ class PlaywrightSurface {
   }
 
   async screenshot(options = {}) {
-    return this._transport.command("browser.cua.screenshot", options);
+    const result = await this._transport.command("browser.cua.screenshot", options);
+    if (options.raw === true) {
+      return result;
+    }
+    const base64 = result?.data ?? result?.base64;
+    if (typeof base64 === "string" && base64.length > 0) {
+      const buf = Buffer.from(base64, "base64");
+      return new Uint8Array(buf);
+    }
+    return result;
   }
 
   async waitForEvent(eventName, options = {}) {
@@ -1021,7 +1079,7 @@ class PlaywrightSurface {
     const deadline = Date.now() + timeoutMs;
     const sleepMs = 250;
     const matcher = globToRegex(pattern);
-    const tabUrl = this._tab?.url;
+    const tabUrl = await this._tab?.url?.();
     if (tabUrl && matcher.test(tabUrl)) return;
 
     while (Date.now() < deadline) {
@@ -1030,12 +1088,12 @@ class PlaywrightSurface {
         const info = await this._tab?.info?.();
         currentUrl = info?.url;
       } catch {
-        currentUrl = this._tab?.url;
+        currentUrl = await this._tab?.url?.();
       }
       if (currentUrl && matcher.test(currentUrl)) return;
       await new Promise((resolve) => setTimeout(resolve, sleepMs));
     }
-    throw new TimeoutError(`waitForURL('${pattern}') timed out after ${timeoutMs}ms`, pattern, this._tab?.url);
+    throw new TimeoutError(`waitForURL('${pattern}') timed out after ${timeoutMs}ms`, pattern, await this._tab?.url?.());
   }
 
   async expectNavigation(action, options = {}) {
@@ -1045,7 +1103,7 @@ class PlaywrightSurface {
       const info = await this._tab?.info?.();
       before = info?.url;
     } catch {
-      before = this._tab?.url;
+      before = await this._tab?.url?.();
     }
 
     await action();
@@ -1057,7 +1115,7 @@ class PlaywrightSurface {
         const info = await this._tab?.info?.();
         after = info?.url;
       } catch {
-        after = this._tab?.url;
+        after = await this._tab?.url?.();
       }
       if (after && after !== before) return { from: before, to: after };
       await new Promise((resolve) => setTimeout(resolve, 250));
@@ -1614,10 +1672,10 @@ class Locator {
       } catch {
         return;
       }
-      throw new LocatorNotFoundError(this.target.selector || this.target.text, this._tab?.url);
+      throw new LocatorNotFoundError(this.target.selector || this.target.text, await this._tab?.url?.());
     }
     if (count > 1) {
-      throw new StrictModeError(this.target.selector || this.target.text, this._tab?.url, count);
+      throw new StrictModeError(this.target.selector || this.target.text, await this._tab?.url?.(), count);
     }
   }
 
@@ -1636,7 +1694,7 @@ class Locator {
     const element = this.target.last ? elements.at(-1) : elements[index];
     if (!element) {
       const selector = this.target.selector || this.target.text || String(this.target);
-      throw new LocatorNotFoundError(selector, this._tab?.url);
+      throw new LocatorNotFoundError(selector, await this._tab?.url?.());
     }
     return {
       ...(element.selector ? { selector: element.selector } : this.target),

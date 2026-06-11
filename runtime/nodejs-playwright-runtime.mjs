@@ -56,6 +56,7 @@ const ipcConsole = {
 // ─── Client 初始化 ────────────────────────────────────────
 let link2chrome = null;
 let browser = null;
+let agent = null;
 let transport = null;
 let hubConnected = false;
 
@@ -80,6 +81,15 @@ function setupReplContext() {
   globalThis.link2chrome = link2chrome;
   globalThis.browser = browser;
   globalThis.console = ipcConsole;
+  agent = {
+    browsers: link2chrome.browsers,
+    documentation: {
+      async get(name) {
+        throw new Error("documentation 将在后续版本提供");
+      },
+    },
+  };
+  globalThis.agent = agent;
 }
 
 // ─── 结果序列化器 ─────────────────────────────────────────
@@ -164,10 +174,11 @@ async function executeCode({ id, code, timeout = 30000 }) {
       "browser",
       "link2chrome",
       "console",
+      "agent",
       `return (async () => {\n${code}\n})();`
     );
 
-    const resultPromise = runner(browser, link2chrome, ipcConsole);
+    const resultPromise = runner(browser, link2chrome, ipcConsole, agent);
 
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => {
