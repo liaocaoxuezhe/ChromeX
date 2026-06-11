@@ -6,7 +6,7 @@
 .DS_Store
 .idea/
 .vscode/
-docs/
+/docs/
 
 # Python
 __pycache__/

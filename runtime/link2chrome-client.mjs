@@ -1,4 +1,5 @@
 import { spawn as defaultSpawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import {
@@ -31,11 +32,7 @@ export function setupLink2ChromeRuntime({
   });
   const agent = {
     browsers: link2chrome.browsers,
-    documentation: {
-      async get(name) {
-        throw new Error("documentation 将在后续版本提供");
-      },
-    },
+    documentation: createDocumentationSurface(),
   };
   if (overwrite || globals.link2chrome === undefined) {
     globals.link2chrome = link2chrome;
@@ -170,11 +167,7 @@ class ScriptSurface {
       const context = {
         agent: {
           browsers: this._client.browsers,
-          documentation: {
-            async get(name) {
-              throw new Error("documentation 将在后续版本提供");
-            },
-          },
+          documentation: createDocumentationSurface(),
         },
         link2chrome: this._client,
         browser: runtimeBrowser,
@@ -872,6 +865,11 @@ class Browser {
   async nameSession(name) {
     this.sessionName = name;
     return { ok: true, name };
+  }
+
+  async documentation() {
+    const docs = createDocumentationSurface();
+    return docs.get("api");
   }
 }
 
@@ -2733,6 +2731,31 @@ const { files, errors } = await cap.bundle({ outputDir: "/tmp/page-assets" });
     seen.add(candidate);
     return candidate;
   }
+}
+
+export function createDocumentationSurface() {
+  const available = new Set([
+    "api",
+    "playwright",
+    "screenshots",
+    "confirmations",
+    "file-management",
+    "api-troubleshooting",
+  ]);
+  return {
+    async get(name) {
+      if (!available.has(name)) {
+        const availableStr = Array.from(available).join(", ");
+        throw new Error(`Documentation "${name}" not found. Available: ${availableStr}`);
+      }
+      try {
+        const fileUrl = new URL(`./docs/${name}.md`, import.meta.url);
+        return readFileSync(fileUrl, "utf-8");
+      } catch (error) {
+        throw new Error(`Failed to read documentation "${name}": ${error?.message || error}`);
+      }
+    },
+  };
 }
 
 registerTabCapability("pageAssets", "列举并打包当前页面已加载的资源", ({ tab, transport, safety }) => {

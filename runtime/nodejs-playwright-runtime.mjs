@@ -15,7 +15,7 @@
  */
 
 import { createInterface } from "readline";
-import { createLink2ChromeClient, createWebSocketTransport } from "./link2chrome-client.mjs";
+import { createLink2ChromeClient, createDocumentationSurface, createWebSocketTransport } from "./link2chrome-client.mjs";
 
 const VERSION = "1.0.0";
 const WS_URL = process.env.LINK2CHROME_WS_URL || "ws://localhost:8766";
@@ -83,11 +83,7 @@ function setupReplContext() {
   globalThis.console = ipcConsole;
   agent = {
     browsers: link2chrome.browsers,
-    documentation: {
-      async get(name) {
-        throw new Error("documentation 将在后续版本提供");
-      },
-    },
+    documentation: createDocumentationSurface(),
   };
   globalThis.agent = agent;
 }
