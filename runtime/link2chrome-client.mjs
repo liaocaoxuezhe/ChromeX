@@ -664,11 +664,12 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
           y: point.y,
           button: args.button || "left",
           clickCount: args.clickCount || 1,
+          keypress: args.keypress,
         });
       }
       if (name === "browser.cua.double_click") {
         const point = await screenshotPointToCss(send, args.x, args.y);
-        return send("click", { x: point.x, y: point.y, button: "left", clickCount: 2 });
+        return send("click", { x: point.x, y: point.y, button: "left", clickCount: 2, keypress: args.keypress });
       }
       if (name === "browser.cua.move") {
         const point = await screenshotPointToCss(send, args.x, args.y);
@@ -682,6 +683,7 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
           y: args.y || 0,
           deltaX: args.dx || 0,
           deltaY: args.dy ?? args.deltaY ?? 500,
+          keypress: args.keypress,
         });
       }
       if (name === "browser.cua.drag") {
@@ -693,6 +695,8 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
           endX: end.x,
           endY: end.y,
           duration: args.duration || 500,
+          keys: args.keys,
+          path: args.path,
         });
       }
 
@@ -1730,28 +1734,82 @@ class CuaSurface {
   }
 
   async click(x, y, options = {}) {
+    // Codex 风格：click({ x, y, button?, keypress? })
     if (typeof x === "object" && x !== null) {
+      const original = x;
       options = y || {};
-      y = x.y;
-      x = x.x;
+      y = original.y;
+      x = original.x;
+      const { x: _x, y: _y, ...rest } = original;
+      options = { ...rest, ...options };
     }
     await this._safety?.confirm({ type: "cua.click", target: { x, y }, safety: options.safety });
-    const { safety, ...commandOptions } = options;
-    return this._transport.command("browser.cua.click", { x, y, ...commandOptions });
+    const { safety, button: rawButton, keypress, ...commandOptions } = options;
+    // button 数值映射（1-left, 2-middle, 3-right, 4-back, 5-forward）
+    let button = rawButton;
+    if (typeof button === "number") {
+      const map = { 1: "left", 2: "middle", 3: "right", 4: "back", 5: "forward" };
+      button = map[button] || "left";
+    }
+    return this._transport.command("browser.cua.click", {
+      x,
+      y,
+      button,
+      keypress,
+      ...commandOptions,
+    });
   }
 
+  async double_click(options = {}) {
+    // Codex 风格：double_click({ x, y, keypress? })
+    if (typeof options === "object" && options !== null) {
+      const { x, y, keypress, ...rest } = options;
+      return this._transport.command("browser.cua.double_click", { x, y, keypress, ...rest });
+    }
+    return this._transport.command("browser.cua.double_click", { x: options, y: arguments[1] });
+  }
+
+  // 别名
   async doubleClick(x, y) {
-    return this._transport.command("browser.cua.double_click", { x, y });
+    return this.double_click({ x, y });
   }
 
-  async move(x, y) {
-    return this._transport.command("browser.cua.move", { x, y });
+  async move(x, y, options = {}) {
+    // Codex 风格：move({ x, y, keys? })
+    if (typeof x === "object" && x !== null) {
+      const original = x;
+      options = y || {};
+      y = original.y;
+      x = original.x;
+      const { x: _x, y: _y, ...rest } = original;
+      options = { ...rest, ...options };
+    }
+    const { safety, keys, ...commandOptions } = options;
+    return this._transport.command("browser.cua.move", { x, y, keys, ...commandOptions });
   }
 
   async type(text, options = {}) {
+    // Codex 风格：type({ text })
+    if (typeof text === "object" && text !== null) {
+      const original = text;
+      options = { ...original, ...options };
+      text = original.text;
+    }
     await this._safety?.confirm({ type: "cua.type", text, safety: options.safety });
     const { safety, ...commandOptions } = options;
     return this._transport.command("browser.cua.type", { text, ...commandOptions });
+  }
+
+  async keypress(options = {}) {
+    // Codex 风格：keypress({ keys: string[] })
+    if (typeof options === "object" && options !== null && Array.isArray(options.keys)) {
+      const combo = options.keys.join("+");
+      return this.key(combo, options);
+    }
+    if (typeof options === "string") {
+      return this.key(options, arguments[1]);
+    }
+    throw new TypeError("keypress requires an object with keys array");
   }
 
   async key(combo, options = {}) {
@@ -1761,10 +1819,55 @@ class CuaSurface {
   }
 
   async scroll(dx = 0, dy = 500, options = {}) {
+    // Codex 风格：scroll({ x, y, scrollX, scrollY, keypress? })
+    if (typeof dx === "object" && dx !== null) {
+      const { x, y, scrollX, scrollY, keypress, ...rest } = dx;
+      return this._transport.command("browser.cua.scroll", {
+        x: x || 0,
+        y: y || 0,
+        dx: scrollX || 0,
+        dy: scrollY ?? 500,
+        keypress,
+        ...rest,
+      });
+    }
+    // 旧签名兼容：scroll(dx, dy, options)
+    if (typeof dy === "object" && dy !== null) {
+      options = dy;
+      dy = 500;
+    }
     return this._transport.command("browser.cua.scroll", { dx, dy, ...options });
   }
 
   async drag(x1, y1, x2, y2, options = {}) {
+    // Codex 风格：drag({ path: [{x,y},...], keys? })
+    if (typeof x1 === "object" && x1 !== null) {
+      const { path, keys, ...rest } = x1;
+      if (!Array.isArray(path) || path.length < 2) {
+        throw new TypeError("drag requires a path array with at least 2 points");
+      }
+      const start = path[0];
+      const end = path[path.length - 1];
+      await this._safety?.confirm({
+        type: "cua.drag",
+        target: { x1: start.x, y1: start.y, x2: end.x, y2: end.y },
+        safety: rest.safety,
+      });
+      const { safety, ...commandOptions } = rest;
+      const args = {
+        x1: start.x,
+        y1: start.y,
+        x2: end.x,
+        y2: end.y,
+        keys,
+        ...commandOptions,
+      };
+      if (path.length > 2) {
+        args.path = path;
+      }
+      return this._transport.command("browser.cua.drag", args);
+    }
+    // 旧签名兼容
     await this._safety?.confirm({
       type: "cua.drag",
       target: { x1, y1, x2, y2 },
@@ -1782,8 +1885,13 @@ class DomCuaSurface {
     this._safety = safety;
   }
 
-  async visibleDom(options = {}) {
+  async get_visible_dom(options = {}) {
     return this._transport.command("browser.dom.overview", options);
+  }
+
+  // 别名
+  async visibleDom(options = {}) {
+    return this.get_visible_dom(options);
   }
 
   async query(selector, options = {}) {
@@ -1791,6 +1899,21 @@ class DomCuaSurface {
   }
 
   async click(target, options = {}) {
+    // Codex 风格：click({ node_id })
+    if (typeof target === "object" && target !== null && target.node_id !== undefined) {
+      const nodeTarget = { node_id: target.node_id };
+      await this._safety?.confirm({
+        type: "dom_cua.click",
+        target: nodeTarget,
+        safety: target.safety ?? options.safety,
+      });
+      const { safety, node_id, ...commandOptions } = target;
+      return this._transport.command("browser.dom.click", {
+        target: nodeTarget,
+        ...commandOptions,
+      });
+    }
+    // 旧签名兼容
     await this._safety?.confirm({
       type: "dom_cua.click",
       target,
@@ -1798,6 +1921,74 @@ class DomCuaSurface {
     });
     const { safety, ...commandOptions } = options;
     return this._transport.command("browser.dom.click", { target, ...commandOptions });
+  }
+
+  async double_click(options = {}) {
+    // Codex 风格：double_click({ node_id })
+    if (typeof options === "object" && options !== null && options.node_id !== undefined) {
+      const target = { node_id: options.node_id };
+      await this._safety?.confirm({
+        type: "dom_cua.double_click",
+        target,
+        safety: options.safety,
+      });
+      const { safety, node_id, ...commandOptions } = options;
+      return this._transport.command("browser.dom.click", {
+        target,
+        clickCount: 2,
+        ...commandOptions,
+      });
+    }
+    throw new TypeError("double_click requires an object with node_id");
+  }
+
+  async keypress(options = {}) {
+    // Codex 风格：keypress({ keys })
+    if (typeof options === "object" && options !== null && Array.isArray(options.keys)) {
+      const combo = options.keys.join("+");
+      await this._safety?.confirm({
+        type: "dom_cua.keypress",
+        key: combo,
+        safety: options.safety,
+      });
+      const { safety, keys, ...commandOptions } = options;
+      return this._transport.command("browser.cua.key", { combo, ...commandOptions });
+    }
+    throw new TypeError("keypress requires an object with keys array");
+  }
+
+  async scroll(options = {}) {
+    // Codex 风格：scroll({ node_id?, x, y })
+    if (typeof options === "object" && options !== null) {
+      const { node_id, x, y } = options;
+      if (node_id !== undefined) {
+        return this._transport.command("script_evaluate", {
+          script: `(function() {
+            const el = document.querySelector('[data-link2chrome-node-id="${node_id}"]') || document.querySelector('[data-node-id="${node_id}"]') || document.getElementById(${JSON.stringify(node_id)});
+            if (el && el.scrollBy) { el.scrollBy(${x || 0}, ${y || 0}); return true; }
+            return false;
+          })()`,
+          awaitPromise: false,
+        });
+      }
+      return this._transport.command("browser.cua.scroll", { dx: x || 0, dy: y ?? 500 });
+    }
+    throw new TypeError("scroll requires an options object");
+  }
+
+  async type(options = {}) {
+    // Codex 风格：type({ text })
+    if (typeof options === "object" && options !== null) {
+      const text = options.text;
+      await this._safety?.confirm({
+        type: "dom_cua.type",
+        text,
+        safety: options.safety,
+      });
+      const { safety, ...commandOptions } = options;
+      return this._transport.command("browser.cua.type", { text, ...commandOptions });
+    }
+    throw new TypeError("type requires an object with text property");
   }
 }
 
