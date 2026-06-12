@@ -6,7 +6,14 @@ const reconnectBtn = document.getElementById("reconnectBtn");
 const enableToggle = document.getElementById("enableToggle");
 const toggleHint = document.getElementById("toggleHint");
 
-function updateUI(connected, enabled) {
+function updateUI(statusOrConnected, enabled) {
+  const status = typeof statusOrConnected === "object"
+    ? statusOrConnected
+    : { connected: statusOrConnected, enabled };
+  const connected = Boolean(status.connected || status.wsConnected);
+  const nativeReady = Boolean(status.nativeReady || status.nativeConnected || status.nativeStatus?.ok);
+  const nativeError = status.nativeStatus?.error || "";
+  enabled = status.enabled !== false;
   statusCard.classList.toggle("dimmed", !enabled);
 
   if (!enabled) {
@@ -20,15 +27,23 @@ function updateUI(connected, enabled) {
 
   toggleHint.textContent = "启用连接";
 
+  if (nativeError === "extension_id_mismatch") {
+    dot.className = "status-dot disconnected";
+    statusText.textContent = "扩展 ID 不匹配";
+    statusDetail.textContent = `请移除后重载 ${status.nativeStatus.expectedId}`;
+    reconnectBtn.disabled = true;
+    return;
+  }
+
   if (connected) {
     dot.className = "status-dot connected";
     statusText.textContent = "已连接";
-    statusDetail.textContent = ":8765";
+    statusDetail.textContent = nativeReady ? "Browser Hub :8765" : "WebSocket :8765";
     reconnectBtn.disabled = true;
   } else {
     dot.className = "status-dot disconnected";
-    statusText.textContent = "未连接";
-    statusDetail.textContent = ":8765";
+    statusText.textContent = nativeReady ? "Hub 等待连接" : "未连接";
+    statusDetail.textContent = nativeReady ? "等待 WebSocket :8765" : "Native Host / :8765";
     reconnectBtn.disabled = false;
   }
 }
@@ -37,7 +52,7 @@ function updateUI(connected, enabled) {
 chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
   if (response) {
     enableToggle.checked = response.enabled !== false;
-    updateUI(response.connected, response.enabled !== false);
+    updateUI(response);
   } else {
     enableToggle.checked = true;
     updateUI(false, true);
@@ -48,7 +63,7 @@ chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "status") {
     enableToggle.checked = message.enabled !== false;
-    updateUI(message.connected, message.enabled !== false);
+    updateUI(message);
   }
 });
 
@@ -89,7 +104,7 @@ reconnectBtn.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
         if (response) {
           enableToggle.checked = response.enabled !== false;
-          updateUI(response.connected, response.enabled !== false);
+          updateUI(response);
         }
       });
     }, 2000);

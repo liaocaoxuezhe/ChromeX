@@ -6,7 +6,7 @@
 .DS_Store
 .idea/
 .vscode/
-docs/
+/docs/
 
 # Python
 __pycache__/
@@ -30,3 +30,6 @@ output/
 
 # Local tool state
 .deepseek/
+.agents/
+.claude/worktrees/
+orchestration/

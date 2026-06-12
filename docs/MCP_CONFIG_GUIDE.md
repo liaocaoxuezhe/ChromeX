@@ -384,3 +384,81 @@ python test/quick_test.py
 ---
 
 如有问题，请查看 [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) 或运行 `./diagnose.sh` 进行自动诊断。
+
+---
+
+## 方案 C：多 Agent 与三控制面补充
+
+Link2Chrome 现在暴露三组同时存在的命名空间工具，任意 MCP 客户端都可以共享同一个 MCP server：
+
+- `browser.dom.*`：复用扩展平面，适合稳定选择器、结构化页面和省 token 自动化。
+- `browser.cua.*`：复用扩展平面，适合视觉页面、canvas、表格坐标和选择器不稳定的场景。先调用 `browser.cua.screenshot`，由调用方多模态模型判断截图坐标，再调用坐标原语。
+- `browser.pw.*`：Playwright/CDP 平面，适合 browser-use 或需要 Playwright API 的任务。先 `browser.pw.start`，再 `browser.pw.endpoint` 取得 CDP URL。
+
+`browser.set_mode` 只记录会话默认偏好；显式调用某个命名空间工具时，不会被这个偏好限制。
+
+### 通用 MCP 片段
+
+```json
+{
+  "mcpServers": {
+    "link2chrome": {
+      "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
+      "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
+      "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+      "env": {
+        "LOG_LEVEL": "INFO",
+        "LOG_CONSOLE": "false"
+      }
+    }
+  }
+}
+```
+
+### browser-use / Playwright
+
+如果要让 browser-use 或外部 Playwright 直连：
+
+1. 用 `--remote-debugging-port=9222` 启动 Tabbit/Chrome，或设置 `PLAYWRIGHT_CDP_URL`。
+2. 调用 `browser.pw.start{"mode":"attach","browser":"tabbit"}` 或 `browser.pw.start{"mode":"attach","browser":"chrome"}`。
+3. 调用 `browser.pw.endpoint`，把返回的 URL 传给 `connectOverCDP` 或 browser-use 的 CDP session 配置。
+
+### 真实 Chrome E2E
+
+普通单测不会强制连接真实浏览器。要验证 WebSocket、Extension 和 runtime 三个能力面，请先确认 Chrome/Tabbit 已加载 Link2Chrome extension，然后运行：
+
+```bash
+LINK2CHROME_REAL_CHROME_E2E=1 node --test test/e2e/runtime-real-chrome.test.mjs
+```
+
+该测试会使用 `python3 server/main.py` 拉起 MCP adapter/Browser Hub；本机 Python 3.9 可直接运行。如果你已经手动启动了 server，可加：
+
+```bash
+LINK2CHROME_REAL_CHROME_E2E=1 LINK2CHROME_E2E_START_SERVER=0 node --test test/e2e/runtime-real-chrome.test.mjs
+```
+
+失败时测试会记录 Chrome 是否运行、Extension 是否安装/连接、WebSocket readiness、当前 tab 和 server stderr，便于定位 profile、extension 或 hub 连接问题。
+
+### 开发者模式直接可用
+
+如果目标是“只在 `chrome://extensions` 加载 `extension/` 后就能用”，先执行一次：
+
+```bash
+node scripts/dev-extension/install.mjs
+```
+
+它会安装：
+
+- 固定扩展 ID 对应的 Native Messaging Host manifest。
+- Host 路径：`scripts/native-host/native-host.mjs`。
+- 允许来源：当前 `extension/manifest.json` 的固定 key 推导出的 extension id。
+
+完成后重新加载 unpacked extension。扩展 background 会先调用 `chrome.runtime.connectNative("com.link2chrome.nativehost")`，Native Host 会拉起 `server/browser_hub.py`，然后扩展继续连接 `ws://localhost:8765`。popup 会显示 Native Host 与 WebSocket/Hub 的连接状态。
+
+如果 popup 在 `Native Host / :8765` 和 `WebSocket :8765` 之间跳动，通常是多个 Chrome profile 同时加载了同一个 `extension/`，或存在旧的 unpacked extension ID。请在所有 Chrome profile 的 `chrome://extensions` 中移除旧项，只保留固定 ID：
+
+```text
+gfmbcnhkhgdlpcdhmolaefigfapbamcg
+```
+
+新版 background 会拒绝旧 ID 连接，popup 会显示“扩展 ID 不匹配”。

@@ -4,9 +4,13 @@
  */
 
 // ==================== 状态管理 ====================
-const BUILD_VERSION = "2025-02-10-sendkeys"; // 用于验证扩展是否加载了新代码（send_keys code 修复）
+const BUILD_VERSION = "2026-06-01-plan-c-keepalive";
 let ws = null;
 let wsConnected = false;
+let nativePort = null;
+let nativeConnected = false;
+let nativeStatus = null;
+let nativeHubStarted = false;
 let connectionEnabled = true; // 用户可通过 popup 开关控制
 let attachedTabId = null;
 // 显式跟踪当前工作标签（解决 active tab 返回 chrome-extension:// 页面的问题）
@@ -15,7 +19,11 @@ let reconnectAttempts = 0;
 let reconnectTimer = null;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const WS_URL = "ws://localhost:8765";
+const NATIVE_HOST_NAME = "com.link2chrome.nativehost";
+const EXPECTED_EXTENSION_ID = "gfmbcnhkhgdlpcdhmolaefigfapbamcg";
 const HEARTBEAT_INTERVAL = 30000;
+const KEEPALIVE_ALARM = "link2chrome.keepalive";
+const KEEPALIVE_PERIOD_MINUTES = 0.5;
 const CDP_COMMAND_TIMEOUT = 10000;
 let heartbeatTimer = null;
 const networkCaptureState = {
@@ -33,6 +41,11 @@ const consoleCaptureState = {
 let currentDialog = null;
 let networkSequence = 0;
 let consoleSequence = 0;
+const downloadState = {
+  pending: new Map(),
+  completed: new Map(),
+};
+let downloadsFallbackRegistered = false;
 
 // 不可调试的 URL 前缀
 const UNDEBUGABLE_PREFIXES = [
@@ -56,10 +69,104 @@ function isDebugableUrl(url) {
   return isDebugable;
 }
 
-// ==================== WebSocket 管理 ====================
+// ==================== Native Host / WebSocket 管理 ====================
+
+function isExpectedExtensionId() {
+  return chrome.runtime.id === EXPECTED_EXTENSION_ID;
+}
+
+function markExtensionIdMismatch() {
+  nativeConnected = false;
+  wsConnected = false;
+  nativeStatus = {
+    ok: false,
+    error: "extension_id_mismatch",
+    expectedId: EXPECTED_EXTENSION_ID,
+    actualId: chrome.runtime.id
+  };
+  broadcastStatus();
+}
+
+function connectNativeBootstrap() {
+  if (!connectionEnabled) return Promise.resolve({ ok: false, reason: "disabled" });
+  if (!isExpectedExtensionId()) {
+    markExtensionIdMismatch();
+    return Promise.resolve(nativeStatus);
+  }
+  if (nativePort && nativeConnected) {
+    return Promise.resolve(nativeStatus || { ok: true, state: "connected" });
+  }
+  if (!chrome.runtime.connectNative) {
+    nativeConnected = false;
+    nativeStatus = { ok: false, error: "nativeMessaging unavailable" };
+    return Promise.resolve(nativeStatus);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    try {
+      const port = chrome.runtime.connectNative("com.link2chrome.nativehost");
+      nativePort = port;
+      nativeConnected = true;
+      nativeStatus = { ok: true, state: "connected" };
+
+      port.onMessage.addListener((message) => {
+        if (message?.id !== "__native_start_hub__") return;
+        nativeStatus = {
+          ok: !message.error,
+          result: message.result || null,
+          error: message.error || null
+        };
+        nativeHubStarted = Boolean(nativeStatus.ok);
+        if (!settled) {
+          settled = true;
+          resolve(nativeStatus);
+        }
+        broadcastStatus();
+      });
+
+      port.onDisconnect.addListener(() => {
+        nativeConnected = false;
+        nativePort = null;
+        const lastError = chrome.runtime.lastError?.message || "";
+        if (nativeHubStarted && nativeStatus?.ok) {
+          nativeStatus = {
+            ...nativeStatus,
+            state: "bootstrap_disconnected",
+            lastDisconnect: lastError || "native host disconnected after bootstrap"
+          };
+        } else {
+          nativeStatus = {
+            ok: false,
+            error: lastError || "native host disconnected"
+          };
+        }
+        broadcastStatus();
+      });
+
+      port.postMessage({ id: "__native_start_hub__", name: "__native_start_hub__", args: {} });
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          resolve(nativeStatus);
+        }
+      }, 1500);
+    } catch (err) {
+      nativeConnected = false;
+      nativePort = null;
+      nativeHubStarted = false;
+      nativeStatus = { ok: false, error: err.message || String(err) };
+      resolve(nativeStatus);
+    }
+  });
+}
 
 function connectWebSocket() {
   if (!connectionEnabled) return;
+  if (!isExpectedExtensionId()) {
+    markExtensionIdMismatch();
+    return;
+  }
   // 避免 CONNECTING 阶段重复创建连接，导致连接风暴
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
@@ -154,9 +261,7 @@ function scheduleReconnect() {
 function startHeartbeat() {
   stopHeartbeat();
   heartbeatTimer = setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "ping" }));
-    }
+    keepAliveTick();
   }, HEARTBEAT_INTERVAL);
 }
 
@@ -166,6 +271,44 @@ function stopHeartbeat() {
     heartbeatTimer = null;
   }
 }
+
+async function keepAliveTick() {
+  if (!connectionEnabled) return;
+  await chrome.storage.local.set({
+    lastKeepaliveAt: Date.now(),
+    wsConnected,
+    buildVersion: BUILD_VERSION
+  }).catch(() => {});
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify({ type: "ping", source: "keepalive" }));
+      return;
+    } catch (err) {
+      console.warn("[Link2Chrome] keepalive ping 失败:", err);
+    }
+  }
+
+  if (!ws || ws.readyState === WebSocket.CLOSED) {
+    scheduleReconnect();
+  }
+}
+
+function setupKeepaliveAlarm() {
+  if (!chrome.alarms) {
+    console.warn("[Link2Chrome] chrome.alarms 不可用，使用心跳定时器兜底");
+    return;
+  }
+  chrome.alarms.create(KEEPALIVE_ALARM, {
+    periodInMinutes: KEEPALIVE_PERIOD_MINUTES
+  });
+}
+
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name === KEEPALIVE_ALARM) {
+    keepAliveTick();
+  }
+});
 
 // ==================== Debugger 管理 ====================
 
@@ -223,6 +366,37 @@ async function findUsableTabId(excludeIds = new Set()) {
   );
 }
 
+function isDebuggerAlreadyAttachedError(err) {
+  return String(err?.message || err).includes("Another debugger is already attached");
+}
+
+async function detachDebuggerTab(tabId) {
+  try {
+    await chrome.debugger.detach({ tabId });
+    await new Promise(r => setTimeout(r, 100));
+    return true;
+  } catch (err) {
+    console.warn(`[Link2Chrome] detach tab ${tabId} 失败: ${err.message}`);
+    return false;
+  }
+}
+
+async function enableCaptureDomainsForAttachedTab(tabId) {
+  if (networkCaptureState.enabled) {
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Network.enable",
+      { maxPostDataSize: 200000 }
+    ).catch((err) => console.warn(`[Link2Chrome] Network.enable 失败: ${err.message}`));
+  }
+  if (consoleCaptureState.enabled) {
+    await chrome.debugger.sendCommand({ tabId }, "Runtime.enable")
+      .catch((err) => console.warn(`[Link2Chrome] Runtime.enable 失败: ${err.message}`));
+    await chrome.debugger.sendCommand({ tabId }, "Log.enable")
+      .catch((err) => console.warn(`[Link2Chrome] Log.enable 失败: ${err.message}`));
+  }
+}
+
 /**
  * 确保 debugger 附加到一个可调试的 tab。
  * 带重试机制：如果 attach 失败（如 chrome-extension:// 错误），排除该 tab 并重试。
@@ -234,6 +408,7 @@ async function ensureDebuggerAttached() {
       const tab = await chrome.tabs.get(attachedTabId);
       if (isDebugableUrl(tab.url)) {
         console.log(`[Link2Chrome] 已附加到有效 tab ${attachedTabId}`);
+        await enableCaptureDomainsForAttachedTab(attachedTabId);
         return attachedTabId;
       }
       // URL 变了（比如被其他扩展劫持），需要重新 attach
@@ -292,14 +467,32 @@ async function ensureDebuggerAttached() {
       attachedTabId = tabId;
       targetTabId = tabId;
       chrome.debugger.sendCommand({ tabId }, "Page.enable").catch(() => {});
+      await enableCaptureDomainsForAttachedTab(tabId);
+      try {
+        await chrome.debugger.sendCommand({ tabId }, "Browser.setDownloadBehavior", {
+          behavior: "allowAndName",
+          eventsEnabled: true,
+        });
+      } catch (err) {
+        console.warn(`[Link2Chrome] Browser.setDownloadBehavior failed, falling back to chrome.downloads: ${err.message}`);
+        setupDownloadsFallback();
+      }
       console.log(`[Link2Chrome] Debugger 已附加到 tab ${tabId} (${tab.url})`);
       return tabId;
     } catch (err) {
       console.error(`[Link2Chrome] attach tab ${tabId} (${tab.url}) 失败: ${err.message}`);
-      failedIds.add(tabId);
       if (tabId === targetTabId) targetTabId = null;
       attachedTabId = null;
-      // 如果不是 chrome-extension 相关错误，直接抛出
+      if (isDebuggerAlreadyAttachedError(err)) {
+        if (await detachDebuggerTab(tabId)) {
+          failedIds.delete(tabId);
+        } else {
+          failedIds.add(tabId);
+        }
+        continue;
+      }
+      failedIds.add(tabId);
+      // 如果不是可跳过的受限页面错误，直接抛出
       if (!err.message.includes("chrome-extension") && !err.message.includes("Cannot access")) {
         throw new Error(`Debugger attach 失败 (tab=${tabId}, url=${tab.url}): ${err.message}`);
       }
@@ -336,6 +529,28 @@ function withTimeout(promise, timeoutMs, message) {
 
 function cssEscape(value) {
   return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function setupDownloadsFallback() {
+  if (downloadsFallbackRegistered) return;
+  downloadsFallbackRegistered = true;
+  chrome.downloads.onCreated.addListener((item) => {
+    downloadState.pending.set(String(item.id), {
+      guid: String(item.id),
+      url: item.url,
+      suggestedFilename: item.filename || "",
+      startedAt: Date.now(),
+    });
+  });
+  chrome.downloads.onChanged.addListener((delta) => {
+    if (delta.state?.current === "complete") {
+      const pending = downloadState.pending.get(String(delta.id));
+      if (pending) {
+        downloadState.completed.set(pending.guid, pending);
+        downloadState.pending.delete(String(delta.id));
+      }
+    }
+  });
 }
 
 // 监听 debugger detach 事件
@@ -423,6 +638,23 @@ function handleDebuggerEvent(source, method, params) {
     };
   } else if (method === "Page.javascriptDialogClosed") {
     currentDialog = null;
+  }
+
+  if (method === "Page.downloadWillBegin") {
+    downloadState.pending.set(params.guid, {
+      guid: params.guid,
+      url: params.url,
+      suggestedFilename: params.suggestedFilename || "",
+      startedAt: Date.now(),
+    });
+  } else if (method === "Page.downloadProgress") {
+    if (params.state === "completed") {
+      const pending = downloadState.pending.get(params.guid);
+      if (pending) {
+        downloadState.completed.set(params.guid, pending);
+        downloadState.pending.delete(params.guid);
+      }
+    }
   }
 }
 
@@ -558,11 +790,11 @@ async function handleCommand(message) {
       case "go_forward":
         response.data = await cmdGoForward();
         break;
+      case "reload":
+        response.data = await cmdReload();
+        break;
       case "drag":
         response.data = await cmdDrag(params);
-        break;
-      case "wait":
-        response.data = await cmdWait(params);
         break;
       case "get_all_tabs":
         response.data = await cmdGetAllTabs();
@@ -572,15 +804,6 @@ async function handleCommand(message) {
         break;
       case "execute_script":
         response.data = await cmdExecuteScript(params);
-        break;
-      case "wait_for_condition":
-        response.data = await cmdWaitForCondition(params);
-        break;
-      case "detach_debugger":
-        response.data = await cmdDetachDebugger(params);
-        break;
-      case "scroll_until":
-        response.data = await cmdScrollUntil(params);
         break;
       case "send_keys":
         response.data = await cmdSendKeys(params);
@@ -600,8 +823,8 @@ async function handleCommand(message) {
       case "agent_browser_tab_new":
         response.data = await cmdAgentBrowserTabNew(params);
         break;
-      case "agent_browser_wait":
-        response.data = await cmdAgentBrowserWait(params);
+      case "agent_browser_tab_close":
+        response.data = await cmdAgentBrowserTabClose(params);
         break;
       case "dom_overview":
         response.data = await cmdDomOverview(params);
@@ -611,9 +834,6 @@ async function handleCommand(message) {
         break;
       case "dom_search":
         response.data = await cmdDomSearch(params);
-        break;
-      case "dom_structured_data":
-        response.data = await cmdDomStructuredData(params);
         break;
       case "dom_element_detail":
         response.data = await cmdDomElementDetail(params);
@@ -627,14 +847,8 @@ async function handleCommand(message) {
       case "action_drag":
         response.data = await cmdActionDrag(params);
         break;
-      case "action_type":
-        response.data = await cmdActionType(params);
-        break;
       case "action_scroll":
         response.data = await cmdActionScroll(params);
-        break;
-      case "action_select":
-        response.data = await cmdActionSelect(params);
         break;
       case "action_hover":
         response.data = await cmdActionHover(params);
@@ -645,11 +859,11 @@ async function handleCommand(message) {
       case "handle_dialog":
         response.data = await cmdHandleDialog(params);
         break;
+      case "wait_for_download":
+        response.data = await cmdWaitForDownload(params);
+        break;
       case "action_press_key":
         response.data = await cmdActionPressKey(params);
-        break;
-      case "action_fill_form":
-        response.data = await cmdActionFillForm(params);
         break;
       case "network_capture":
         response.data = await cmdNetworkCapture(params);
@@ -681,6 +895,9 @@ async function handleCommand(message) {
       case "script_evaluate":
         response.data = await cmdScriptEvaluate(params);
         break;
+      case "frame_evaluate":
+        response.data = await cmdFrameEvaluate(params);
+        break;
       case "ping_version":
         response.data = {
           version: BUILD_VERSION,
@@ -688,6 +905,36 @@ async function handleCommand(message) {
           attachedTabId,
           wsConnected
         };
+        break;
+      case "dom_get_text":
+        response.data = await cmdDomGetText(params);
+        break;
+      case "tab_group_create":
+        response.data = await cmdTabGroupCreate(params);
+        break;
+      case "tab_group_add":
+        response.data = await cmdTabGroupAdd(params);
+        break;
+      case "tab_group_close":
+        response.data = await cmdTabGroupClose(params);
+        break;
+      case "playwright_batch":
+        response.data = await cmdPlaywrightBatch(params);
+        break;
+      case "save_as_pdf":
+        response.data = await cmdSaveAsPdf(params);
+        break;
+      case "browser.clipboard.read":
+        response.data = await cmdClipboardRead(params);
+        break;
+      case "browser.clipboard.write":
+        response.data = await cmdClipboardWrite(params);
+        break;
+      case "page_assets_list":
+        response.data = await cmdPageAssetsList(params);
+        break;
+      case "page_assets_bundle":
+        response.data = await cmdPageAssetsBundle(params);
         break;
       default:
         throw new Error(`未知指令: ${command}`);
@@ -934,9 +1181,10 @@ async function navigateWithTabs(url, timeoutMs) {
     return waitForTabsNavigation(tabId, url, timeoutMs);
   }
 
+  await detachDebuggerTab(tabId);
+  attachedTabId = null;
   await chrome.tabs.update(tabId, { url });
   targetTabId = tabId;
-  attachedTabId = null;
   console.log(`[Link2Chrome] tabs 导航: 已更新标签页 ${tabId} 的 URL 为 ${url}`);
   return waitForTabsNavigation(tabId, url, timeoutMs);
 }
@@ -1111,7 +1359,7 @@ async function cmdGetInfo() {
 
 // -- tab_manage --
 async function cmdTabManage(params) {
-  const { action, tab_index, url } = params;
+  const { action, tab_index, tabId, url } = params;
 
   switch (action) {
     case "new": {
@@ -1145,6 +1393,12 @@ async function cmdTabManage(params) {
       return { created: true, tabId: newTab.id };
     }
     case "close": {
+      if (tabId !== undefined && tabId !== null) {
+        await chrome.tabs.remove(tabId);
+        if (tabId === targetTabId) targetTabId = null;
+        if (tabId === attachedTabId) attachedTabId = null;
+        return { closed: true, tabId };
+      }
       if (tab_index !== undefined) {
         const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
         if (tab_index >= 0 && tab_index < tabs.length) {
@@ -1240,6 +1494,28 @@ async function cmdGoForward() {
   });
 }
 
+// -- reload --
+async function cmdReload() {
+  const tabId = await findUsableTabId();
+  await chrome.tabs.reload(tabId);
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      attachedTabId = null;
+      resolve({ reload: true, status: "timeout" });
+    }, 10000);
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        attachedTabId = null;
+        resolve({ reload: true, status: "complete" });
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
 // -- drag --
 async function cmdDrag(params) {
   const { startX, startY, endX, endY, duration = 500 } = params;
@@ -1272,69 +1548,6 @@ async function cmdDrag(params) {
 }
 
 // -- wait --
-async function cmdWait(params) {
-  const { seconds, selector, text, timeout = 10000 } = params;
-
-  if (seconds) {
-    await new Promise(r => setTimeout(r, seconds * 1000));
-    return { waited: true, type: "time", seconds };
-  }
-
-  if (selector) {
-    const pollScript = `
-      new Promise((resolve) => {
-        const deadline = Date.now() + ${timeout};
-        const check = () => {
-          if (document.querySelector(${JSON.stringify(selector)})) {
-            resolve(true);
-          } else if (Date.now() > deadline) {
-            resolve(false);
-          } else {
-            setTimeout(check, 200);
-          }
-        };
-        check();
-      })
-    `;
-    const result = await sendCDP("Runtime.evaluate", {
-      expression: pollScript,
-      awaitPromise: true,
-      returnByValue: true
-    });
-    const found = result.result.value;
-    return { waited: true, type: "selector", selector, found };
-  }
-
-  if (text) {
-    const pollScript = `
-      new Promise((resolve) => {
-        const deadline = Date.now() + ${timeout};
-        const check = () => {
-          if (document.body.innerText.includes(${JSON.stringify(text)})) {
-            resolve(true);
-          } else if (Date.now() > deadline) {
-            resolve(false);
-          } else {
-            setTimeout(check, 200);
-          }
-        };
-        check();
-      })
-    `;
-    const result = await sendCDP("Runtime.evaluate", {
-      expression: pollScript,
-      awaitPromise: true,
-      returnByValue: true
-    });
-    const found = result.result.value;
-    return { waited: true, type: "text", text, found };
-  }
-
-  await new Promise(r => setTimeout(r, 1000));
-  return { waited: true, type: "default" };
-}
-
-// -- get_all_tabs --
 async function cmdGetAllTabs() {
   const allTabs = await chrome.tabs.query({});
   const windows = {};
@@ -1401,11 +1614,21 @@ async function cmdExtractContent(params) {
 // ==================== 状态广播 ====================
 
 function broadcastStatus() {
-  chrome.runtime.sendMessage({
+  chrome.runtime.sendMessage(getConnectionStatus()).catch(() => {});
+}
+
+function getConnectionStatus() {
+  const nativeReady = Boolean(nativeConnected || nativeHubStarted || nativeStatus?.ok);
+  return {
     type: "status",
     connected: wsConnected,
+    wsConnected,
+    nativeConnected,
+    nativeReady,
+    nativeStatus,
+    transport: wsConnected ? "websocket" : (nativeReady ? "native-bootstrap" : "websocket"),
     enabled: connectionEnabled
-  }).catch(() => {});
+  };
 }
 
 function disableConnection() {
@@ -1422,7 +1645,15 @@ function disableConnection() {
     ws = null;
   }
   wsConnected = false;
+  nativeConnected = false;
+  nativeHubStarted = false;
+  nativeStatus = null;
+  if (nativePort) {
+    try { nativePort.disconnect(); } catch (_) {}
+    nativePort = null;
+  }
   stopHeartbeat();
+  chrome.alarms?.clear(KEEPALIVE_ALARM).catch(() => {});
   broadcastStatus();
   chrome.storage.local.set({ connectionEnabled: false });
 }
@@ -1431,13 +1662,17 @@ function enableConnection() {
   connectionEnabled = true;
   reconnectAttempts = 0;
   chrome.storage.local.set({ connectionEnabled: true });
-  connectWebSocket();
+  setupKeepaliveAlarm();
+  connectNativeBootstrap().finally(() => connectWebSocket());
   broadcastStatus();
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "getStatus") {
-    sendResponse({ connected: wsConnected, enabled: connectionEnabled, targetTabId });
+    sendResponse({
+      ...getConnectionStatus(),
+      targetTabId
+    });
     return true;
   }
   if (message.type === "setEnabled") {
@@ -1465,7 +1700,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     ws = null;
     wsConnected = false;
     stopHeartbeat();
-    connectWebSocket();
+    connectNativeBootstrap().finally(() => connectWebSocket());
     sendResponse({ ok: true });
     return true;
   }
@@ -1505,184 +1740,10 @@ async function cmdExecuteScript(params) {
 }
 
 // -- wait_for_condition --
-async function cmdWaitForCondition(params) {
-  const { condition_type, selector, script, timeout = 10000 } = params;
-
-  if (condition_type === "visible") {
-    // 等待元素可见
-    const pollScript = `
-      new Promise((resolve) => {
-        const deadline = Date.now() + ${timeout};
-        const check = () => {
-          const el = document.querySelector(${JSON.stringify(selector)});
-          if (el) {
-            const rect = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            const isVisible = rect.width > 0 && rect.height > 0
-              && style.display !== 'none'
-              && style.visibility !== 'hidden'
-              && style.opacity !== '0';
-            if (isVisible) {
-              resolve({ found: true, visible: true });
-              return;
-            }
-          }
-          if (Date.now() > deadline) {
-            resolve({ found: false, visible: false });
-          } else {
-            setTimeout(check, 200);
-          }
-        };
-        check();
-      })
-    `;
-
-    const result = await sendCDP("Runtime.evaluate", {
-      expression: pollScript,
-      awaitPromise: true,
-      returnByValue: true
-    });
-
-    return {
-      condition_type: "visible",
-      selector: selector,
-      ...result.result.value
-    };
-
-  } else if (condition_type === "custom") {
-    // 自定义 JS 条件
-    const pollScript = `
-      new Promise((resolve) => {
-        const deadline = Date.now() + ${timeout};
-        const check = () => {
-          const condition = ${script};
-          if (condition) {
-            resolve({ satisfied: true });
-          } else if (Date.now() > deadline) {
-            resolve({ satisfied: false, timeout: true });
-          } else {
-            setTimeout(check, 200);
-          }
-        };
-        check();
-      })
-    `;
-
-    const result = await sendCDP("Runtime.evaluate", {
-      expression: pollScript,
-      awaitPromise: true,
-      returnByValue: true
-    });
-
-    return {
-      condition_type: "custom",
-      ...result.result.value
-    };
-  }
-
-  throw new Error(`未知的等待条件类型: ${condition_type}`);
-}
-
-// -- detach_debugger --
-async function cmdDetachDebugger(params) {
-  const { tab_id } = params;
-  const targetId = tab_id !== undefined ? tab_id : attachedTabId;
-
-  if (targetId === null) {
-    return { success: false, error: "没有已附加的 debugger" };
-  }
-
-  try {
-    await chrome.debugger.detach({ tabId: targetId });
-    if (targetId === attachedTabId) {
-      attachedTabId = null;
-    }
-    console.log(`[Link2Chrome] 已主动 detach debugger from tab ${targetId}`);
-    return { success: true, tabId: targetId };
-  } catch (err) {
-    console.error(`[Link2Chrome] Detach 失败: ${err.message}`);
-    return { success: false, error: err.message };
-  }
-}
 
 // ==================== 第二阶段新增命令实现 ====================
 
 // -- scroll_until --
-async function cmdScrollUntil(params) {
-  const { condition, selector, max_scrolls = 20, scroll_delay = 500 } = params;
-
-  let scrollCount = 0;
-  let lastHeight = await sendCDP("Runtime.evaluate", {
-    expression: "document.body.scrollHeight",
-    returnByValue: true
-  }).then(r => r.result.value);
-
-  let noChangeCount = 0;
-  let foundElement = false;
-
-  while (scrollCount < max_scrolls) {
-    // 根据条件类型检查
-    if (condition === "element_visible" && selector) {
-      // 检查元素是否可见
-      const checkScript = `
-        (function() {
-          const el = document.querySelector(${JSON.stringify(selector)});
-          if (!el) return false;
-          const rect = el.getBoundingClientRect();
-          const style = window.getComputedStyle(el);
-          return rect.width > 0 && rect.height > 0 &&
-                 style.display !== 'none' &&
-                 style.visibility !== 'hidden' &&
-                 style.opacity !== '0';
-        })()
-      `;
-      const result = await sendCDP("Runtime.evaluate", {
-        expression: checkScript,
-        returnByValue: true
-      });
-      if (result.result.value === true) {
-        foundElement = true;
-        break;
-      }
-    } else if (condition === "no_more_content") {
-      // 检查页面高度是否不再变化
-      const newHeight = await sendCDP("Runtime.evaluate", {
-        expression: "document.body.scrollHeight",
-        returnByValue: true
-      }).then(r => r.result.value);
-
-      if (newHeight === lastHeight) {
-        noChangeCount++;
-        if (noChangeCount >= 3) {
-          // 高度连续3次不变，认为到底了
-          break;
-        }
-      } else {
-        noChangeCount = 0;
-        lastHeight = newHeight;
-      }
-    }
-
-    // 滚动
-    await sendCDP("Input.dispatchMouseEvent", {
-      type: "mouseWheel",
-      x: 100, y: 100,
-      deltaX: 0, deltaY: 500
-    });
-
-    scrollCount++;
-    await new Promise(r => setTimeout(r, scroll_delay));
-  }
-
-  return {
-    scrolled: scrollCount,
-    condition: condition,
-    reached_condition: condition === "element_visible" ? foundElement : noChangeCount >= 3,
-    final_height: lastHeight
-  };
-}
-
-// -- send_keys --
 async function cmdSendKeys(params) {
   const { keys, selector } = params;
 
@@ -1990,6 +2051,7 @@ async function cmdAgentBrowserTabInfo(params) {
   const tabId = params.tabId || await findUsableTabId();
   const tab = await chrome.tabs.get(tabId);
   let pageState = {};
+  let pageStateError = null;
   if (isDebugableUrl(tab.url)) {
     const oldTarget = targetTabId;
     targetTabId = tabId;
@@ -2005,6 +2067,9 @@ async function cmdAgentBrowserTabInfo(params) {
         returnByValue: true
       });
       pageState = JSON.parse(result.result.value || "{}");
+    } catch (err) {
+      pageStateError = err.message || String(err);
+      console.warn(`[Link2Chrome] tab info pageState 获取失败: ${pageStateError}`);
     } finally {
       targetTabId = oldTarget || targetTabId;
     }
@@ -2017,6 +2082,7 @@ async function cmdAgentBrowserTabInfo(params) {
     title: tab.title,
     status: tab.status,
     canGoForward: false,
+    ...(pageStateError ? { pageStateError } : {}),
     ...pageState
   };
 }
@@ -2039,22 +2105,24 @@ async function cmdAgentBrowserTabNew(params) {
   return { ok: true, tabId: tab.id, url: tab.url || params.url || "about:blank" };
 }
 
-async function cmdAgentBrowserWait(params) {
-  const started = Date.now();
-  const condition = params.condition || "dom-ready";
-  if (condition === "timeout") {
-    await new Promise(r => setTimeout(r, params.timeout || 1000));
-  } else if (condition === "dom-ready") {
-    if (params.selector) {
-      await cmdDomWaitFor({ selector: params.selector, state: "present", timeout: params.timeout || 10000 });
-    } else {
-      await cmdWait({ selector: "body", timeout: params.timeout || 10000 });
-    }
-  } else {
-    throw new Error(`Unsupported wait condition: ${condition}`);
+async function cmdAgentBrowserTabClose(params) {
+  const tabId = params.tabId;
+  if (!tabId) throw new Error("tabId is required");
+  if (tabId === targetTabId) {
+    targetTabId = null;
   }
-  return { ok: true, elapsed: Date.now() - started, condition };
+  if (tabId === attachedTabId) {
+    try { await chrome.debugger.detach({ tabId }); } catch (_) {}
+    attachedTabId = null;
+  }
+  await chrome.tabs.remove(tabId);
+  return { ok: true, tabId };
 }
+
+
+
+
+
 
 async function evaluatePageFunction(fn, params = {}) {
   const expression = `(${fn.toString()})(${JSON.stringify(params)})`;
@@ -2176,27 +2244,6 @@ async function cmdDomSearch(params) {
   }, params);
 }
 
-async function cmdDomStructuredData(params) {
-  return evaluatePageFunction(() => {
-    const jsonLd = Array.from(document.querySelectorAll('script[type="application/ld+json"]')).map(s => {
-      try { return JSON.parse(s.textContent); } catch (_) { return null; }
-    }).filter(Boolean);
-    const openGraph = {};
-    document.querySelectorAll('meta[property^="og:"]').forEach(m => {
-      openGraph[m.getAttribute("property").replace(/^og:/, "")] = m.getAttribute("content") || "";
-    });
-    const twitter = {};
-    document.querySelectorAll('meta[name^="twitter:"]').forEach(m => {
-      twitter[m.getAttribute("name").replace(/^twitter:/, "")] = m.getAttribute("content") || "";
-    });
-    const meta = {};
-    document.querySelectorAll("meta[name]").forEach(m => {
-      const name = m.getAttribute("name");
-      if (["description", "keywords", "author", "robots", "viewport"].includes(name)) meta[name] = m.getAttribute("content") || "";
-    });
-    return { jsonLd, openGraph, twitter, meta };
-  }, params);
-}
 
 async function cmdDomElementDetail(params) {
   return evaluatePageFunction((params) => {
@@ -2280,7 +2327,7 @@ async function cmdActionClick(params) {
     const el = found.elements?.find(e => e.visible);
     if (!el) throw new Error(`No visible element found by text: ${target.text}`);
     const started = Date.now();
-    await cmdClick({ x: el.x, y: el.y });
+    await cmdClick({ x: el.x, y: el.y, button: params.button || "left", clickCount: params.clickCount || 1 });
     return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started };
   }
   if (!selector && target.ariaLabel) selector = `[aria-label*="${cssEscape(target.ariaLabel)}"]`;
@@ -2354,15 +2401,6 @@ async function cmdActionDrag(params) {
   };
 }
 
-async function cmdActionType(params) {
-  const target = params.target || {};
-  let selector = target.selector;
-  if (!selector && target.name) selector = `[name="${cssEscape(target.name)}"]`;
-  if (!selector && target.placeholder) selector = `[placeholder*="${cssEscape(target.placeholder)}"]`;
-  await cmdType({ selector, text: params.text || "", clearFirst: params.clearFirst !== false, pressEnter: params.submitAfter === "enter" });
-  if (params.submitAfter === "tab") await cmdSendKeys({ keys: "Tab" });
-  return { ok: true, target: { ...target, selector }, value: params.text || "", effects: { inputEventFired: true } };
-}
 
 async function cmdActionScroll(params) {
   const started = Date.now();
@@ -2386,21 +2424,6 @@ async function cmdActionScroll(params) {
   return { ok: true, scrollY: info.scrollY, scrollHeight: info.scrollHeight, atBottom: Math.ceil((info.scrollY || 0) + (info.viewportHeight || 0)) >= (info.scrollHeight || 0), elapsed: Date.now() - started };
 }
 
-async function cmdActionSelect(params) {
-  return evaluatePageFunction((params) => {
-    const target = params.target || {};
-    const selector = target.selector || (target.name ? `[name="${cssEscape(target.name)}"]` : null) || (target.ariaLabel ? `[aria-label*="${cssEscape(target.ariaLabel)}"]` : null);
-    const el = document.querySelector(selector);
-    if (!el) return { ok: false, error: "select not found", selector };
-    const options = Array.from(el.options || []);
-    const match = options.find(o => (params.by !== "text" && o.value === params.value) || (params.by !== "value" && o.text.trim() === params.value));
-    if (!match) return { ok: false, error: "option not found", optionsCount: options.length };
-    el.value = match.value;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    return { ok: true, selected: match.value, text: match.text, optionsCount: options.length };
-  }, params);
-}
 
 async function cmdActionHover(params) {
   const target = params.target || {};
@@ -2415,34 +2438,6 @@ async function cmdActionPressKey(params) {
   return { ok: true, key: params.key };
 }
 
-async function cmdActionFillForm(params) {
-  const failed = [];
-  let filled = 0;
-  for (const field of params.fields || []) {
-    try {
-      if (field.type === "select") {
-        const result = await cmdActionSelect({ target: { selector: field.selector, name: field.name }, value: field.value, by: "value" });
-        if (!result.ok) throw new Error(result.error);
-      } else if (field.type === "checkbox" || field.type === "radio") {
-        await cmdClick({ selector: field.selector || `[name="${cssEscape(field.name)}"]` });
-      } else {
-        await cmdActionType({ target: { selector: field.selector, name: field.name }, text: field.value, clearFirst: true });
-      }
-      filled++;
-    } catch (err) {
-      failed.push({ field, error: err.message });
-    }
-  }
-  if (params.submit) {
-    const formSelector = params.formSelector || "form";
-    await evaluatePageFunction((params) => {
-      const form = document.querySelector(params.formSelector);
-      if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
-      return true;
-    }, { formSelector });
-  }
-  return { ok: failed.length === 0, filled, failed, submitted: !!params.submit };
-}
 
 async function cmdUploadFile(params) {
   const selector = params.selector;
@@ -2489,6 +2484,24 @@ async function cmdHandleDialog(params) {
   return { ok: true, action, dialog };
 }
 
+async function cmdWaitForDownload(params) {
+  const timeout = params.timeout || 30000;
+  const deadline = Date.now() + timeout;
+  const pollInterval = 100;
+
+  while (Date.now() < deadline) {
+    const firstKey = downloadState.completed.keys().next().value;
+    if (firstKey !== undefined) {
+      const download = downloadState.completed.get(firstKey);
+      downloadState.completed.delete(firstKey);
+      return { ok: true, download };
+    }
+    await sleep(pollInterval);
+  }
+
+  throw new Error(`wait_for_download timed out after ${timeout}ms`);
+}
+
 async function cmdNetworkCapture(params) {
   const action = params.action || "status";
   if (action === "start") {
@@ -2520,9 +2533,9 @@ function filterNetworkEntries(params = {}) {
   let entries = [...networkCaptureState.entries];
   if (params.urlContains) entries = entries.filter(e => (e.url || "").includes(params.urlContains));
   if (params.method) entries = entries.filter(e => String(e.method || "").toUpperCase() === String(params.method).toUpperCase());
-  if (params.status !== undefined) entries = entries.filter(e => e.status === params.status);
+  if (params.status != null) entries = entries.filter(e => e.status === params.status);
   if (params.resourceType) entries = entries.filter(e => e.resourceType === params.resourceType);
-  if (params.hasResponseBody !== undefined) entries = entries.filter(e => !!e.responseBody === !!params.hasResponseBody);
+  if (params.hasResponseBody != null) entries = entries.filter(e => !!e.responseBody === !!params.hasResponseBody);
   return entries.slice(-limit).reverse();
 }
 
@@ -2665,12 +2678,824 @@ async function cmdScriptEvaluate(params) {
   };
 }
 
+async function cmdFrameEvaluate(params) {
+  const { frameSelectors, script } = params;
+  if (!Array.isArray(frameSelectors) || frameSelectors.length === 0) {
+    throw new Error("frameSelectors is required");
+  }
+  if (typeof script !== "string") {
+    throw new Error("script is required");
+  }
+
+  // 按 frameSelectors 逐层下钻，通过 contentDocument 进入同源 iframe
+  let drillScript = `
+    (function() {
+      let doc = document;
+  `;
+  for (const sel of frameSelectors) {
+    drillScript += `
+      {
+        const frame = doc.querySelector(${JSON.stringify(sel)});
+        if (!frame) throw new Error('Frame not found: ' + ${JSON.stringify(sel)});
+        const nextDoc = frame.contentDocument;
+        if (!nextDoc) throw new Error('cross-origin iframe not supported: ' + ${JSON.stringify(sel)});
+        doc = nextDoc;
+      }
+    `;
+  }
+  drillScript += `
+      return (function(document) { ${script} })(doc);
+    })()
+  `;
+
+  const result = await cmdExecuteScript({
+    script: drillScript,
+    awaitPromise: params.awaitPromise !== false,
+    timeout: params.timeout || 30000,
+  });
+
+  if (!result.success) {
+    throw new Error(result.error || "frame_evaluate failed");
+  }
+  return {
+    ok: true,
+    result: result.result,
+  };
+}
+
+// ==================== Phase 2: Session + DOM Observation Commands ====================
+
+async function cmdDomGetText(params) {
+  const { selector } = params;
+  if (!selector) {
+    throw new Error("dom_get_text requires selector");
+  }
+
+  const script = `
+    (function() {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return JSON.stringify({ error: "selector not found" });
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return JSON.stringify({
+        text: el.innerText || "",
+        charCount: (el.innerText || "").length,
+        meta: {
+          tag: el.tagName.toLowerCase(),
+          role: el.getAttribute("role") || "",
+          ariaLabel: el.getAttribute("aria-label") || "",
+          childCount: el.children.length,
+          visible: rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden"
+        }
+      });
+    })()
+  `;
+
+  const result = await sendCDP("Runtime.evaluate", {
+    expression: script,
+    returnByValue: true
+  });
+
+  if (result.exceptionDetails) {
+    throw new Error("dom_get_text failed: " + JSON.stringify(result.exceptionDetails));
+  }
+
+  const parsed = JSON.parse(result.result.value);
+  if (parsed.error) {
+    throw new Error(parsed.error);
+  }
+  return parsed;
+}
+
+async function cmdTabGroupCreate(params) {
+  const title = params.title || "Link2Chrome Session";
+  // 创建标签组需要一个初始 tab。先获取当前目标 tab 或创建一个临时 tab。
+  let tabId = targetTabId;
+  if (!tabId) {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (tabs.length > 0) {
+      tabId = tabs[0].id;
+    }
+  }
+  if (!tabId) {
+    // 没有可用 tab，创建一个空白标签页
+    const newTab = await chrome.tabs.create({ url: "about:blank" });
+    tabId = newTab.id;
+    targetTabId = tabId;
+  }
+
+  const groupId = await chrome.tabs.group({ tabIds: [tabId] });
+  await chrome.tabGroups.update(groupId, { title, color: "blue" });
+  return { groupId, title };
+}
+
+async function cmdTabGroupAdd(params) {
+  const { tabId, groupId } = params;
+  if (tabId === undefined || groupId === undefined) {
+    throw new Error("tab_group_add requires tabId and groupId");
+  }
+  await chrome.tabs.group({ tabIds: [tabId], groupId });
+  return { ok: true, tabId, groupId };
+}
+
+async function cmdTabGroupClose(params) {
+  const { groupId } = params;
+  if (groupId === undefined) {
+    throw new Error("tab_group_close requires groupId");
+  }
+  const tabs = await chrome.tabs.query({ groupId });
+  const tabIds = tabs.map(t => t.id);
+  if (tabIds.length > 0) {
+    await chrome.tabs.remove(tabIds);
+  }
+  // 清理 targetTabId / attachedTabId
+  for (const tid of tabIds) {
+    if (tid === targetTabId) targetTabId = null;
+    if (tid === attachedTabId) attachedTabId = null;
+  }
+  return { ok: true, closedCount: tabIds.length };
+}
+
+// ==================== Playwright Batch Helpers ====================
+
+async function evalInPage(expression, tabId) {
+  const targetId = tabId || await ensureDebuggerAttached();
+  const result = await chrome.debugger.sendCommand(
+    { tabId: targetId },
+    "Runtime.evaluate",
+    { expression, returnByValue: true, awaitPromise: true }
+  );
+  if (result.exceptionDetails) {
+    throw new Error(result.exceptionDetails.exception?.description || String(result.exceptionDetails));
+  }
+  return result.result?.value;
+}
+
+async function waitForSelectorCdp(selector, opts = {}, tabId) {
+  const timeout = opts.timeout || 10000;
+  const script = `
+    new Promise((resolve) => {
+      const deadline = Date.now() + ${timeout};
+      const check = () => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (el) {
+          const r = el.getBoundingClientRect();
+          const st = window.getComputedStyle(el);
+          const visible = r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0';
+          if (visible) { resolve(true); return; }
+        }
+        if (Date.now() > deadline) resolve(false);
+        else setTimeout(check, 150);
+      };
+      check();
+    })
+  `;
+  return evalInPage(script, tabId);
+}
+
+async function captureScreenshot(tabId) {
+  return cmdScreenshot({ format: "png", quality: 80 });
+}
+
+function escapeJsString(str) {
+  return String(str).replace(/["\\]/g, "\\$&");
+}
+
+function createLocatorNth(selector, n, tabId) {
+  const nthResolve = `document.querySelectorAll(${JSON.stringify(selector)})[${n}]`;
+  return createLocator(nthResolve, tabId);
+}
+
+function createLocatorByText(text, opts = {}, tabId) {
+  const exact = opts.exact === true;
+  const scriptBase = exact
+    ? `Array.from(document.querySelectorAll('*')).find(el => el.textContent.trim() === ${JSON.stringify(text)})`
+    : `Array.from(document.querySelectorAll('*')).find(el => el.textContent.includes(${JSON.stringify(text)}))`;
+  const makePoint = `(() => { const el = ${scriptBase}; if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`;
+  const makeAll = exact
+    ? `Array.from(document.querySelectorAll('*')).filter(el => el.textContent.trim() === ${JSON.stringify(text)})`
+    : `Array.from(document.querySelectorAll('*')).filter(el => el.textContent.includes(${JSON.stringify(text)}))`;
+  return {
+    click: async (opts) => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByText(${JSON.stringify(text)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+    },
+    fill: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { filled: true };
+    },
+    type: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
+      return { typed: true };
+    },
+    press: async (key) => cmdSendKeys({ keys: key }),
+    textContent: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.textContent : null; })()`, tabId),
+    allTextContents: async () => evalInPage(`(() => { const arr = ${makeAll}; return arr.map(el => el?.textContent || ''); })()`, tabId),
+    innerText: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.innerText : null; })()`, tabId),
+    getAttribute: async (name) => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`, tabId),
+    isVisible: async () => evalInPage(`(() => { const el = ${scriptBase}; if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`, tabId),
+    isEnabled: async () => evalInPage(`(() => { const el = ${scriptBase}; if (!el) return false; return !el.disabled && el.getAttribute('aria-disabled') !== 'true'; })()`, tabId),
+    count: async () => evalInPage(`Array.from(document.querySelectorAll('*')).filter(el => el.textContent.includes(${JSON.stringify(text)})).length`, tabId),
+    first: () => createLocatorByText(text, opts, tabId),
+    last: () => createLocatorByText(text, opts, tabId),
+    nth: () => createLocatorByText(text, opts, tabId),
+    and: (other) => createLocator(`Array.from([(${scriptBase})]).filter(el => el && el.matches(${JSON.stringify(other)}))[0]`, tabId),
+    or: (other) => createLocator(`(${scriptBase}) || document.querySelector(${JSON.stringify(other)})`, tabId),
+    filter: (opts2 = {}) => {
+      const { hasText } = opts2;
+      if (hasText !== undefined) {
+        return createLocator(`(() => { const el = ${scriptBase}; return (el && el.textContent.includes(${JSON.stringify(hasText)})) ? el : null; })()`, tabId);
+      }
+      return createLocatorByText(text, opts, tabId);
+    },
+    check: async () => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = true; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: true };
+    },
+    uncheck: async () => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = false; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { unchecked: true };
+    },
+    setChecked: async (checked) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = ${!!checked}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: !!checked };
+    },
+    selectOption: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.tagName === 'SELECT') { el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { selected: value };
+    },
+    hover: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByText(${JSON.stringify(text)}): element not found`);
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      return { hovered: true };
+    },
+    dblclick: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByText(${JSON.stringify(text)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+    },
+    locator: (childSel) => createLocator(`${childSel}`, tabId)
+  };
+}
+
+function createLocatorByRole(role, opts = {}, tabId) {
+  const name = opts.name;
+  let scriptBase = `Array.from(document.querySelectorAll('[role=${JSON.stringify(role)}]'))`;
+  if (name !== undefined) {
+    scriptBase += `.filter(el => el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)}))`;
+  }
+  scriptBase = `(Array.from(document.querySelectorAll('[role=${JSON.stringify(role)}]')).filter(el => ${name === undefined ? "true" : `(el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)})`}))[0]`;
+  const makePoint = `(() => { const el = ${scriptBase}; if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`;
+  const makeAll = `Array.from(document.querySelectorAll('[role=${JSON.stringify(role)}]')).filter(el => ${name === undefined ? "true" : `(el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)})`})`;
+  return {
+    click: async (opts) => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByRole(${JSON.stringify(role)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+    },
+    fill: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { filled: true };
+    },
+    type: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
+      return { typed: true };
+    },
+    press: async (key) => cmdSendKeys({ keys: key }),
+    textContent: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.textContent : null; })()`, tabId),
+    allTextContents: async () => evalInPage(`(() => { const arr = ${makeAll}; return arr.map(el => el?.textContent || ''); })()`, tabId),
+    innerText: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.innerText : null; })()`, tabId),
+    getAttribute: async (name) => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`, tabId),
+    isVisible: async () => evalInPage(`(() => { const el = ${scriptBase}; if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`, tabId),
+    isEnabled: async () => evalInPage(`(() => { const el = ${scriptBase}; if (!el) return false; return !el.disabled && el.getAttribute('aria-disabled') !== 'true'; })()`, tabId),
+    count: async () => evalInPage(`Array.from(document.querySelectorAll('[role=${JSON.stringify(role)}]')).filter(el => ${name === undefined ? "true" : `(el.textContent.includes(${JSON.stringify(name)}) || el.getAttribute('aria-label') === ${JSON.stringify(name)} || el.getAttribute('title') === ${JSON.stringify(name)})`}).length`, tabId),
+    first: () => createLocatorByRole(role, opts, tabId),
+    last: () => createLocatorByRole(role, opts, tabId),
+    nth: () => createLocatorByRole(role, opts, tabId),
+    and: (other) => createLocator(`Array.from([(${scriptBase})]).filter(el => el && el.matches(${JSON.stringify(other)}))[0]`, tabId),
+    or: (other) => createLocator(`(${scriptBase}) || document.querySelector(${JSON.stringify(other)})`, tabId),
+    filter: (opts2 = {}) => {
+      const { hasText } = opts2;
+      if (hasText !== undefined) {
+        return createLocator(`(() => { const el = ${scriptBase}; return (el && el.textContent.includes(${JSON.stringify(hasText)})) ? el : null; })()`, tabId);
+      }
+      return createLocatorByRole(role, opts, tabId);
+    },
+    check: async () => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = true; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: true };
+    },
+    uncheck: async () => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = false; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { unchecked: true };
+    },
+    setChecked: async (checked) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.type === 'checkbox') { el.checked = ${!!checked}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: !!checked };
+    },
+    selectOption: async (value) => {
+      await evalInPage(`(() => { const el = ${scriptBase}; if (el && el.tagName === 'SELECT') { el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { selected: value };
+    },
+    hover: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByRole(${JSON.stringify(role)}): element not found`);
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      return { hovered: true };
+    },
+    dblclick: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByRole(${JSON.stringify(role)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+    },
+    locator: (childSel) => createLocator(`${childSel}`, tabId)
+  };
+}
+
+function createLocatorByLabel(text, tabId) {
+  const scriptBase = `(Array.from(document.querySelectorAll('label')).filter(lbl => lbl.textContent.includes(${JSON.stringify(text)}) || lbl.getAttribute('for') && (document.querySelector('[id="' + lbl.getAttribute('for') + '"]')?.getAttribute('aria-label') === ${JSON.stringify(text)})))[0]`;
+  const targetScript = `(() => { const lbl = ${scriptBase}; if (!lbl) return null; const forId = lbl.getAttribute('for'); return forId ? document.getElementById(forId) : lbl.querySelector('input, textarea, select'); })()`;
+  const makePoint = `(() => { const el = (${targetScript}); if (!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}; })()`;
+  const makeAll = `Array.from(document.querySelectorAll('label')).filter(lbl => lbl.textContent.includes(${JSON.stringify(text)}) || lbl.getAttribute('for') && (document.querySelector('[id="' + lbl.getAttribute('for') + '"]')?.getAttribute('aria-label') === ${JSON.stringify(text)})))`;
+  return {
+    click: async (opts) => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByLabel(${JSON.stringify(text)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+    },
+    fill: async (value) => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { filled: true };
+    },
+    type: async (value) => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
+      return { typed: true };
+    },
+    press: async (key) => cmdSendKeys({ keys: key }),
+    textContent: async () => evalInPage(`(() => { const el = (${targetScript}); return el ? el.textContent : null; })()`, tabId),
+    allTextContents: async () => evalInPage(`(() => { const arr = ${makeAll}; return arr.map(el => el?.textContent || ''); })()`, tabId),
+    innerText: async () => evalInPage(`(() => { const el = (${targetScript}); return el ? el.innerText : null; })()`, tabId),
+    getAttribute: async (name) => evalInPage(`(() => { const el = (${targetScript}); return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`, tabId),
+    isVisible: async () => evalInPage(`(() => { const el = (${targetScript}); if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`, tabId),
+    isEnabled: async () => evalInPage(`(() => { const el = (${targetScript}); if (!el) return false; return !el.disabled && el.getAttribute('aria-disabled') !== 'true'; })()`, tabId),
+    count: async () => evalInPage(`Array.from(document.querySelectorAll('label')).filter(lbl => lbl.textContent.includes(${JSON.stringify(text)}) || lbl.getAttribute('for') && (document.querySelector('[id="' + lbl.getAttribute('for') + '"]')?.getAttribute('aria-label') === ${JSON.stringify(text)})).length`, tabId),
+    first: () => createLocatorByLabel(text, tabId),
+    last: () => createLocatorByLabel(text, tabId),
+    nth: () => createLocatorByLabel(text, tabId),
+    and: (other) => createLocator(`Array.from([(${targetScript})]).filter(el => el && el.matches(${JSON.stringify(other)}))[0]`, tabId),
+    or: (other) => createLocator(`(${targetScript}) || document.querySelector(${JSON.stringify(other)})`, tabId),
+    filter: (opts2 = {}) => {
+      const { hasText } = opts2;
+      if (hasText !== undefined) {
+        return createLocator(`(() => { const el = (${targetScript}); return (el && el.textContent.includes(${JSON.stringify(hasText)})) ? el : null; })()`, tabId);
+      }
+      return createLocatorByLabel(text, tabId);
+    },
+    check: async () => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el && el.type === 'checkbox') { el.checked = true; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: true };
+    },
+    uncheck: async () => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el && el.type === 'checkbox') { el.checked = false; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { unchecked: true };
+    },
+    setChecked: async (checked) => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el && el.type === 'checkbox') { el.checked = ${!!checked}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: !!checked };
+    },
+    selectOption: async (value) => {
+      await evalInPage(`(() => { const el = (${targetScript}); if (el && el.tagName === 'SELECT') { el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { selected: value };
+    },
+    hover: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByLabel(${JSON.stringify(text)}): element not found`);
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      return { hovered: true };
+    },
+    dblclick: async () => {
+      const info = await evalInPage(makePoint, tabId);
+      if (!info) throw new Error(`getByLabel(${JSON.stringify(text)}): element not found`);
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+    },
+    locator: (childSel) => createLocator(`${childSel}`, tabId)
+  };
+}
+
+function createLocatorByPlaceholder(text, tabId) {
+  const scriptBase = `document.querySelector('[placeholder*=${JSON.stringify(text)}]')`;
+  return createLocator(scriptBase, tabId);
+}
+
+function createLocator(selector, tabId) {
+  const isExpression = selector.includes("document.querySelector") || selector.includes("Array.from");
+  const resolveScript = isExpression
+    ? `(() => { const el = (${selector}); return el ? {x: Math.round(el.getBoundingClientRect().x + el.getBoundingClientRect().width/2), y: Math.round(el.getBoundingClientRect().y + el.getBoundingClientRect().height/2)} : null; })()`
+    : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? {x: Math.round(el.getBoundingClientRect().x + el.getBoundingClientRect().width/2), y: Math.round(el.getBoundingClientRect().y + el.getBoundingClientRect().height/2)} : null; })()`;
+  const countScript = isExpression
+    ? `(typeof (${selector}) !== 'undefined' && (${selector}) !== null && !Array.isArray(${selector}) ? 1 : (Array.isArray(${selector}) ? (${selector}).length : 0))`
+    : `document.querySelectorAll(${JSON.stringify(selector)}).length`;
+
+  const locator = {
+    click: async (opts) => {
+      const info = await evalInPage(resolveScript, tabId);
+      if (!info) throw new Error(`locator.click: element not found for ${selector}`);
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+    },
+    fill: async (value) => {
+      if (isExpression) {
+        await evalInPage(`(() => { const el = (${selector}); if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      } else {
+        await cmdType({ selector, text: value, clearFirst: true });
+      }
+      return { filled: true };
+    },
+    type: async (value) => {
+      if (isExpression) {
+        await evalInPage(`(() => { const el = (${selector}); if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
+      } else {
+        await cmdType({ selector, text: value, clearFirst: false });
+      }
+      return { typed: true };
+    },
+    press: async (key) => cmdSendKeys({ keys: key }),
+    textContent: async () => evalInPage(isExpression
+      ? `(() => { const el = (${selector}); return el ? el.textContent : null; })()`
+      : `document.querySelector(${JSON.stringify(selector)})?.textContent`, tabId),
+    allTextContents: async () => evalInPage(isExpression
+      ? `(() => { const arr = Array.isArray(${selector}) ? (${selector}) : ((${selector}) ? [(${selector})] : []); return arr.map(el => el?.textContent || ''); })()`
+      : `Array.from(document.querySelectorAll(${JSON.stringify(selector)})).map(el => el.textContent)`, tabId),
+    innerText: async () => evalInPage(isExpression
+      ? `(() => { const el = (${selector}); return el ? el.innerText : null; })()`
+      : `document.querySelector(${JSON.stringify(selector)})?.innerText`, tabId),
+    getAttribute: async (name) => evalInPage(isExpression
+      ? `(() => { const el = (${selector}); return el ? el.getAttribute(${JSON.stringify(name)}) : null; })()`
+      : `document.querySelector(${JSON.stringify(selector)})?.getAttribute(${JSON.stringify(name)})`, tabId),
+    isVisible: async () => evalInPage(isExpression
+      ? `(() => { const el = (${selector}); if (!el) return false; const r = el.getBoundingClientRect(); const st = window.getComputedStyle(el); return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0'; })()`
+      : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return !!(el && el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden'); })()`, tabId),
+    isEnabled: async () => evalInPage(isExpression
+      ? `(() => { const el = (${selector}); if (!el) return false; return !el.disabled && el.getAttribute('aria-disabled') !== 'true'; })()`
+      : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return !!(el && !el.disabled && el.getAttribute('aria-disabled') !== 'true'); })()`, tabId),
+    count: async () => evalInPage(countScript, tabId),
+    first: () => {
+      if (isExpression) return createLocator(selector, tabId);
+      return createLocator(`document.querySelector(${JSON.stringify(selector)})`, tabId);
+    },
+    last: () => {
+      if (isExpression) return createLocator(selector, tabId);
+      return createLocator(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).slice(-1)[0]`, tabId);
+    },
+    nth: (n) => {
+      if (isExpression) {
+        return createLocator(selector, tabId);
+      }
+      return createLocatorNth(selector, n, tabId);
+    },
+    and: (other) => {
+      if (isExpression) {
+        return createLocator(`Array.from([(${selector})]).filter(el => el && el.matches(${JSON.stringify(other)}))[0]`, tabId);
+      }
+      return createLocator(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter(el => el.matches(${JSON.stringify(other)}))[0]`, tabId);
+    },
+    or: (other) => {
+      if (isExpression) {
+        return createLocator(`(${selector}) || document.querySelector(${JSON.stringify(other)})`, tabId);
+      }
+      return createLocator(`${selector}, ${other}`, tabId);
+    },
+    filter: (opts = {}) => {
+      const { hasText } = opts;
+      if (hasText !== undefined) {
+        if (isExpression) {
+          return createLocator(`(() => { const el = (${selector}); return (el && el.textContent.includes(${JSON.stringify(hasText)})) ? el : null; })()`, tabId);
+        }
+        return createLocator(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter(el => el.textContent.includes(${JSON.stringify(hasText)}))[0]`, tabId);
+      }
+      return createLocator(selector, tabId);
+    },
+    check: async () => {
+      await evalInPage(isExpression
+        ? `(() => { const el = (${selector}); if (el && el.type === 'checkbox') { el.checked = true; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`
+        : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el && el.type === 'checkbox') { el.checked = true; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: true };
+    },
+    uncheck: async () => {
+      await evalInPage(isExpression
+        ? `(() => { const el = (${selector}); if (el && el.type === 'checkbox') { el.checked = false; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`
+        : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el && el.type === 'checkbox') { el.checked = false; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { unchecked: true };
+    },
+    setChecked: async (checked) => {
+      await evalInPage(isExpression
+        ? `(() => { const el = (${selector}); if (el && el.type === 'checkbox') { el.checked = ${!!checked}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`
+        : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el && el.type === 'checkbox') { el.checked = ${!!checked}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { checked: !!checked };
+    },
+    selectOption: async (value) => {
+      await evalInPage(isExpression
+        ? `(() => { const el = (${selector}); if (el && el.tagName === 'SELECT') { el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('change', {bubbles: true})); } })()`
+        : `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el && el.tagName === 'SELECT') { el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
+      return { selected: value };
+    },
+    hover: async () => {
+      const info = await evalInPage(resolveScript, tabId);
+      if (!info) throw new Error(`locator.hover: element not found for ${selector}`);
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      return { hovered: true };
+    },
+    dblclick: async () => {
+      const info = await evalInPage(resolveScript, tabId);
+      if (!info) throw new Error(`locator.dblclick: element not found for ${selector}`);
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+    },
+    locator: (childSel) => createLocator(isExpression ? `${selector} ${childSel}` : `${selector} ${childSel}`, tabId)
+  };
+  return locator;
+}
+
+function createPageShim(targetTabId) {
+  return {
+    goto: async (url) => cmdNavigate({ url, timeout: 10000, waitUntil: "dom-ready" }),
+    title: async () => evalInPage("document.title", targetTabId),
+    url: async () => evalInPage("window.location.href", targetTabId),
+    locator: (selector) => createLocator(selector, targetTabId),
+    getByText: (text, opts) => createLocatorByText(text, opts, targetTabId),
+    getByRole: (role, opts) => createLocatorByRole(role, opts, targetTabId),
+    getByLabel: (text) => createLocatorByLabel(text, targetTabId),
+    getByPlaceholder: (text) => createLocatorByPlaceholder(text, targetTabId),
+    getByTestId: (testId) => createLocator(`[data-testid=${JSON.stringify(testId)}]`, targetTabId),
+    waitForSelector: async (sel, opts = {}) => waitForSelectorCdp(sel, opts, targetTabId),
+    waitForTimeout: async (ms) => new Promise(r => setTimeout(r, ms)),
+    waitForLoadState: async (state) => {
+      const targetState = state === "load" ? "complete" : (state === "domcontentloaded" ? "interactive" : "complete");
+      const script = `
+        new Promise((resolve) => {
+          const deadline = Date.now() + 30000;
+          const check = () => {
+            if (document.readyState === ${JSON.stringify(targetState)}) { resolve(true); return; }
+            if (Date.now() > deadline) resolve(false);
+            else setTimeout(check, 100);
+          };
+          check();
+        })
+      `;
+      return evalInPage(script, targetTabId);
+    },
+    waitForURL: async (pattern) => {
+      const script = `
+        new Promise((resolve) => {
+          const deadline = Date.now() + 30000;
+          const pat = ${JSON.stringify(String(pattern))};
+          const check = () => {
+            if (location.href.includes(pat) || location.href === pat) { resolve(true); return; }
+            if (Date.now() > deadline) resolve(false);
+            else setTimeout(check, 100);
+          };
+          check();
+        })
+      `;
+      return evalInPage(script, targetTabId);
+    },
+    expectNavigation: async (action) => {
+      const beforeUrl = await evalInPage("window.location.href", targetTabId);
+      await action();
+      const script = `
+        new Promise((resolve) => {
+          const deadline = Date.now() + 30000;
+          const before = ${JSON.stringify(beforeUrl)};
+          const check = () => {
+            if (location.href !== before) { resolve({ navigated: true, url: location.href }); return; }
+            if (Date.now() > deadline) resolve({ navigated: false, url: location.href, error: "timeout" });
+            else setTimeout(check, 100);
+          };
+          check();
+        })
+      `;
+      return evalInPage(script, targetTabId);
+    },
+    evaluate: async (fn) => {
+      const expression = typeof fn === "string" ? fn : `(${fn.toString()})()`;
+      return evalInPage(expression, targetTabId);
+    },
+    screenshot: async () => captureScreenshot(targetTabId),
+  };
+}
+
+async function cmdPlaywrightBatch(params) {
+  const { code, timeout = 30000 } = params;
+  const tabId = await ensureDebuggerAttached();
+  targetTabId = tabId;
+  const page = createPageShim(tabId);
+  const fn = new Function("page", `return (async (page) => { ${code} })(page)`);
+  const result = await Promise.race([
+    fn(page),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Playwright timeout")), timeout))
+  ]);
+  return { ok: true, result };
+}
+
+async function cmdSaveAsPdf(params) {
+  const {
+    format = "a4",
+    landscape = false,
+    scale = 1.0,
+    printBackground = true
+  } = params;
+  const tabId = await ensureDebuggerAttached();
+  await chrome.debugger.sendCommand({ tabId }, "Page.enable").catch(() => {});
+  const formatSizes = {
+    a4: { paperWidth: 8.27, paperHeight: 11.69 },
+    letter: { paperWidth: 8.5, paperHeight: 11.0 },
+    legal: { paperWidth: 8.5, paperHeight: 14.0 },
+    a3: { paperWidth: 11.69, paperHeight: 16.54 },
+    tabloid: { paperWidth: 11.0, paperHeight: 17.0 }
+  };
+  const size = formatSizes[format] || formatSizes.a4;
+  const result = await chrome.debugger.sendCommand(
+    { tabId },
+    "Page.printToPDF",
+    {
+      landscape: !!landscape,
+      printBackground: !!printBackground,
+      scale: Math.max(0.1, Math.min(2.0, scale)),
+      paperWidth: size.paperWidth,
+      paperHeight: size.paperHeight,
+      preferCSSPageSize: false,
+      displayHeaderFooter: false
+    }
+  );
+  if (!result || !result.data) {
+    throw new Error("Page.printToPDF returned no data");
+  }
+  return {
+    ok: true,
+    data: result.data,
+    format,
+    landscape: !!landscape,
+    scale
+  };
+}
+
+// -- clipboard --
+async function cmdClipboardRead() {
+  const script = `
+    (async () => {
+      if (!window.isSecureContext && location.protocol !== "https:" && location.hostname !== "localhost") {
+        throw new Error("剪贴板访问被拒绝：需要 HTTPS 或 localhost，且需要用户交互");
+      }
+      const items = await navigator.clipboard.read();
+      const result = [];
+      for (const item of items) {
+        const entries = [];
+        for (const type of item.types) {
+          const blob = await item.getType(type);
+          if (type.startsWith("text/")) {
+            const text = await blob.text();
+            entries.push({ mimeType: type, text });
+          } else {
+            const base64 = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result.split(",")[1]);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+            entries.push({ mimeType: type, base64 });
+          }
+        }
+        result.push({ entries });
+      }
+      return result;
+    })()
+  `;
+  const result = await cmdExecuteScript({ script, awaitPromise: true, timeout: 10000 });
+  if (!result.success) {
+    const errMsg = result.error || "剪贴板读取失败";
+    if (errMsg.includes("NotAllowedError") || errMsg.includes("Permission denied") || errMsg.includes("剪贴板访问被拒绝")) {
+      throw new Error("剪贴板访问被拒绝：需要 HTTPS 或 localhost，且需要用户交互");
+    }
+    throw new Error(errMsg);
+  }
+  return result.result;
+}
+
+async function cmdClipboardWrite(params) {
+  const { items } = params;
+  if (!Array.isArray(items)) {
+    throw new Error("items must be an array");
+  }
+  const script = `
+    (async () => {
+      if (!window.isSecureContext && location.protocol !== "https:" && location.hostname !== "localhost") {
+        throw new Error("剪贴板访问被拒绝：需要 HTTPS 或 localhost，且需要用户交互");
+      }
+      const clipboardItems = [];
+      const rawItems = ${JSON.stringify(items)};
+      for (const item of rawItems) {
+        const blobMap = {};
+        for (const entry of item.entries) {
+          if (entry.text !== undefined) {
+            blobMap[entry.mimeType] = new Blob([entry.text], { type: entry.mimeType });
+          } else if (entry.base64 !== undefined) {
+            const binary = atob(entry.base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+              bytes[i] = binary.charCodeAt(i);
+            }
+            blobMap[entry.mimeType] = new Blob([bytes], { type: entry.mimeType });
+          }
+        }
+        clipboardItems.push(new ClipboardItem(blobMap));
+      }
+      await navigator.clipboard.write(clipboardItems);
+      return { ok: true };
+    })()
+  `;
+  const result = await cmdExecuteScript({ script, awaitPromise: true, timeout: 10000 });
+  if (!result.success) {
+    const errMsg = result.error || "剪贴板写入失败";
+    if (errMsg.includes("NotAllowedError") || errMsg.includes("Permission denied") || errMsg.includes("剪贴板访问被拒绝")) {
+      throw new Error("剪贴板访问被拒绝：需要 HTTPS 或 localhost，且需要用户交互");
+    }
+    throw new Error(errMsg);
+  }
+  return result.result;
+}
+
+// -- pageAssets --
+async function cmdPageAssetsList(params) {
+  const script = `
+    (function() {
+      const entries = performance.getEntriesByType("resource");
+      return entries.map(function(r) {
+        return {
+          name: r.name,
+          type: r.initiatorType,
+          size: r.transferSize
+        };
+      });
+    })()
+  `;
+  const result = await cmdExecuteScript({ script, awaitPromise: false, timeout: 10000 });
+  if (!result.success) {
+    throw new Error(result.error || "page_assets_list failed");
+  }
+  return result.result || [];
+}
+
+async function cmdPageAssetsBundle(params) {
+  const { urls } = params;
+  const MAX_TOTAL_SIZE = 50 * 1024 * 1024; // 50MB
+
+  const list = await cmdPageAssetsList(params);
+  const targets = urls && urls.length > 0
+    ? list.filter(function(item) { return urls.includes(item.name); })
+    : list;
+
+  const assets = [];
+  const errors = [];
+  let totalSize = 0;
+
+  for (const item of targets) {
+    try {
+      const response = await fetch(item.name, { credentials: "omit" });
+      if (!response.ok) {
+        errors.push({ name: item.name, reason: "HTTP " + response.status });
+        continue;
+      }
+      const blob = await response.blob();
+      const arrayBuffer = await blob.arrayBuffer();
+      const size = arrayBuffer.byteLength;
+
+      if (totalSize + size > MAX_TOTAL_SIZE) {
+        errors.push({ name: item.name, reason: "exceeds total size limit (50MB)" });
+        continue;
+      }
+      totalSize += size;
+
+      const base64 = arrayBufferToBase64(arrayBuffer);
+      assets.push({
+        name: item.name,
+        base64,
+        mimeType: blob.type || "application/octet-stream"
+      });
+    } catch (err) {
+      errors.push({ name: item.name, reason: err.message || "fetch failed" });
+    }
+  }
+
+  return { assets, errors };
+}
+
 // ==================== 初始化 ====================
 chrome.storage.local.get("connectionEnabled", (result) => {
   // 未设置过时默认为 true
   connectionEnabled = result.connectionEnabled !== false;
   if (connectionEnabled) {
-    connectWebSocket();
+    setupKeepaliveAlarm();
+    connectNativeBootstrap().finally(() => connectWebSocket());
   }
   console.log(`[Link2Chrome] Service Worker 已启动, enabled=${connectionEnabled}`);
 });

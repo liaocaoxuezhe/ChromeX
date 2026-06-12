@@ -1,0 +1,427 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  discoverLocalBrowserEnvironment,
+  openLocalBrowserWindow,
+} from "../runtime/local-environment.mjs";
+
+test("discovers installed browser apps and profile directories", async () => {
+  const root = await mkdtemp(join(tmpdir(), "link2chrome-env-"));
+  const chromeApp = join(root, "Google Chrome.app");
+  const chromeProfileRoot = join(root, "ChromeProfiles");
+  await mkdir(join(chromeApp, "Contents", "MacOS"), { recursive: true });
+  await writeFile(join(chromeApp, "Contents", "MacOS", "Google Chrome"), "", "utf8");
+  await mkdir(join(chromeProfileRoot, "Default"), { recursive: true });
+  await mkdir(join(chromeProfileRoot, "Profile 1"), { recursive: true });
+  const extensionRoot = join(root, "Link2ChromeExtension");
+  await mkdir(extensionRoot, { recursive: true });
+  await writeFile(
+    join(extensionRoot, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "ChromeX - Local Browser MCP",
+      permissions: [
+        "debugger",
+        "activeTab",
+        "scripting",
+        "tabs",
+        "storage",
+        "history",
+        "tabGroups",
+        "clipboardRead",
+        "clipboardWrite",
+      ],
+      host_permissions: ["<all_urls>"],
+      background: { service_worker: "background.js" },
+    }),
+    "utf8"
+  );
+  await writeFile(
+    join(extensionRoot, "background.js"),
+    'const WS_URL = "ws://localhost:8765"; chrome.alarms.create("keepalive", {}); chrome.runtime.onStartup.addListener(() => {});',
+    "utf8"
+  );
+  await writeFile(
+    join(chromeProfileRoot, "Local State"),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          Default: { name: "Person 1" },
+          "Profile 1": { name: "Work" },
+        },
+      },
+    }),
+    "utf8"
+  );
+  await writeFile(
+    join(chromeProfileRoot, "Default", "Preferences"),
+    JSON.stringify({
+      extensions: {
+        settings: {
+          abcdefghijklmnopabcdefghijklmnop: {
+            path: extensionRoot,
+            state: 1,
+            manifest: { name: "ChromeX - Local Browser MCP" },
+          },
+        },
+      },
+    }),
+    "utf8"
+  );
+
+  const env = await discoverLocalBrowserEnvironment({
+    platform: "darwin",
+    candidates: [
+      {
+        id: "chrome",
+        name: "Google Chrome",
+        executablePaths: [join(chromeApp, "Contents", "MacOS", "Google Chrome")],
+        profileRoot: chromeProfileRoot,
+        processNames: ["Google Chrome"],
+      },
+    ],
+    processes: [{ pid: 42, command: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" }],
+  });
+
+  assert.equal(env.ok, true);
+  assert.deepEqual(env.browsers, [
+    {
+      id: "chrome",
+      name: "Google Chrome",
+      installed: true,
+      running: true,
+      executablePath: join(chromeApp, "Contents", "MacOS", "Google Chrome"),
+      profileRoot: chromeProfileRoot,
+      profiles: [
+        {
+          id: "Default",
+          name: "Person 1",
+          path: join(chromeProfileRoot, "Default"),
+          extensionInstall: {
+            installed: true,
+            enabled: true,
+            id: "abcdefghijklmnopabcdefghijklmnop",
+            path: extensionRoot,
+            source: "Preferences",
+          },
+        },
+        {
+          id: "Profile 1",
+          name: "Work",
+          path: join(chromeProfileRoot, "Profile 1"),
+          extensionInstall: {
+            installed: false,
+            enabled: false,
+            id: null,
+            path: null,
+            source: null,
+          },
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(env.summary, {
+    installedCount: 1,
+    runningCount: 1,
+    profileCount: 2,
+  });
+});
+
+test("reports missing browsers without throwing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "link2chrome-env-missing-"));
+
+  const env = await discoverLocalBrowserEnvironment({
+    platform: "darwin",
+    candidates: [
+      {
+        id: "chrome",
+        name: "Google Chrome",
+        executablePaths: [join(root, "Missing Chrome")],
+        profileRoot: join(root, "MissingProfiles"),
+        processNames: ["Google Chrome"],
+      },
+    ],
+    processes: [],
+  });
+
+  assert.equal(env.ok, false);
+  assert.deepEqual(env.summary, {
+    installedCount: 0,
+    runningCount: 0,
+    profileCount: 0,
+  });
+  assert.equal(env.browsers[0].installed, false);
+  assert.deepEqual(env.browsers[0].profiles, []);
+});
+
+test("diagnoses a loadable Link2Chrome extension package", async () => {
+  const root = await mkdtemp(join(tmpdir(), "link2chrome-extension-"));
+  await writeFile(
+    join(root, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "ChromeX - Local Browser MCP",
+      permissions: [
+        "debugger",
+        "activeTab",
+        "scripting",
+        "tabs",
+        "storage",
+        "history",
+        "tabGroups",
+        "clipboardRead",
+        "clipboardWrite",
+      ],
+      host_permissions: ["<all_urls>"],
+      background: { service_worker: "background.js" },
+    }),
+    "utf8"
+  );
+  await writeFile(
+    join(root, "background.js"),
+    'const WS_URL = "ws://localhost:8765"; chrome.alarms.create("keepalive", { periodInMinutes: 0.4 }); chrome.runtime.onStartup.addListener(() => {});',
+    "utf8"
+  );
+
+  const env = await discoverLocalBrowserEnvironment({
+    candidates: [],
+    processes: [],
+    extensionDir: root,
+  });
+
+  assert.deepEqual(env.extensionPackage, {
+    ok: true,
+    path: root,
+    manifestVersion: 3,
+    name: "ChromeX - Local Browser MCP",
+    backgroundServiceWorker: "background.js",
+    missingPermissions: [],
+    missingHostPermissions: [],
+    websocketUrl: "ws://localhost:8765",
+    keepalive: {
+      ok: true,
+      hasAlarmsApi: true,
+      hasRuntimeLifecycleListener: true,
+      missingSignals: [],
+    },
+  });
+});
+
+test("reports missing Link2Chrome keepalive signals", async () => {
+  const root = await mkdtemp(join(tmpdir(), "link2chrome-extension-no-keepalive-"));
+  await writeFile(
+    join(root, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "No Keepalive",
+      permissions: [
+        "debugger",
+        "activeTab",
+        "scripting",
+        "tabs",
+        "storage",
+        "history",
+        "tabGroups",
+        "clipboardRead",
+        "clipboardWrite",
+      ],
+      host_permissions: ["<all_urls>"],
+      background: { service_worker: "background.js" },
+    }),
+    "utf8"
+  );
+  await writeFile(join(root, "background.js"), 'const WS_URL = "ws://localhost:8765";', "utf8");
+
+  const env = await discoverLocalBrowserEnvironment({
+    candidates: [],
+    processes: [],
+    extensionDir: root,
+  });
+
+  assert.equal(env.extensionPackage.ok, false);
+  assert.deepEqual(env.extensionPackage.keepalive, {
+    ok: false,
+    hasAlarmsApi: false,
+    hasRuntimeLifecycleListener: false,
+    missingSignals: ["chrome.alarms", "chrome.runtime lifecycle listener"],
+  });
+  assert.equal(env.extensionPackage.websocketUrl, "ws://localhost:8765");
+});
+
+test("reports disabled Link2Chrome extension installs from secure preferences", async () => {
+  const root = await mkdtemp(join(tmpdir(), "link2chrome-secure-preferences-"));
+  const profileRoot = join(root, "ChromeProfiles");
+  const extensionRoot = join(root, "Link2ChromeExtension");
+  await mkdir(join(profileRoot, "Default"), { recursive: true });
+  await mkdir(extensionRoot, { recursive: true });
+  await writeFile(
+    join(extensionRoot, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "ChromeX - Local Browser MCP",
+      permissions: [
+        "debugger",
+        "activeTab",
+        "scripting",
+        "tabs",
+        "storage",
+        "history",
+        "tabGroups",
+        "clipboardRead",
+        "clipboardWrite",
+      ],
+      host_permissions: ["<all_urls>"],
+      background: { service_worker: "background.js" },
+    }),
+    "utf8"
+  );
+  await writeFile(
+    join(extensionRoot, "background.js"),
+    'const WS_URL = "ws://localhost:8765"; chrome.alarms.create("keepalive", {}); chrome.runtime.onStartup.addListener(() => {});',
+    "utf8"
+  );
+  await writeFile(
+    join(profileRoot, "Default", "Secure Preferences"),
+    JSON.stringify({
+      extensions: {
+        settings: {
+          zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz: {
+            state: 0,
+            manifest: { name: "ChromeX - Local Browser MCP" },
+          },
+        },
+      },
+    }),
+    "utf8"
+  );
+
+  const env = await discoverLocalBrowserEnvironment({
+    candidates: [{
+      id: "chrome",
+      name: "Google Chrome",
+      executablePaths: [],
+      profileRoot,
+    }],
+    processes: [],
+    extensionDir: extensionRoot,
+  });
+
+  assert.deepEqual(env.browsers[0].profiles[0].extensionInstall, {
+    installed: true,
+    enabled: false,
+    id: "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    path: null,
+    source: "Secure Preferences",
+  });
+});
+
+test("reports missing Link2Chrome extension package permissions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "link2chrome-extension-missing-"));
+  await writeFile(
+    join(root, "manifest.json"),
+    JSON.stringify({
+      manifest_version: 3,
+      name: "Incomplete Extension",
+      permissions: ["tabs"],
+      host_permissions: [],
+      background: {},
+    }),
+    "utf8"
+  );
+
+  const env = await discoverLocalBrowserEnvironment({
+    candidates: [],
+    processes: [],
+    extensionDir: root,
+  });
+
+  assert.equal(env.extensionPackage.ok, false);
+  assert.deepEqual(env.extensionPackage.missingPermissions, [
+    "debugger",
+    "activeTab",
+    "scripting",
+    "storage",
+    "history",
+    "tabGroups",
+    "clipboardRead",
+    "clipboardWrite",
+  ]);
+  assert.deepEqual(env.extensionPackage.missingHostPermissions, ["<all_urls>"]);
+  assert.equal(env.extensionPackage.backgroundServiceWorker, null);
+});
+
+test("opens a local browser window with a selected profile and url", async () => {
+  const launched = [];
+  const result = await openLocalBrowserWindow({
+    browser: {
+      id: "chrome",
+      name: "Google Chrome",
+      executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+    },
+    profileId: "Profile 1",
+    url: "https://example.com",
+    launcher: async (command, args) => {
+      launched.push({ command, args });
+      return { pid: 1234 };
+    },
+  });
+
+  assert.deepEqual(launched, [
+    {
+      command: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      args: [
+        "--profile-directory=Profile 1",
+        "--user-data-dir=/Users/me/Library/Application Support/Google/Chrome",
+        "https://example.com",
+      ],
+    },
+  ]);
+  assert.deepEqual(result, {
+    ok: true,
+    browserId: "chrome",
+    profileId: "Profile 1",
+    url: "https://example.com",
+    extensionDir: null,
+    pid: 1234,
+  });
+});
+
+test("opens a local browser window with the unpacked Link2Chrome extension", async () => {
+  const launched = [];
+  await openLocalBrowserWindow({
+    browser: {
+      id: "chrome",
+      name: "Google Chrome",
+      executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      profileRoot: "/Users/me/Library/Application Support/Google/Chrome",
+    },
+    profileId: "Default",
+    extensionDir: "/Users/me/Link2Chrome/extension",
+    onlyExtension: true,
+    launcher: async (command, args) => {
+      launched.push({ command, args });
+      return { pid: 5678 };
+    },
+  });
+
+  assert.deepEqual(launched[0], {
+    command: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    args: [
+      "--profile-directory=Default",
+      "--user-data-dir=/Users/me/Library/Application Support/Google/Chrome",
+      "--disable-extensions-except=/Users/me/Link2Chrome/extension",
+      "--load-extension=/Users/me/Link2Chrome/extension",
+    ],
+  });
+});
+
+test("openLocalBrowserWindow rejects missing browser executable", async () => {
+  await assert.rejects(
+    () => openLocalBrowserWindow({ browser: { id: "chrome", name: "Google Chrome" } }),
+    /browser executable is required/
+  );
+});
