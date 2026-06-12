@@ -58,6 +58,8 @@ class _AsyncOperation:
 class FakeWsManager:
     def __init__(self):
         self.commands = []
+        self._tab_id = 100
+        self._lease_token = None
 
     def operation(self, name):
         return _AsyncOperation()
@@ -67,8 +69,15 @@ class FakeWsManager:
         self.commands.append((command, args))
         if command == "navigate":
             return {"url": args["url"], "status": "complete", "method": "tabs"}
+        if command == "tab_group_create":
+            return {"groupId": 55}
+        if command == "tab_group_add":
+            return {"ok": True}
+        if command == "agent_browser_tab_new":
+            self._tab_id += 1
+            return {"tabId": self._tab_id, "url": args.get("url")}
         if command == "get_info":
-            return {"tabId": 7, "url": "http://example.test", "title": "中文标题"}
+            return {"tabId": self._tab_id, "url": "http://example.test", "title": "中文标题"}
         if command == "playwright_batch":
             return {"ok": True, "result": {"ran": True}}
         if command == "script_evaluate":
@@ -99,8 +108,8 @@ def test_browser_navigate_preserves_data_url(monkeypatch):
     )
 
 
-def test_playwright_run_dispatch_reaches_runtime(monkeypatch):
-    """playwright_run 强制 Node.js 优先，mock ready 后应走 nodejs_runtime.execute。"""
+def test_browser_code_run_dispatch_reaches_runtime(monkeypatch):
+    """browser_code_run 是主工具名，mock ready 后应走 nodejs_runtime.execute。"""
     from unittest.mock import AsyncMock, MagicMock
 
     mock_nodejs = MagicMock()
@@ -110,11 +119,100 @@ def test_playwright_run_dispatch_reaches_runtime(monkeypatch):
     mock_nodejs.execute = AsyncMock(return_value={"ok": True, "result": {"ran": True}})
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
-    result = asyncio.run(main.call_tool("playwright_run", {"code": "return { ran: true };"}))
+    result = asyncio.run(main.call_tool("browser_code_run", {"code": "return { ran: true };"}))
 
     assert _payload(result)["ok"] is True
     assert _payload(result)["result"] == {"ran": True}
     mock_nodejs.execute.assert_awaited_once()
+
+
+def test_playwright_run_is_no_longer_callable(monkeypatch):
+    """playwright_run 已移除公开兼容入口，避免模型继续选择旧工具名。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_nodejs = MagicMock()
+    mock_nodejs.is_ready = True
+    mock_nodejs.startup_error = None
+    mock_nodejs.start = AsyncMock(return_value=True)
+    mock_nodejs.execute = AsyncMock(return_value={"ok": True, "result": {"alias": True}})
+    monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
+
+    result = asyncio.run(main.call_tool("playwright_run", {"code": "return { alias: true };"}))
+
+    assert _payload(result)["ok"] is False
+    assert "未知工具" in _payload(result)["error"]
+    mock_nodejs.execute.assert_not_awaited()
+
+
+def test_browser_code_run_smoke_sequence_covers_session_reuse_persistence_and_finalize(monkeypatch):
+    """稳定冒烟：建标签组、打开目标页、复用 tab、跨调用变量持久化、保存后 finalize。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    fake_ws = FakeWsManager()
+    monkeypatch.setattr(main, "ws_manager", fake_ws)
+    monkeypatch.setattr(main, "session_manager", main.SessionManager())
+
+    calls = []
+    mock_nodejs = MagicMock()
+    mock_nodejs.is_ready = True
+    mock_nodejs.startup_error = None
+    mock_nodejs.start = AsyncMock(return_value=True)
+
+    async def _execute(code, timeout=30000, *, lease_token=None):
+        calls.append(code)
+        if "livePersistedValue" in code and "return livePersistedValue" in code:
+            return {"ok": True, "result": "persisted-ok", "meta": {"startupSummary": {"boundTab": {"id": 101}}}}
+        if "browser.tabs.finalize" in code:
+            return {"ok": True, "result": {"finalized": True}, "meta": {"startupSummary": {"boundTab": {"id": 101}}}}
+        return {"ok": True, "result": {"bound": True}, "meta": {"startupSummary": {"boundTab": {"id": 101}}}}
+
+    mock_nodejs.execute = AsyncMock(side_effect=_execute)
+    monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
+
+    opened = asyncio.run(
+        main.call_tool(
+            "browser_session",
+            {
+                "action": "new_tab",
+                "session": "smoke-browser-code",
+                "group_title": "冒烟测试",
+                "url": "https://example.com/form",
+            },
+        )
+    )
+    assert _payload(opened)["ok"] is True
+
+    first = asyncio.run(
+        main.call_tool(
+            "browser_code_run",
+            {
+                "code": (
+                    "const tabs = await browser.user.openTabs();\n"
+                    "const target = tabs.find(t => (t.raw?.url || '').includes('example.com'));\n"
+                    "globalThis.tab = target ? await browser.user.claimTab(target) : await browser.tabs.new('https://example.com/form');\n"
+                    "const livePersistedValue = 'persisted-ok';\n"
+                    "return { bound: true };"
+                )
+            },
+        )
+    )
+    assert _payload(first)["meta"]["startupSummary"]["boundTab"]["id"] == 101
+
+    second = asyncio.run(main.call_tool("browser_code_run", {"code": "return livePersistedValue;"}))
+    assert _payload(second)["result"] == "persisted-ok"
+
+    finalized = asyncio.run(
+        main.call_tool(
+            "browser_code_run",
+            {"code": "await browser.tabs.finalize({ keep: [{ tab: globalThis.tab, status: 'handoff' }] }); return { finalized: true };"},
+        )
+    )
+    assert _payload(finalized)["result"] == {"finalized": True}
+
+    assert ("tab_group_create", {"title": "冒烟测试"}) in fake_ws.commands
+    assert any(command == "agent_browser_tab_new" for command, _ in fake_ws.commands)
+    assert any(command == "tab_group_add" for command, _ in fake_ws.commands)
+    assert len(calls) == 3
 
 
 def test_dom_get_text_selector_falls_back_when_extension_command_is_missing(monkeypatch):

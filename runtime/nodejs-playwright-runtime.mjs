@@ -68,7 +68,7 @@ async function setupClient() {
     link2chrome = createLink2ChromeClient({ transport });
     // browsers.get("extension") 是同步的（仅构造对象，不触发网络请求）
     browser = await link2chrome.browsers.get("extension");
-    hubConnected = !!WebSocketImpl;
+    hubConnected = await transport.healthCheck?.({ timeoutMs: 750 }) || false;
   } catch (error) {
     hubConnected = false;
     sendLog("error", `Client 初始化失败: ${error.message}`);
@@ -86,6 +86,86 @@ function setupReplContext() {
     documentation: createDocumentationSurface(),
   };
   globalThis.agent = agent;
+}
+
+async function summarizeTab(tab) {
+  if (!tab) return null;
+  let info = null;
+  try {
+    info = await tab.info?.();
+  } catch {
+    info = tab.raw || {};
+  }
+  const raw = tab.raw || info || {};
+  let url = raw.url || tab._url || null;
+  let title = raw.title || tab._title || null;
+  try {
+    url = await tab.url?.() || url;
+  } catch {
+    // Keep the best local value.
+  }
+  try {
+    title = await tab.title?.() || title;
+  } catch {
+    // Keep the best local value.
+  }
+  return {
+    id: tab.id ?? raw.id ?? raw.tabId ?? null,
+    url,
+    title,
+    active: raw.active ?? tab.active ?? null,
+    debuggable: raw.debuggable ?? raw.debugable ?? raw.raw?.debuggable ?? raw.raw?.debugable ?? null,
+    session: raw.session ?? raw.sessionName ?? browser?.sessionName ?? null,
+    group: raw.group ?? raw.groupTitle ?? raw.groupId ?? null,
+  };
+}
+
+async function collectStartupSummary() {
+  const summary = {
+    hubConnected,
+    session: browser?.sessionName ?? null,
+    group: null,
+    boundTab: null,
+    tabs: [],
+    source: null,
+  };
+
+  if (globalThis.tab) {
+    summary.boundTab = await summarizeTab(globalThis.tab);
+    summary.group = summary.boundTab?.group ?? null;
+    summary.source = "globalThis.tab";
+    return summary;
+  }
+
+  if (!hubConnected) {
+    summary.source = "hub-unavailable";
+    return summary;
+  }
+
+  try {
+    const openTabs = await browser.user.openTabs();
+    summary.tabs = await Promise.all(openTabs.map((tab) => summarizeTab(tab)));
+    const active = openTabs.find((tab) => tab.raw?.active) || openTabs.find((tab) => tab.raw?.debuggable || tab.raw?.debugable);
+    if (active) {
+      summary.boundTab = await summarizeTab(active);
+      summary.group = summary.boundTab?.group ?? null;
+      summary.source = "browser.user.openTabs";
+      return summary;
+    }
+  } catch (error) {
+    summary.openTabsError = error?.message || String(error);
+  }
+
+  try {
+    const selected = await browser.tabs.selected();
+    summary.boundTab = await summarizeTab(selected);
+    summary.group = summary.boundTab?.group ?? null;
+    summary.source = "browser.tabs.selected";
+  } catch (error) {
+    summary.selectedError = error?.message || String(error);
+  }
+
+  return summary;
 }
 
 // ─── 结果序列化器 ─────────────────────────────────────────
@@ -160,18 +240,40 @@ function serializeResult(value, depth = 0) {
   return String(value);
 }
 
+function persistTopLevelDeclarations(code) {
+  let depth = 0;
+  const lines = String(code).split("\n");
+  return lines.map((line) => {
+    const depthAtLineStart = depth;
+    const match = line.match(/^(\s*)(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=(.*)$/);
+    let rewritten = line;
+    if (depthAtLineStart === 0 && match) {
+      rewritten = `${match[1]}globalThis.${match[2]} =${match[3]}`;
+    }
+
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") depth = Math.max(0, depth - 1);
+    }
+    return rewritten;
+  }).join("\n");
+}
+
 // ─── 代码执行器 ───────────────────────────────────────────
 // 使用 new Function 保持原型链完整，与 Codex Chrome Plugin 策略一致
 async function executeCode({ id, code, timeout = 30000 }) {
   const startTime = Date.now();
+  const startupSummary = await collectStartupSummary();
 
   try {
+    const executableCode = persistTopLevelDeclarations(code);
     const runner = new Function(
       "browser",
       "link2chrome",
       "console",
       "agent",
-      `return (async () => {\n${code}\n})();`
+      `return (async () => {\n${executableCode}\n})();`
     );
 
     const resultPromise = runner(browser, link2chrome, ipcConsole, agent);
@@ -189,7 +291,7 @@ async function executeCode({ id, code, timeout = 30000 }) {
       id,
       ok: true,
       result: serializeResult(rawResult),
-      meta: { elapsedMs },
+      meta: { elapsedMs, startupSummary },
     });
   } catch (error) {
     const elapsedMs = Date.now() - startTime;
@@ -198,7 +300,7 @@ async function executeCode({ id, code, timeout = 30000 }) {
       ok: false,
       error: error?.message || String(error),
       stack: error?.stack || "",
-      meta: { elapsedMs },
+      meta: { elapsedMs, startupSummary },
     });
   }
 }
@@ -223,6 +325,7 @@ async function main() {
     type: "ready",
     version: VERSION,
     hubConnected,
+    startupSummary: await collectStartupSummary(),
   });
 
   // stdin 逐行读取
@@ -248,6 +351,9 @@ async function main() {
     }
 
     if (message.type === "execute") {
+      if (message.lease_token && transport && transport.setLeaseToken) {
+        transport.setLeaseToken(message.lease_token);
+      }
       await executeCode({
         id: message.id,
         code: message.code,

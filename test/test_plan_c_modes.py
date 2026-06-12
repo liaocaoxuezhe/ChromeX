@@ -21,7 +21,8 @@ def test_plan_c_public_tool_names_are_exposed():
     assert "browser_screenshot" in names
     assert "action_click" in names
     assert "action_drag" in names
-    assert "playwright_run" in names
+    assert "browser_code_run" in names
+    assert "playwright_run" not in names
 
 
 def test_legacy_external_vision_tool_is_not_public():
@@ -47,7 +48,5 @@ def test_requirements_do_not_force_python39_to_install_incompatible_mcp():
 
     assert "\nmcp>=1.0.0\n" not in f"\n{requirements}"
     assert 'python_version >= "3.10"' in requirements
-
-
 
 

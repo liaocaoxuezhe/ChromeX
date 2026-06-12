@@ -67,7 +67,7 @@ REQUIRED_TOOLS = {
     "action_press_key",
     "upload_file",
     "handle_dialog",
-    "playwright_run",
+    "browser_code_run",
     "script_evaluate",
     "save_as_pdf",
     "console_check",
@@ -105,6 +105,15 @@ def test_each_tool_has_input_schema():
         assert schema.get("type") == "object", (
             f"Tool {tool['name']} inputSchema must have type='object'"
         )
+
+
+def test_browser_code_run_is_primary_and_playwright_run_is_not_public():
+    primary = _get_tool("browser_code_run")
+
+    assert "JavaScript code" in primary["description"]
+    assert "real Chrome browser" in primary["description"]
+    assert "long-running" in primary["description"]
+    assert "playwright_run" not in {tool["name"] for tool in TOOL_DEFINITIONS}
 
 
 # ==================== 4. Specific schema validations ====================

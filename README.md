@@ -13,7 +13,7 @@ Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome 扩
 - **WebSocket 桥接**：Server 与扩展之间通过本地 WebSocket 通信。
 - **页面观察**：URL、标题、截图、Markdown 格式 DOM 概览、DOM diff、正文提取、元素查询。
 - **浏览器操作**：导航、点击、双击、悬停、输入、滚动、拖拽、按键、对话框处理、文件上传。
-- **playwright_run**：以代码为动作——向扩展发送 JavaScript 代码片段，通过内置 page shim 执行多步骤自动化，无需切换模式。
+- **browser_code_run**：以代码为动作——在长期运行的 Node.js 运行时里执行 JavaScript，控制真实 Chrome 浏览器完成长程、多步骤自动化任务。
 - **Session 机制**：一个任务对应一个 Session，映射到 Chrome 标签组，支持跨标签的多任务并发。
 - **save_as_pdf**：通过 CDP `Page.printToPDF` 将当前页面保存为 PDF 文件。
 - **控制台 & 网络监控**：统一的 `console_check` 和 `network_check` 工具，支持捕获、查询、重放。
@@ -27,7 +27,7 @@ Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome 扩
 | 截图 & 内容 | `browser_screenshot`, `browser_scrape_with_scroll` |
 | 动作 | `action_click`, `action_double_click`, `action_hover`, `action_scroll`, `action_drag`, `action_fill`, `action_press_key` |
 | 文件 & 对话框 | `upload_file`, `handle_dialog` |
-| 脚本 & 自动化 | `playwright_run`, `script_evaluate`, `save_as_pdf` |
+| 脚本 & 自动化 | `browser_code_run`, `script_evaluate`, `save_as_pdf` |
 | 监控 & 诊断 | `console_check`, `network_check`, `browser_diagnose` |
 
 ## 目录结构
@@ -41,7 +41,7 @@ Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome 扩
 │   ├── session_manager.py      # Session → Chrome 标签组映射
 │   ├── dom_snapshot_cache.py   # DOM 快照与 diff 计算
 │   ├── dom_compressor.py       # DOM → Markdown 压缩
-│   └── playwright_runtime.py  # playwright_run 编排
+│   └── playwright_runtime.py  # 旧 Extension 端运行时兼容代码
 ├── docs/                       # 使用说明和设计文档
 ├── test/                       # 测试脚本（含 test_tools.py）
 ├── claude_config_snippet.json  # Claude Code MCP 配置示例
@@ -100,29 +100,32 @@ node scripts/dev-extension/install.mjs
 
 将 `claude_config_snippet.json` 中的配置合并到 Claude Code 的配置文件中，并根据本机路径调整 `command`、`args` 和 `cwd`。
 
-## playwright_run 示例
+## browser_code_run 示例
 
-对于需要 3 步以上、含条件逻辑或循环的操作，推荐使用 `playwright_run` 一次发送代码，而不是逐个调用 MCP 工具：
+对于需要 3 步以上、含条件逻辑、循环、显式等待或长程页面状态轮询的操作，推荐使用 `browser_code_run` 一次发送代码，而不是逐个调用 MCP 工具：
 
 ```javascript
-// 登录表单示例
-await page.locator('#username').fill('user@example.com');
-await page.locator('#password').fill('secret');
-await page.locator('button[type=submit]').click();
-await page.waitForSelector('.dashboard', { timeout: 5000 });
-const title = await page.title();
-return title;
+await browser.nameSession('登录表单');
+const tabs = await browser.user.openTabs();
+const existing = tabs.find(t => (t.raw?.url || '').includes('example.com/login'));
+const tab = existing ? await browser.user.claimTab(existing) : await browser.tabs.new('https://example.com/login');
+
+await tab.playwright.getByPlaceholder('Email').fill('user@example.com');
+await tab.playwright.getByPlaceholder('Password').fill('secret');
+await tab.playwright.getByRole('button', { name: 'Sign in' }).click();
+await tab.playwright.waitForLoadState('networkidle', { timeout: 10000 });
+return { title: await tab.title(), url: await tab.url() };
 ```
 
 ```javascript
 // 数据提取示例
-const rows = await page.evaluate(() => {
+const rows = await tab.playwright.evaluate(() => {
   return Array.from(document.querySelectorAll('table tr')).map(r => r.innerText);
 });
 return rows;
 ```
 
-page shim 支持的 API：`locator`、`getByText`、`getByRole`、`getByLabel`、`getByPlaceholder`、`waitForSelector`、`waitForTimeout`、`evaluate`、`title`、`url`、`goto`、`screenshot`。
+`tab.playwright` 支持的常用 API：`locator`、`getByText`、`getByRole`、`getByLabel`、`getByPlaceholder`、`waitForLoadState`、`waitForTimeout`、`evaluate`、`domSnapshot`、`screenshot`。
 
 ## Session 机制
 

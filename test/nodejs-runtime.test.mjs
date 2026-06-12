@@ -233,6 +233,28 @@ describe("代码执行与结果序列化", () => {
 });
 
 describe("变量持久化（跨调用）", () => {
+  it("第一次用顶层 const 声明变量，第二次可直接读取", async () => {
+    const rt = startRuntime();
+    await rt.waitFor((m) => m.type === "ready", STARTUP_TIMEOUT);
+
+    try {
+      const id1 = `persist-const-${Date.now()}-1`;
+      rt.send({ id: id1, type: "execute", code: "const persistedConst = 42; return persistedConst", timeout: 5000 });
+      const res1 = await rt.waitFor((m) => m.id === id1, EXECUTE_TIMEOUT);
+      assert.equal(res1.ok, true);
+      assert.equal(res1.result, 42);
+
+      const id2 = `persist-const-${Date.now()}-2`;
+      rt.send({ id: id2, type: "execute", code: "return persistedConst", timeout: 5000 });
+      const res2 = await rt.waitFor((m) => m.id === id2, EXECUTE_TIMEOUT);
+      assert.equal(res2.ok, true);
+      assert.equal(res2.result, 42);
+    } finally {
+      rt.shutdown();
+      await new Promise((resolve) => rt.proc.on("exit", resolve));
+    }
+  });
+
   it("第一次设置 globalThis.testVar，第二次可读取", async () => {
     const rt = startRuntime();
     await rt.waitFor((m) => m.type === "ready", STARTUP_TIMEOUT);

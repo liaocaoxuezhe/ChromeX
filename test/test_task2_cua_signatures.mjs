@@ -297,8 +297,8 @@ async function main() {
     await tab.dom_cua.scroll({ node_id: "n789", x: 10, y: 20 });
     const cmd = mock.commands.pop();
     assertEqual(cmd.name, "script_evaluate", "command name mismatch");
-    assertTrue(cmd.args.script.includes("scrollBy"), "script should contain scrollBy");
-    assertTrue(cmd.args.script.includes("n789"), "script should contain node_id");
+    assertTrue(cmd.args.expression.includes("scrollBy"), "script should contain scrollBy");
+    assertTrue(cmd.args.expression.includes("n789"), "script should contain node_id");
   });
 
   await test("dom_cua.scroll({x,y}) without node_id sends browser.cua.scroll", async () => {

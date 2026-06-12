@@ -2,7 +2,7 @@
 """
 Link2Chrome Tool Descriptions 配置文件
 
-最终工具清单：26 个统一工具（消除模式切换和重复工具）
+最终工具清单：26 个统一工具（browser_code_run 是唯一代码式浏览器控制入口）
 所有 MCP Tool 的 name、description、inputSchema 集中定义在此文件。
 """
 
@@ -474,7 +474,7 @@ TOOL_DEFINITIONS = [
             "**When NOT to use:**\n"
             "- Press Enter/Escape/shortcuts → use action_press_key\n"
             "- Click a button → use action_click\n"
-            "- Fill 5+ fields at once → use playwright_run"
+            "- Fill 5+ fields at once → use browser_code_run"
         ),
         "inputSchema": _obj_schema(
             {
@@ -567,27 +567,32 @@ TOOL_DEFINITIONS = [
 
     # ==================== 代码执行（2 个）====================
     {
-        "name": "playwright_run",
+        "name": "browser_code_run",
         "description": (
-            "Execute a Playwright-style JavaScript snippet in a real Node.js subprocess managed by the MCP Server. "
+            "Execute JavaScript code to control the real Chrome browser for long-running, multi-step browser tasks. "
+            "This is the primary code-based browser automation tool: use it when writing code is clearer than issuing many small MCP actions. "
             "The code runs with async/await support, closures, and cross-call variable persistence (variables declared with 'const' or 'let' in one tool call remain available in subsequent calls).\n\n"
             "**Execution Environment:**\n"
             "- Runs in a Node.js subprocess via stdio IPC.\n"
             "- Pre-injected globals: `browser` (Browser instance), `link2chrome` (client API namespace), `console` (redirected to MCP logs).\n"
             "- Under the hood, the Node.js process connects to the Browser Hub via WebSocket (ws://localhost:8766) and reuses the Chrome Extension + CDP transport.\n\n"
+            "**Startup metadata:** each successful call returns `meta.startupSummary` with the currently bound tab id, URL, title, debuggable state, and session/group hints when available.\n\n"
             "**When to use:**\n"
             "- Multi-step form filling (5+ fields)\n"
             "- Conditional logic (if element exists, do X, else do Y)\n"
             "- Loop through list items and extract data\n"
-            "- Complex workflows that would need 5+ individual tool calls\n\n"
+            "- Complex workflows that would need 5+ individual tool calls\n"
+            "- Long-running browser tasks when paired with explicit waits, polling, or page-state checks\n\n"
             "**When NOT to use:**\n"
             "- Single click or type → use action_click / action_fill\n"
             "- Just reading page content → use browser_dom_get_text\n"
             "- Just taking a screenshot → use browser_screenshot\n\n"
             "**Examples:**\n"
             "```javascript\n"
-            "// Navigate and interact with a page\n"
-            "const tab = await browser.tabs.selected();\n"
+            "// Prefer openTabs + claimTab for existing user tabs; fall back to a new tab.\n"
+            "const tabs = await browser.user.openTabs();\n"
+            "const existing = tabs.find(t => (t.raw?.url || '').includes('example.com'));\n"
+            "const tab = existing ? await browser.user.claimTab(existing) : await browser.tabs.new();\n"
             "await tab.goto('https://example.com');\n"
             "await tab.playwright.locator('input[name=\"q\"]').fill('hello');\n"
             "await tab.playwright.locator('button[type=\"submit\"]').click();\n"
@@ -867,7 +872,7 @@ PUBLIC_TOOL_NAMES = {
     "action_press_key",
     "upload_file",
     "handle_dialog",
-    "playwright_run",
+    "browser_code_run",
     "script_evaluate",
     "save_as_pdf",
     "console_check",

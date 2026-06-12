@@ -7,23 +7,93 @@ description: Use when controlling Chrome through the Link2Chrome MCP gateway, in
 
 Use this skill when the user mentions browser automation, webpage inspection, or `@chrome`. Use Chrome when the task requires the user's existing Chrome profile state or the user explicitly requests Chrome. Do not switch to Chrome solely because a preferred connector, API, or CLI has missing or expired authentication. Ask the user to fix authentication or explicitly approve Chrome as a fallback.
 
+## Local-Browser MCP SOP
+
+When using the Link2Chrome local-browser MCP surface, the browser is the user's real Chrome with real login state. Treat the first actions as session setup, not page interaction.
+
+Required startup sequence:
+
+```
+1. browser_diagnose()                    # check Hub and Extension connection
+2. browser_tabs_list()                   # inspect current tabs and group state
+3. browser_session(action='create',      # create one task session / Chrome tab group
+     session='task-name',
+     group_title='任务名')
+4. browser_navigate(...) or browser_tab(...)  # tabs auto-join the active session
+```
+
+Rules:
+
+- One task = one `session` = one Chrome tab group. Name the session by task, not by site.
+- Use the user's language for `group_title`; Chinese conversation means Chinese tab group title.
+- Always create or reuse the task session before navigation, tab creation, or interaction. Do not start browser work in ungrouped tabs.
+- Use `browser_tabs_list()` before choosing or switching tabs. Do not guess tab IDs.
+- Keep all pages needed for the same task inside that task's group, even when the workflow crosses multiple sites.
+- Create multiple sessions only for genuinely unrelated parallel tasks.
+- If the task creates temporary research or navigation tabs, close the session when finished. If the grouped tabs are user-facing output or a handoff point, leave the group open.
+
+### Tool Selection
+
+```
+Need to use local-browser MCP?
+|
+|- SETUP
+|  |- Connection state -> browser_diagnose()
+|  |- Current tabs / tab groups -> browser_tabs_list()
+|  |- Start task group -> browser_session(action='create')
+|  |- Open URL directly into group -> browser_session(action='new_tab')
+|
+|- OBSERVE
+|  |- Page structure -> browser_dom_overview
+|  |- Main/article text -> browser_dom_get_text
+|  |- Specific elements -> browser_dom_query / browser_dom_search
+|  |- Visual/layout check -> browser_screenshot
+|
+|- NAVIGATE
+|  |- Same active session -> browser_navigate(action='goto')
+|  |- New tab in active session -> browser_tab(action='new')
+|  |- Existing tab -> browser_tabs_list(), then browser_tab(action='switch')
+|
+|- INTERACT
+|  |- Single simple action -> action_click / action_fill / action_press_key / action_scroll
+|  |- Visual or selector-unstable page -> CUA screenshot, then small CUA action
+|  |- Multi-step workflow / code-based browser automation -> browser_code_run
+|
+|- DEBUG
+   |- Tool failure or connection confusion -> browser_diagnose()
+   |- Wrong tab or wrong group -> browser_tabs_list()
+```
+
 ## Bootstrap
 
-`playwright_run` 是**首选的多步自动化方式**。代码在真实的 Node.js 子进程中执行，通过 `link2chrome-client.mjs` 的 WebSocket transport 连接 Browser Hub。
+`browser_code_run` 是 local-browser MCP 里的**代码式浏览器控制子路径**。代码在真实的 Node.js 子进程中执行，通过 `link2chrome-client.mjs` 的 WebSocket transport 连接 Browser Hub。它适合写大量 JavaScript 来完成长程、多步骤浏览器任务，配合显式 wait / polling / DOM 校验可以执行较久的工作。
 
-- `agent` 和 `browser` 对象已预注入 `playwright_run` 的全局作用域
+- `agent` 和 `browser` 对象已预注入 `browser_code_run` 的全局作用域
 - 变量通过 `globalThis` 的 REPL 上下文持久化：第一次调用 `const tab = ...`，第二次调用可直接使用 `tab`
 - 首次使用浏览器前，必须完整读取 `await browser.documentation()`
+- 每次成功调用会返回 `meta.startupSummary`，包含当前绑定 tab 的 id、URL、title、debuggable、session/group 等摘要，先看这个摘要再继续操作。
+
+复杂任务必须按这个顺序启动：
+
+`browser_diagnose -> browser_tabs_list -> browser_session(action='create' 或 'new_tab') -> assert current URL -> globalThis.tab = target tab`
+
+复杂任务不要默认从 browser.tabs.selected() 开始；`selected()` 只能作为最后兜底。首选先用 `browser.user.openTabs()` 读取真实用户标签页，再用 `browser.user.claimTab(tab)` 接管目标 tab。
 
 ```js
 const browser = await agent.browsers.get("extension");
-const tab = await browser.tabs.selected();
 console.log(await browser.documentation());
+
+await browser.nameSession("任务名");
+const tabs = await browser.user.openTabs();
+const target = tabs.find(t => (t.raw?.url || "").includes("example.com"));
+globalThis.tab = target ? await browser.user.claimTab(target) : await browser.tabs.new("https://example.com");
+const currentUrl = await globalThis.tab.url();
+if (!currentUrl.includes("example.com")) throw new Error(`Unexpected tab: ${currentUrl}`);
 ```
 
 Use the browser bound to `browser` for tasks in this skill.
 
-Only the `playwright_run` tool can be used to control the Chrome extension runtime. Do not use external MCP browser-control tools, separate browser automation servers, or other browser skills for this surface. References to Playwright mean the in-skill `tab.playwright` API after browser setup.
+Only the `browser_code_run` tool can be used to control the Chrome extension runtime. Do not use external MCP browser-control tools, separate browser automation servers, or other browser skills for this surface. References to Playwright mean the in-skill `tab.playwright` API after browser setup.
 
 ## 文档自学习入口
 
@@ -44,6 +114,47 @@ console.log(await agent.documentation.get("confirmations"));
 ```
 
 ## Tab Management
+
+### Sessions and Tab Groups
+
+For local-browser MCP, task grouping is mandatory:
+
+```
+# 1. Create the task session. This sets it as active.
+browser_session(action='create', session='camping-research', group_title='露营装备调研')
+
+# 2. Subsequent navigation and new-tab calls auto-join the active group.
+browser_navigate(action='goto', url='https://google.com/search?q=tents')
+browser_tab(action='new', url='https://amazon.com/s?k=camping+tent')
+```
+
+Alternative one-shot open:
+
+```
+browser_session(action='new_tab', session='camping-research',
+                url='https://google.com/search?q=tents', group_title='露营装备调研')
+```
+
+- `browser_session(action='create')` creates or reuses a Chrome tab group and marks it active.
+- `browser_navigate` and `browser_tab(action='new')` auto-join the active session's group.
+- `browser_session(action='add')` is for existing tabs; get the tab ID from `browser_tabs_list()`.
+- `browser_session(action='list')` shows active sessions and tab counts.
+- `browser_session(action='close')` closes the grouped task tabs when they are only intermediate work.
+
+### Standard Workflow
+
+```
+1. browser_diagnose()
+2. browser_tabs_list()
+3. browser_session(action='create', session='task-name', group_title='任务名')
+4. browser_navigate(action='goto', url='...')
+5. Observe: browser_dom_overview(), dom snapshot, or screenshot
+6. Act: one small action, or browser_code_run for multi-step logic
+7. Verify: DOM diff, snapshot, screenshot, URL, or page-specific success signal
+8. Close the session or leave the grouped tabs open for user handoff
+```
+
+Key principle: observe -> act -> verify. Do not chain blind clicks without checking what changed.
 
 ### Tab Claiming
 - To take over an already-open Chrome tab, call `browser.user.openTabs()`, choose the matching returned tab by its visible title, URL, recency, and tab group, then pass that exact object to `browser.user.claimTab(tab)`.
@@ -86,9 +197,12 @@ console.log(await agent.documentation.get("confirmations"));
 ### 基本模式
 
 ```js
-// 第一次调用：获取 browser 和 tab，存入 globalThis
+// 第一次调用：获取 browser，用 openTabs/claimTab 绑定目标 tab，存入 globalThis
 const browser = await agent.browsers.get("extension");
-const tab = await browser.tabs.selected();
+const tabs = await browser.user.openTabs();
+const target = tabs.find(t => (t.raw?.url || "").includes("example.com"));
+globalThis.tab = target ? await browser.user.claimTab(target) : await browser.tabs.new("https://example.com");
+const tab = globalThis.tab;
 const snapshot = await tab.playwright.domSnapshot();
 return { title: await tab.title(), url: await tab.url() };
 ```
@@ -104,7 +218,10 @@ return { ok: true };
 ```js
 // 完整流程：导航 → 填表 → 提交
 const browser = await agent.browsers.get("extension");
-const tab = await browser.tabs.selected();
+const tabs = await browser.user.openTabs();
+const target = tabs.find(t => (t.raw?.url || "").includes("example.com/form"));
+globalThis.tab = target ? await browser.user.claimTab(target) : await browser.tabs.new("https://example.com/form");
+const tab = globalThis.tab;
 await tab.goto("https://example.com/form");
 await tab.playwright.waitForLoadState("domcontentloaded");
 
@@ -258,7 +375,7 @@ await tab.playwright.getByRole("button", { name: "确认支付" }).click();
 | **TimeoutError** | 等待超时（网络慢、元素未出现） | 增加 timeout；检查页面是否加载完成；必要时重新获取 snapshot |
 | **NodeJSRuntimeError** | Node.js 子进程未启动或崩溃 | 运行诊断脚本 `node scripts/check-node-env.mjs` 检查环境；检查 `setup-playwright-runtime.mjs` 输出 |
 
-当 `playwright_run` 报 Node.js 相关错误时，按以下顺序诊断：
+当 `browser_code_run` 报 Node.js 相关错误时，按以下顺序诊断：
 
 ```bash
 # 1. 检查 Node.js 环境和依赖
@@ -270,7 +387,7 @@ node scripts/setup-playwright-runtime.mjs
 
 - `check-node-env.mjs` 检查 Node.js 版本（≥18）、ESM 支持、WebSocket 可用性
 - `setup-playwright-runtime.mjs` 提供完整诊断输出，并尝试自动修复常见问题
-- Node.js Runtime 不可用时，`playwright_run` 返回**明确错误信息**（含安装指引），不再默默降级到 Extension
+- Node.js Runtime 不可用时，`browser_code_run` 返回**明确错误信息**（含安装指引），不再默默降级到 Extension
 
 ### Chrome 连接 / 扩展 / 通信失败
 

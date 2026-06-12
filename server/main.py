@@ -102,7 +102,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
             return result
 
         async with ws_manager.operation(name):
-            # New unified 26-tool routing
+            # New unified 27-tool routing
             if name in {
                 "browser_navigate",
                 "browser_tab",
@@ -129,8 +129,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                 "browser_scrape_with_scroll",
             }:
                 result = await tool_agent_first(name, arguments)
-            elif name == "playwright_run":
-                result = await tool_playwright_run(arguments)
+            elif name == "browser_code_run":
+                result = await tool_browser_code_run(arguments)
             elif name == "save_as_pdf":
                 result = await tool_save_as_pdf(arguments)
             else:
@@ -305,7 +305,7 @@ async def tool_scrape_with_scroll(args: dict) -> list[TextContent]:
 # ==================== Agent-first Unified Tool Implementation ====================
 
 async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageContent]:
-    """Dispatch the unified 26-tool namespace and return JSON-only observations."""
+    """Dispatch the unified 27-tool namespace and return JSON-only observations."""
 
     if name == "browser_tabs_list":
         raw = await ws_manager.send_command("get_all_tabs")
@@ -732,11 +732,22 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         if not target:
             return _json_content({"ok": False, "error": "target is required"})
         params = {
-            "target": target,
             "text": value,
             "clearFirst": True,
             "submitAfter": args.get("submitAfter", "none"),
         }
+        if isinstance(target, dict):
+            if "selector" in target:
+                params["selector"] = target["selector"]
+            elif "x" in target and "y" in target:
+                params["x"] = target["x"]
+                params["y"] = target["y"]
+            elif "placeholder" in target:
+                params["selector"] = f"input[placeholder={json.dumps(target['placeholder'])}], textarea[placeholder={json.dumps(target['placeholder'])}]"
+            elif "name" in target:
+                params["selector"] = f"[name={json.dumps(target['name'])}]"
+            else:
+                params["target"] = target
         return _json_content(await ws_manager.send_command("type", params))
 
     if name == "action_press_key":
@@ -780,22 +791,17 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 "includeResponseBody": args.get("includeResponseBody", False)
             }))
         elif action == "list":
-            return _json_content(await ws_manager.send_command("network_list", {
-                "limit": args.get("limit", 50),
-                "resourceType": args.get("resourceType"),
-                "status": args.get("status"),
-                "method": args.get("method")
-            }))
+            list_params = {"limit": args.get("limit", 50)}
+            for key in ("resourceType", "status", "method"):
+                if args.get(key) is not None:
+                    list_params[key] = args[key]
+            return _json_content(await ws_manager.send_command("network_list", list_params))
         elif action == "query":
-            return _json_content(await ws_manager.send_command("network_query", {
-                "urlContains": args.get("urlContains"),
-                "method": args.get("method"),
-                "status": args.get("status"),
-                "resourceType": args.get("resourceType"),
-                "hasResponseBody": args.get("hasResponseBody"),
-                "includeBody": args.get("includeBody"),
-                "limit": args.get("limit", 50)
-            }))
+            query_params = {"limit": args.get("limit", 50)}
+            for key in ("urlContains", "method", "status", "resourceType", "hasResponseBody", "includeBody"):
+                if args.get(key) is not None:
+                    query_params[key] = args[key]
+            return _json_content(await ws_manager.send_command("network_query", query_params))
         elif action == "fetch":
             return _json_content(await ws_manager.send_command("network_fetch", {
                 "url": args.get("url"),
@@ -821,8 +827,8 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
     return _json_content({"ok": False, "error": f"unimplemented tool: {name}"})
 
 
-async def tool_playwright_run(args: dict) -> list[TextContent]:
-    """执行 Playwright 风格的 JavaScript 代码。
+async def tool_browser_code_run(args: dict) -> list[TextContent]:
+    """执行用于控制真实浏览器的 JavaScript 代码。
 
     强制通过 NodeJSRuntimeManager 在 Node.js 子进程中执行；
     Node.js 不可用时返回明确错误，不再降级到 Extension 端执行。
@@ -865,9 +871,16 @@ async def tool_playwright_run(args: dict) -> list[TextContent]:
                         ),
                     })
 
-            result = await nodejs_runtime.execute(code, timeout)
+            result = await nodejs_runtime.execute(
+                code,
+                timeout,
+                lease_token=getattr(ws_manager, "_lease_token", None),
+            )
             if result.get("ok"):
-                return _json_content(_truncate_result(result["result"]))
+                payload = _truncate_result(result["result"])
+                if result.get("meta") is not None:
+                    payload["meta"] = result["meta"]
+                return _json_content(payload)
             else:
                 # Node.js 正常执行但用户代码出错，直接返回错误（含堆栈）
                 return _json_content({
@@ -889,11 +902,11 @@ async def tool_playwright_run(args: dict) -> list[TextContent]:
                 ),
             })
     else:
-        logger.warning("Node.js Playwright Runtime 未配置，拒绝执行 playwright_run")
+        logger.warning("Node.js Playwright Runtime 未配置，拒绝执行 browser_code_run")
         return _json_content({
             "ok": False,
             "error": (
-                "Node.js Playwright Runtime 未配置，无法执行 playwright_run。\n"
+                "Node.js Playwright Runtime 未配置，无法执行 browser_code_run。\n"
                 "请安装 Node.js (>=18) 并确保 node 命令在 PATH 中，然后重启 MCP Server。"
                 "可运行 node scripts/check-node-env.mjs 诊断环境。"
             ),

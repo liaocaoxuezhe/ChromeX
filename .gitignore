@@ -32,5 +32,4 @@ output/
 .deepseek/
 .agents/
 .claude/worktrees/
-.codex/
 orchestration/

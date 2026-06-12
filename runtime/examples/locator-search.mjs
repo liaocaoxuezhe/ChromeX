@@ -3,7 +3,10 @@ import { setupLink2ChromeRuntime } from "../link2chrome-client.mjs";
 setupLink2ChromeRuntime({ globals: globalThis });
 
 const browser = await agent.browsers.get("extension");
-const tab = await browser.tabs.selected();
+await browser.nameSession("Link2Chrome locator search");
+const tabs = await browser.user.openTabs();
+const existing = tabs.find((t) => (t.raw?.url || "").includes("google.com/search"));
+const tab = existing ? await browser.user.claimTab(existing) : await browser.tabs.new("https://www.google.com/search?q=Link2Chrome");
 
 await tab.goto("https://www.google.com/search?q=Link2Chrome");
 const input = tab.playwright.locator("textarea[name='q'], input[name='q']");

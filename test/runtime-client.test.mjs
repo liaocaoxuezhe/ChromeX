@@ -762,6 +762,32 @@ test("tabs.selected returns active tab info and tab navigation uses browser_navi
   ]);
 });
 
+test("listed tab url and title request that tab id", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser_tabs_list") {
+        return { tabs: [{ id: 42, active: false, url: "https://listed.test/snapshot", title: "Snapshot" }] };
+      }
+      if (name === "browser_tab_info") {
+        return { id: args.tabId, active: false, url: "https://listed.test/live", title: "Live" };
+      }
+      return { ok: true };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  assert.equal(await tab.url(), "https://listed.test/live");
+  assert.equal(await tab.title(), "Live");
+  assert.deepEqual(transport.calls, [
+    { name: "browser_tabs_list", args: {} },
+    { name: "browser_tab_info", args: { tabId: 42 } },
+    { name: "browser_tab_info", args: { tabId: 42 } },
+  ]);
+});
+
 test("tab waitFor maps to browser wait command", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
@@ -928,7 +954,7 @@ test("tabs.finalize calls backend when finalize support is available", async () 
   });
 });
 
-test("locator fill maps to browser.dom.type", async () => {
+test("locator fill maps to browser.dom.type with a command-compatible selector", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
   const [tab] = await browser.tabs.list();
@@ -938,10 +964,36 @@ test("locator fill maps to browser.dom.type", async () => {
   assert.deepEqual(transport.calls.at(-1), {
     name: "browser.dom.type",
     args: {
-      target: { selector: "input[name='q']" },
+      selector: "input[name='q']",
       text: "Link2Chrome",
       clearFirst: true,
     },
+  });
+});
+
+test("playwright evaluate unwraps extension script_evaluate result envelopes", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser_tabs_list") {
+        return { tabs: [{ id: 7, active: true, url: "https://example.com", title: "Example" }] };
+      }
+      if (name === "script_evaluate") {
+        return { ok: true, result: "Example title", type: "string" };
+      }
+      return { ok: true };
+    },
+  };
+  const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  const [tab] = await browser.tabs.list();
+
+  const result = await tab.playwright.evaluate("document.title");
+
+  assert.equal(result, "Example title");
+  assert.deepEqual(transport.calls.at(-1), {
+    name: "script_evaluate",
+    args: { expression: "document.title", awaitPromise: true, timeout: 30000 },
   });
 });
 
@@ -1127,7 +1179,7 @@ test("locator filter hasNotText uses script_evaluate for client-side filtering",
   assert.equal(count, 1);
   const scriptCall = transport.calls.find((c) => c.name === "script_evaluate");
   assert.ok(scriptCall, "expected script_evaluate to be called for hasNotText count");
-  assert.ok(scriptCall.args.script.includes("delete"), "expected script to reference hasNotText logic");
+  assert.ok(scriptCall.args.expression.includes("delete"), "expected script to reference hasNotText logic");
 });
 
 test("locator filter hasNotText resolves target via script_evaluate strict mode", async () => {
@@ -1372,23 +1424,36 @@ test("playwright waitForEvent rejects unsupported events", async () => {
   const [tab] = await browser.tabs.list();
 
   await assert.rejects(
-    () => tab.playwright.waitForEvent("download"),
+    () => tab.playwright.waitForEvent("popup"),
     /Unsupported playwright event/
   );
 });
 
-test("playwright waitForLoadState maps load states to browser waits", async () => {
-  const transport = fakeTransport();
+test("playwright waitForLoadState uses script_evaluate expression polling instead of browser.wait", async () => {
+  const transport = {
+    calls: [],
+    async command(name, args = {}) {
+      this.calls.push({ name, args });
+      if (name === "browser_tabs_list") {
+        return { tabs: [{ id: 7, active: true, url: "https://example.com", title: "Example" }] };
+      }
+      if (name === "script_evaluate") {
+        return true;
+      }
+      return { ok: true };
+    },
+  };
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
   const [tab] = await browser.tabs.list();
 
   await tab.playwright.waitForLoadState("domcontentloaded", { timeout: 3000 });
   await tab.playwright.waitForLoadState("networkidle");
 
-  const browserWaits = transport.calls.filter((c) => c.name === "browser.wait");
-  assert.equal(browserWaits.length, 2);
-  assert.deepEqual(browserWaits[0], { name: "browser.wait", args: { condition: "dom-ready", state: "domcontentloaded", timeout: 3000 } });
-  assert.deepEqual(browserWaits[1], { name: "browser.wait", args: { condition: "network-idle", state: "networkidle" } });
+  assert.equal(transport.calls.some((c) => c.name === "browser.wait"), false);
+  const evaluations = transport.calls.filter((c) => c.name === "script_evaluate");
+  assert.equal(evaluations.length, 2);
+  assert.equal(typeof evaluations[0].args.expression, "string");
+  assert.equal(evaluations[0].args.script, undefined);
 });
 
 test("getByText count maps to browser.dom.search", async () => {
@@ -2153,10 +2218,10 @@ test("websocket transport maps runtime wait to extension wait command", async ()
   }
   const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
 
-  await transport.command("browser.wait", { condition: "dom-ready", selector: "#ready" });
+  await transport.command("script_evaluate", { expression: "document.readyState === 'complete'", awaitPromise: false });
 
-  assert.equal(sentMessages[0].command, "agent_browser_wait");
-  assert.deepEqual(sentMessages[0].params, { condition: "dom-ready", selector: "#ready" });
+  assert.equal(sentMessages[0].command, "script_evaluate");
+  assert.deepEqual(sentMessages[0].params, { expression: "document.readyState === 'complete'", awaitPromise: false });
 });
 
 test("websocket transport sends lease_token on commands while lease is active", async () => {

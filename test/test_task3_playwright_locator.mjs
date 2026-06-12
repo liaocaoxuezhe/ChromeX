@@ -28,6 +28,9 @@ function createMockTransport() {
         return { elements: [] };
       }
       commands.push({ name, args });
+      if (name === "script_evaluate" && String(args.expression || "").includes("document.readyState")) {
+        return true;
+      }
       return { ok: true };
     },
   };
@@ -87,12 +90,10 @@ async function main() {
 
   await test("PlaywrightSurface waitForLoadState({state:'load'}) object signature works", async () => {
     mock.commands.length = 0;
-    // 由于 waitForLoadState 使用轮询，mock 的 script_evaluate 会返回 undefined，然后 fallback 到 browser.wait
-    // 我们只需要确认它不会因对象签名而抛错
     await tab.playwright.waitForLoadState({ state: "load", timeoutMs: 100 });
-    const cmd = mock.commands.find((c) => c.name === "browser.wait");
-    assertTrue(cmd !== undefined, "should fallback to browser.wait");
-    assertEqual(cmd.args.state, "load", "state mismatch");
+    const cmd = mock.commands.find((c) => c.name === "script_evaluate");
+    assertTrue(cmd !== undefined, "script_evaluate should be called");
+    assertIncludes(cmd.args.expression, "document.readyState", "expression should check readyState");
   });
 
   // === evaluate 序列化断言 ===
@@ -101,7 +102,7 @@ async function main() {
     await tab.playwright.evaluate("document.title");
     const cmd = mock.commands.pop();
     assertEqual(cmd.name, "script_evaluate", "command name mismatch");
-    assertEqual(cmd.args.script, "document.title", "script mismatch");
+    assertEqual(cmd.args.expression, "document.title", "script mismatch");
     assertEqual(cmd.args.awaitPromise, true, "awaitPromise mismatch");
   });
 
@@ -111,8 +112,8 @@ async function main() {
     await tab.playwright.evaluate(fn, 5);
     const cmd = mock.commands.pop();
     assertEqual(cmd.name, "script_evaluate", "command name mismatch");
-    assertIncludes(cmd.args.script, "(x) => x + 1", "script should contain function body");
-    assertIncludes(cmd.args.script, "5", "script should contain serialized arg");
+    assertIncludes(cmd.args.expression, "(x) => x + 1", "script should contain function body");
+    assertIncludes(cmd.args.expression, "5", "script should contain serialized arg");
     assertEqual(cmd.args.awaitPromise, true, "awaitPromise mismatch");
   });
 

@@ -11,7 +11,9 @@ if (!readiness.ok) {
 
 const browser = await agent.browsers.get("extension");
 await browser.nameSession("Link2Chrome runtime basic navigation");
-const tab = await browser.tabs.selected();
+const tabs = await browser.user.openTabs();
+const existing = tabs.find((t) => (t.raw?.url || "").includes("example.com"));
+const tab = existing ? await browser.user.claimTab(existing) : await browser.tabs.new("https://example.com");
 
 await tab.goto("https://example.com");
 await tab.waitFor({ condition: "dom-ready", timeout: 10000 });

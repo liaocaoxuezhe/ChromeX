@@ -221,12 +221,20 @@ class NodeJSRuntimeManager:
     # 请求执行
     # ------------------------------------------------------------------ #
 
-    async def execute(self, code: str, timeout: int = 30000) -> dict[str, Any]:
+    async def execute(
+        self,
+        code: str,
+        timeout: int = 30000,
+        *,
+        lease_token: str | None = None,
+        restart_on_closed_stdout: bool = True,
+    ) -> dict[str, Any]:
         """向 Node.js 子进程发送 Playwright 代码并等待执行结果。
 
         Args:
             code: 需要执行的 Playwright JavaScript 代码字符串。
             timeout: 代码执行的最大超时（毫秒）。
+            lease_token: Hub 操作锁 token，传递给 Node.js 运行时以避免死锁。
 
         Returns:
             {"ok": True, "result": ...} 或
@@ -254,6 +262,8 @@ class NodeJSRuntimeManager:
             "code": code,
             "timeout": timeout,
         }
+        if lease_token:
+            message["lease_token"] = lease_token
 
         try:
             data = json.dumps(message, ensure_ascii=False) + "\n"
@@ -282,12 +292,29 @@ class NodeJSRuntimeManager:
             }
         except Exception as exc:
             self._pending.pop(req_id, None)
+            if (
+                restart_on_closed_stdout
+                and self._is_closed_stdout_error(exc)
+                and await self.restart()
+            ):
+                return await self.execute(
+                    code,
+                    timeout,
+                    lease_token=lease_token,
+                    restart_on_closed_stdout=False,
+                )
             return {
                 "ok": False,
                 "error": f"等待响应时发生异常: {exc}",
             }
 
         return result
+
+    @staticmethod
+    def _is_closed_stdout_error(exc: BaseException) -> bool:
+        """判断异常是否来自 Node.js stdout 关闭。"""
+        text = str(exc)
+        return "stdout 已关闭" in text or "stdout closed" in text.lower()
 
     # ------------------------------------------------------------------ #
     # 内部循环
@@ -367,12 +394,14 @@ class NodeJSRuntimeManager:
                     future.set_result({
                         "ok": True,
                         "result": msg.get("result"),
+                        "meta": msg.get("meta"),
                     })
                 else:
                     future.set_result({
                         "ok": False,
                         "error": msg.get("error", "未知错误"),
                         "stack": msg.get("stack"),
+                        "meta": msg.get("meta"),
                     })
             else:
                 logger.warning(f"收到未知或已过期请求的响应 (req_id={req_id})")

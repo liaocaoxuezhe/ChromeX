@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-task-5: playwright_run 强制 Node.js Runtime 优先策略测试
+task-5: browser_code_run 强制 Node.js Runtime 优先策略测试
 
-验证 tool_playwright_run 不再降级到 Extension 端 PlaywrightRuntime，
+验证 tool_browser_code_run 不再降级到 Extension 端 PlaywrightRuntime，
 在 Node.js 不可用时返回明确错误。
 
 运行方式:
-    server/venv/bin/python test/test_task5_playwright_run_policy.py
+    server/venv/bin/python test/test_task5_browser_code_run_policy.py
 """
 
 from __future__ import annotations
@@ -90,11 +90,11 @@ def _make_none():
 
 
 # --------------------------------------------------------------------------- #
-# 测试场景 (a): nodejs_runtime ready → 必须调用 execute，不走 playwright_runtime.run
+# 测试场景 (a): nodejs_runtime ready → 必须调用 execute，不走旧 Extension 端 runtime.run
 # --------------------------------------------------------------------------- #
 
-def test_playwright_run_uses_nodejs_when_ready(monkeypatch):
-    """Node.js Runtime 已就绪时，应直接走 execute，绝不调用 playwright_runtime.run。"""
+def test_browser_code_run_uses_nodejs_when_ready(monkeypatch):
+    """Node.js Runtime 已就绪时，应直接走 execute，绝不调用旧 Extension 端 runtime.run。"""
     mock_nodejs = _make_ready_mock()
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
@@ -102,7 +102,7 @@ def test_playwright_run_uses_nodejs_when_ready(monkeypatch):
     mock_pw_runtime.run = AsyncMock()
     monkeypatch.setattr(main, "playwright_runtime", mock_pw_runtime)
 
-    result = asyncio.run(main.tool_playwright_run({"code": "return 1;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;"}))
     payload = _payload(result)
 
     assert payload["ok"] is True
@@ -115,8 +115,8 @@ def test_playwright_run_uses_nodejs_when_ready(monkeypatch):
 # 测试场景 (b)-1: nodejs_runtime 存在但未就绪，启动失败 → 返回明确错误，不降级
 # --------------------------------------------------------------------------- #
 
-def test_playwright_run_rejects_fallback_on_startup_error(monkeypatch):
-    """Node.js Runtime 启动失败时，应返回明确错误，不再降级到 playwright_runtime.run。"""
+def test_browser_code_run_rejects_fallback_on_startup_error(monkeypatch):
+    """Node.js Runtime 启动失败时，应返回明确错误，不再降级到旧 Extension 端 runtime.run。"""
     mock_nodejs = _make_startup_error_mock("未检测到 Node.js 运行时。")
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
@@ -124,7 +124,7 @@ def test_playwright_run_rejects_fallback_on_startup_error(monkeypatch):
     mock_pw_runtime.run = AsyncMock()
     monkeypatch.setattr(main, "playwright_runtime", mock_pw_runtime)
 
-    result = asyncio.run(main.tool_playwright_run({"code": "return 1;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;"}))
     payload = _payload(result)
 
     assert payload["ok"] is False
@@ -140,8 +140,8 @@ def test_playwright_run_rejects_fallback_on_startup_error(monkeypatch):
 # 测试场景 (b)-2: nodejs_runtime 存在，execute 抛出异常 → 返回明确错误，不降级
 # --------------------------------------------------------------------------- #
 
-def test_playwright_run_rejects_fallback_on_execute_exception(monkeypatch):
-    """Node.js Runtime execute 异常时，应返回明确错误，不再降级到 playwright_runtime.run。"""
+def test_browser_code_run_rejects_fallback_on_execute_exception(monkeypatch):
+    """Node.js Runtime execute 异常时，应返回明确错误，不再降级到旧 Extension 端 runtime.run。"""
     mock_nodejs = _make_ready_mock()
     mock_nodejs.execute = AsyncMock(side_effect=RuntimeError("IPC broken"))
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
@@ -150,7 +150,7 @@ def test_playwright_run_rejects_fallback_on_execute_exception(monkeypatch):
     mock_pw_runtime.run = AsyncMock()
     monkeypatch.setattr(main, "playwright_runtime", mock_pw_runtime)
 
-    result = asyncio.run(main.tool_playwright_run({"code": "return 1;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;"}))
     payload = _payload(result)
 
     assert payload["ok"] is False
@@ -164,7 +164,7 @@ def test_playwright_run_rejects_fallback_on_execute_exception(monkeypatch):
 # 测试场景 (c): nodejs_runtime 为 None → 返回明确错误
 # --------------------------------------------------------------------------- #
 
-def test_playwright_run_rejects_when_nodejs_is_none(monkeypatch):
+def test_browser_code_run_rejects_when_nodejs_is_none(monkeypatch):
     """Node.js Runtime 未配置时，应返回明确错误。"""
     monkeypatch.setattr(main, "nodejs_runtime", None)
 
@@ -172,7 +172,7 @@ def test_playwright_run_rejects_when_nodejs_is_none(monkeypatch):
     mock_pw_runtime.run = AsyncMock()
     monkeypatch.setattr(main, "playwright_runtime", mock_pw_runtime)
 
-    result = asyncio.run(main.tool_playwright_run({"code": "return 1;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;"}))
     payload = _payload(result)
 
     assert payload["ok"] is False
@@ -187,7 +187,7 @@ def test_playwright_run_rejects_when_nodejs_is_none(monkeypatch):
 # 测试场景 (d): nodejs_runtime 未就绪但 start 成功 → 正常执行
 # --------------------------------------------------------------------------- #
 
-def test_playwright_run_starts_nodejs_then_executes(monkeypatch):
+def test_browser_code_run_starts_nodejs_then_executes(monkeypatch):
     """Node.js Runtime 未就绪但启动成功时，应先 start 再 execute。"""
     mock_nodejs = _make_startup_error_mock()
     mock_nodejs.is_ready = False
@@ -199,7 +199,7 @@ def test_playwright_run_starts_nodejs_then_executes(monkeypatch):
     mock_pw_runtime.run = AsyncMock()
     monkeypatch.setattr(main, "playwright_runtime", mock_pw_runtime)
 
-    result = asyncio.run(main.tool_playwright_run({"code": "return 42;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "return 42;"}))
     payload = _payload(result)
 
     assert payload["ok"] is True
@@ -213,7 +213,7 @@ def test_playwright_run_starts_nodejs_then_executes(monkeypatch):
 # 测试场景 (e): execute 返回 ok=False（用户代码出错）→ 原样透传
 # --------------------------------------------------------------------------- #
 
-def test_playwright_run_passthrough_user_code_error(monkeypatch):
+def test_browser_code_run_passthrough_user_code_error(monkeypatch):
     """Node.js 执行成功但用户代码报错时，应透传错误信息。"""
     mock_nodejs = _make_ready_mock()
     mock_nodejs.execute = AsyncMock(return_value={
@@ -223,7 +223,7 @@ def test_playwright_run_passthrough_user_code_error(monkeypatch):
     })
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
-    result = asyncio.run(main.tool_playwright_run({"code": "x;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "x;"}))
     payload = _payload(result)
 
     assert payload["ok"] is False
@@ -235,14 +235,14 @@ def test_playwright_run_passthrough_user_code_error(monkeypatch):
 # 测试场景 (f): 截断逻辑保持不变
 # --------------------------------------------------------------------------- #
 
-def test_playwright_run_truncation_preserved(monkeypatch):
+def test_browser_code_run_truncation_preserved(monkeypatch):
     """结果超长时，应保持截断格式与改造前一致。"""
     long_result = "a" * 30000
     mock_nodejs = _make_ready_mock()
     mock_nodejs.execute = AsyncMock(return_value={"ok": True, "result": long_result})
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
-    result = asyncio.run(main.tool_playwright_run({
+    result = asyncio.run(main.tool_browser_code_run({
         "code": "return 'a'.repeat(30000);",
         "max_result_chars": 20000,
     }))

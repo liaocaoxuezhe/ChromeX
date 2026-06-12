@@ -193,7 +193,7 @@ async function main() {
     await tab.playwright.frameLocator("#f").locator("input").fill("hello");
     const cmd = mock.commands.find((c) => c.name === "browser.dom.type");
     assertTrue(cmd !== undefined, "browser.dom.type should be called");
-    assertEqual(cmd.args.target.frameContext, ["#f"], "fill command should carry frameContext");
+    assertEqual(cmd.args.frameContext, ["#f"], "fill command should carry frameContext");
   });
 
   // === count() 命令参数含 frameContext ===
@@ -228,7 +228,7 @@ async function main() {
     await tab.playwright.locator("input").fill("hello");
     const cmd = mock.commands.find((c) => c.name === "browser.dom.type");
     assertTrue(cmd !== undefined, "browser.dom.type should be called");
-    assertTrue(cmd.args.target.frameContext === undefined, "plain locator fill should NOT carry frameContext");
+    assertTrue(cmd.args.frameContext === undefined, "plain locator fill should NOT carry frameContext");
   });
 
   await test("plain Locator count does NOT include frameContext", async () => {

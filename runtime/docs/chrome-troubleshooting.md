@@ -1,6 +1,6 @@
 ## Chrome 故障排查
 
-当 `playwright_run` 或浏览器控制出现连接、扩展或通信失败时，**先完整读本文档再重试**。不要在没有定位根因前反复重试同一操作、切换浏览器选择器或猜测其它路径。
+当 `browser_code_run` 或浏览器控制出现连接、扩展或通信失败时，**先完整读本文档再重试**。不要在没有定位根因前反复重试同一操作、切换浏览器选择器或猜测其它路径。
 
 ## 通用原则
 
@@ -11,7 +11,7 @@
 ## 故障场景
 
 ### 1. Node.js Runtime 不可用
-- 症状：`playwright_run` 返回明确错误，提示需要 Node.js (>=18)。
+- 症状：`browser_code_run` 返回明确错误，提示需要 Node.js (>=18)。
 - 处理：运行 `node scripts/check-node-env.mjs` 检查 Node 版本、ESM 支持与 WebSocket 可用性；必要时运行 `node scripts/setup-playwright-runtime.mjs` 做完整诊断与自动修复。
 
 ### 2. WebSocket 命令超时

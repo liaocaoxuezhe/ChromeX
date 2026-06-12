@@ -211,6 +211,45 @@ async def test_execute_returns_error_with_stack(project_root: str):
     await mgr.stop()
 
 
+def test_execute_restarts_once_when_stdout_closed(project_root: str):
+    """stdout 关闭导致等待响应异常时，execute 应重启 runtime 并重试一次。"""
+    if NodeJSRuntimeManager is None:
+        pytest.skip("NodeJSRuntimeManager 未导入")
+
+    async def _run():
+        mgr, mock_proc = _make_manager_with_mock_proc(project_root)
+        writes = []
+        restarts = []
+
+        async def _restart():
+            restarts.append("restart")
+            mgr._ready = True
+            mgr._proc = mock_proc
+            return True
+
+        mgr.restart = _restart  # type: ignore[method-assign]
+
+        def _write(_data):
+            writes.append(_data)
+            req_id = list(mgr._pending.keys())[-1]
+            future = mgr._pending[req_id]
+            if len(writes) == 1:
+                future.set_exception(RuntimeError("Node.js 子进程 stdout 已关闭"))
+            else:
+                future.set_result({"ok": True, "result": {"retried": True}})
+
+        with patch.object(mgr._proc.stdin, "write", side_effect=_write):
+            with patch.object(mgr._proc.stdin, "drain", new_callable=AsyncMock):
+                result = await mgr.execute("return 'ok'", timeout=5000)
+
+        assert result == {"ok": True, "result": {"retried": True}}
+        assert restarts == ["restart"]
+        assert len(writes) == 2
+        await mgr.stop()
+
+    asyncio.run(_run())
+
+
 # --------------------------------------------------------------------------- #
 # 3. 超时处理
 # --------------------------------------------------------------------------- #
@@ -235,7 +274,7 @@ async def test_execute_timeout_returns_timeout_error(project_root: str):
 
 
 # --------------------------------------------------------------------------- #
-# 4. 降级路径测试（tool_playwright_run）
+# 4. 降级路径测试（tool_browser_code_run）
 # --------------------------------------------------------------------------- #
 
 
@@ -282,12 +321,12 @@ def _ensure_module_attr(module, name, default):
 
 def _has_nodejs_fallback_logic() -> bool:
     """检查当前 main.py 是否已包含 Node.js Runtime 降级逻辑（Task 3）。"""
-    return hasattr(main_module, "nodejs_runtime") and "nodejs_runtime" in main_module.tool_playwright_run.__code__.co_names
+    return hasattr(main_module, "nodejs_runtime") and "nodejs_runtime" in main_module.tool_browser_code_run.__code__.co_names
 
 
 @pytest.mark.asyncio
-async def test_tool_playwright_run_falls_back_to_playwright_runtime(monkeypatch, caplog):
-    """Node.js Runtime 启动失败时，tool_playwright_run 应降级到 PlaywrightRuntime。"""
+async def test_tool_browser_code_run_rejects_fallback_when_nodejs_runtime_fails(monkeypatch, caplog):
+    """Node.js Runtime 启动失败时，tool_browser_code_run 返回明确错误，不降级。"""
     if not _has_nodejs_fallback_logic():
         pytest.skip("当前 main.py 尚未包含 Node.js Runtime 降级逻辑（Task 3 未合并）")
 
@@ -305,18 +344,19 @@ async def test_tool_playwright_run_falls_back_to_playwright_runtime(monkeypatch,
     _ensure_module_attr(main_module, "nodejs_runtime", None)
     monkeypatch.setattr(main_module, "nodejs_runtime", fake_nodejs_runtime)
 
-    result = await main_module.tool_playwright_run({"code": "return 1+1"})
+    result = await main_module.tool_browser_code_run({"code": "return 1+1"})
     payload = json.loads(result[0].text)
 
-    assert payload["ok"] is True
-    assert payload["result"] == {"fallback": True}
-    # 验证降级日志
-    assert any("降级" in rec.message or "fallback" in rec.message.lower() for rec in caplog.records)
+    assert payload["ok"] is False
+    assert "Node.js 未安装" in payload["error"]
+    assert "Playwright 高级功能需要 Node.js Runtime" in payload["error"]
+    assert fake_ws.send_command.await_count == 0
+    assert any("拒绝降级" in rec.message for rec in caplog.records)
 
 
 @pytest.mark.asyncio
-async def test_tool_playwright_run_falls_back_when_nodejs_runtime_is_none(monkeypatch):
-    """nodejs_runtime 为 None 时，直接走 PlaywrightRuntime 降级路径。"""
+async def test_tool_browser_code_run_rejects_when_nodejs_runtime_is_none(monkeypatch):
+    """nodejs_runtime 为 None 时返回明确错误，不走旧 Runtime 降级路径。"""
     if not _has_nodejs_fallback_logic():
         pytest.skip("当前 main.py 尚未包含 Node.js Runtime 降级逻辑（Task 3 未合并）")
 
@@ -326,11 +366,12 @@ async def test_tool_playwright_run_falls_back_when_nodejs_runtime_is_none(monkey
     _ensure_module_attr(main_module, "nodejs_runtime", None)
     monkeypatch.setattr(main_module, "nodejs_runtime", None)
 
-    result = await main_module.tool_playwright_run({"code": "return 1+1"})
+    result = await main_module.tool_browser_code_run({"code": "return 1+1"})
     payload = json.loads(result[0].text)
 
-    assert payload["ok"] is True
-    assert payload["result"] == {"direct_fallback": True}
+    assert payload["ok"] is False
+    assert "Node.js Playwright Runtime 未配置" in payload["error"]
+    assert fake_ws.send_command.await_count == 0
 
 
 # --------------------------------------------------------------------------- #

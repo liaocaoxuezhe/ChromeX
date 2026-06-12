@@ -790,6 +790,9 @@ async function handleCommand(message) {
       case "go_forward":
         response.data = await cmdGoForward();
         break;
+      case "reload":
+        response.data = await cmdReload();
+        break;
       case "drag":
         response.data = await cmdDrag(params);
         break;
@@ -819,6 +822,9 @@ async function handleCommand(message) {
         break;
       case "agent_browser_tab_new":
         response.data = await cmdAgentBrowserTabNew(params);
+        break;
+      case "agent_browser_tab_close":
+        response.data = await cmdAgentBrowserTabClose(params);
         break;
       case "dom_overview":
         response.data = await cmdDomOverview(params);
@@ -1488,6 +1494,28 @@ async function cmdGoForward() {
   });
 }
 
+// -- reload --
+async function cmdReload() {
+  const tabId = await findUsableTabId();
+  await chrome.tabs.reload(tabId);
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      attachedTabId = null;
+      resolve({ reload: true, status: "timeout" });
+    }, 10000);
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        attachedTabId = null;
+        resolve({ reload: true, status: "complete" });
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
 // -- drag --
 async function cmdDrag(params) {
   const { startX, startY, endX, endY, duration = 500 } = params;
@@ -2077,6 +2105,20 @@ async function cmdAgentBrowserTabNew(params) {
   return { ok: true, tabId: tab.id, url: tab.url || params.url || "about:blank" };
 }
 
+async function cmdAgentBrowserTabClose(params) {
+  const tabId = params.tabId;
+  if (!tabId) throw new Error("tabId is required");
+  if (tabId === targetTabId) {
+    targetTabId = null;
+  }
+  if (tabId === attachedTabId) {
+    try { await chrome.debugger.detach({ tabId }); } catch (_) {}
+    attachedTabId = null;
+  }
+  await chrome.tabs.remove(tabId);
+  return { ok: true, tabId };
+}
+
 
 
 
@@ -2491,9 +2533,9 @@ function filterNetworkEntries(params = {}) {
   let entries = [...networkCaptureState.entries];
   if (params.urlContains) entries = entries.filter(e => (e.url || "").includes(params.urlContains));
   if (params.method) entries = entries.filter(e => String(e.method || "").toUpperCase() === String(params.method).toUpperCase());
-  if (params.status !== undefined) entries = entries.filter(e => e.status === params.status);
+  if (params.status != null) entries = entries.filter(e => e.status === params.status);
   if (params.resourceType) entries = entries.filter(e => e.resourceType === params.resourceType);
-  if (params.hasResponseBody !== undefined) entries = entries.filter(e => !!e.responseBody === !!params.hasResponseBody);
+  if (params.hasResponseBody != null) entries = entries.filter(e => !!e.responseBody === !!params.hasResponseBody);
   return entries.slice(-limit).reverse();
 }
 

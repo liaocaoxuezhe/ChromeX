@@ -7,7 +7,9 @@
 在每次点击、输入或滚动之后，优先获取一次新的 DOM 快照或截图，确认页面状态再执行下一步。这能避免在元素尚未加载完成时就进行操作。
 
 ```js
-const tab = await browser.tabs.selected();
+const tabs = await browser.user.openTabs();
+const existing = tabs.find(t => (t.raw?.url || "").includes("example.com"));
+const tab = existing ? await browser.user.claimTab(existing) : await browser.tabs.new("https://example.com");
 await tab.goto("https://example.com");
 await tab.playwright.waitForLoadState("networkidle");
 console.log(await tab.playwright.domSnapshot());

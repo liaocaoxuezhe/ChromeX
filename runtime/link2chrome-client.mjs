@@ -573,15 +573,36 @@ export function createNativeMessagingTransport({
   };
 }
 
-export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocketImpl = globalThis.WebSocket } = {}) {
+export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocketImpl = globalThis.WebSocket, commandTimeoutMs = 30000 } = {}) {
   let leaseToken = null;
+  const command = (commandName, params = {}, options = {}) => sendHubCommand({
+    url,
+    WebSocketImpl,
+    commandName,
+    params,
+    leaseToken,
+    timeoutMs: options.timeoutMs ?? commandTimeoutMs,
+  });
   return {
+    setLeaseToken(token) {
+      leaseToken = token;
+    },
+    async healthCheck({ timeoutMs = 750 } = {}) {
+      if (!WebSocketImpl) return false;
+      try {
+        await command("get_info", {}, { timeoutMs });
+        return true;
+      } catch {
+        return false;
+      }
+    },
     async acquireLease(name) {
       const lease = await sendHubCommand({
         url,
         WebSocketImpl,
         commandName: "__hub_acquire__",
         params: { name },
+        timeoutMs: commandTimeoutMs,
       });
       leaseToken = lease.lease_token;
       return lease;
@@ -594,6 +615,7 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
         WebSocketImpl,
         commandName: "__hub_release__",
         params: { lease_token: token },
+        timeoutMs: commandTimeoutMs,
       });
       if (!lease.lease_token || lease.lease_token === leaseToken) {
         leaseToken = null;
@@ -605,7 +627,7 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       if (!WebSocketImpl) {
         throw new Error("createWebSocketTransport requires global WebSocket or WebSocketImpl");
       }
-      const send = (commandName, params = {}) => sendHubCommand({ url, WebSocketImpl, commandName, params, leaseToken });
+      const send = (commandName, params = {}) => command(commandName, params);
       if (name === "browser_tabs_list") {
         const raw = await send("get_all_tabs", args);
         const tabs = [];
@@ -633,12 +655,13 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       if (name === "browser.wait") return send("agent_browser_wait", args);
       if (name === "browser.clipboard.readText") return send("clipboard_read", args);
       if (name === "browser.clipboard.writeText") return send("clipboard_write", args);
+      if (name === "script_evaluate") return send("script_evaluate", normalizeScriptEvaluateArgs(args));
       if (name === "browser_navigate") return send("navigate", args);
       if (name === "browser.dom.overview") return send("dom_overview", args);
       if (name === "browser.dom.query") return send("dom_query", args);
       if (name === "browser.dom.search") return send("dom_search", args);
       if (name === "browser.dom.click") return send("action_click", args);
-      if (name === "browser.dom.type") return send("action_type", args);
+      if (name === "browser.dom.type") return send("type", normalizeTypeArgs(args));
       if (name === "browser.dom.scroll") return send("action_scroll", args);
       if (name === "browser.cua.screenshot") {
         const image = await send("screenshot", {
@@ -714,7 +737,37 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
   };
 }
 
-function sendHubCommand({ url, WebSocketImpl, commandName, params, leaseToken }) {
+function normalizeScriptEvaluateArgs(args = {}) {
+  if (typeof args.expression === "string") return args;
+  if (typeof args.script !== "string") return args;
+  const { script, ...rest } = args;
+  return { ...rest, expression: script };
+}
+
+function normalizeTypeArgs(args = {}) {
+  if (!args.target) return args;
+  const { target, ...rest } = args;
+  const flatTarget = targetToTypeArgs(target);
+  if (Object.keys(flatTarget).length > 0) return { ...rest, ...flatTarget };
+  return args;
+}
+
+function targetToTypeArgs(target = {}) {
+  if (target.selector) return { selector: target.selector };
+  if (typeof target.x === "number" && typeof target.y === "number") {
+    return { x: target.x, y: target.y };
+  }
+  return {};
+}
+
+function unwrapScriptEvaluateResult(raw) {
+  if (raw && typeof raw === "object" && Object.prototype.hasOwnProperty.call(raw, "result")) {
+    return raw.result;
+  }
+  return raw;
+}
+
+function sendHubCommand({ url, WebSocketImpl, commandName, params, leaseToken, timeoutMs = 30000 }) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocketImpl(url);
     const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -723,7 +776,7 @@ function sendHubCommand({ url, WebSocketImpl, commandName, params, leaseToken })
         ws.close();
       } catch {}
       reject(new Error(`Link2Chrome command timed out: ${commandName}`));
-    }, 30000);
+    }, timeoutMs);
 
     ws.addEventListener("open", () => {
       ws.send(JSON.stringify({
@@ -764,6 +817,10 @@ async function screenshotPointToCss(send, x, y) {
 
 function cleanNumber(value) {
   return Number.isInteger(value) ? value : Number(value.toFixed(3));
+}
+
+function omitUndefined(value = {}) {
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined));
 }
 
 class Link2ChromeError extends Error {
@@ -935,12 +992,15 @@ class UserSurface {
   }
 
   async openTabs() {
+    // browser.user.openTabs: list real user Chrome tabs before claiming one.
     return this._browser.tabs.list();
   }
 
-  async claimTab(options = {}) {
-    if (options.tabId !== undefined && options.tabId !== null) {
-      await this._transport.command("browser_tab_switch", { tabId: options.tabId });
+  async claimTab(tabOrOptions = {}) {
+    // browser.user.claimTab: accept a Tab, raw tab object, or { tabId }.
+    const tabId = tabOrOptions?.tabId ?? tabOrOptions?.id ?? tabOrOptions?.raw?.id;
+    if (tabId !== undefined && tabId !== null) {
+      await this._transport.command("browser_tab_switch", { tabId });
     }
     return this._browser.tabs.selected();
   }
@@ -996,7 +1056,7 @@ class Tab {
 
   async url() {
     try {
-      const info = await this._transport.command("browser_tab_info", {});
+      const info = await this._transport.command("browser_tab_info", { tabId: this.id });
       return info.url ?? this._url;
     } catch {
       return this._url;
@@ -1005,7 +1065,7 @@ class Tab {
 
   async title() {
     try {
-      const info = await this._transport.command("browser_tab_info", {});
+      const info = await this._transport.command("browser_tab_info", { tabId: this.id });
       return info.title ?? this._title;
     } catch {
       return this._title;
@@ -1038,7 +1098,7 @@ class Tab {
   }
 
   async info() {
-    return this._transport.command("browser_tab_info", {});
+    return this._transport.command("browser_tab_info", { tabId: this.id });
   }
 
   async screenshot(options = {}) {
@@ -1089,11 +1149,17 @@ class PlaywrightSurface {
   }
 
   async evaluate(pageFunction, arg, options = {}) {
-    const script = typeof pageFunction === "string"
+    const hasArg = arguments.length >= 2;
+    const expression = typeof pageFunction === "string"
       ? pageFunction
-      : `(${pageFunction.toString()})(${JSON.stringify(arg)})`;
+      : `(() => {
+        const fn = (${pageFunction.toString()});
+        const args = ${JSON.stringify(hasArg ? [arg] : [])};
+        return fn.apply(null, args);
+      })()`;
     const timeout = options.timeoutMs ?? options.timeout ?? 30000;
-    return this._transport.command("script_evaluate", { script, awaitPromise: true, timeout });
+    const raw = await this._transport.command("script_evaluate", { expression, awaitPromise: true, timeout });
+    return unwrapScriptEvaluateResult(raw);
   }
 
   async waitForTimeout(timeoutMs) {
@@ -1131,22 +1197,19 @@ class PlaywrightSurface {
       networkidle: "(function(){const e=performance.getEntriesByType('resource');const n=performance.now();return e.filter(r=>n-r.startTime<500).length===0&&document.readyState==='complete';})()",
     };
 
-    if (readyScripts[state]) {
-      while (Date.now() < deadline) {
-        const result = await this._evalBoolean(readyScripts[state]);
-        if (result === true) return;
-        if (result === undefined) break; // transport doesn't support script_evaluate, fallback
-        await new Promise((resolve) => setTimeout(resolve, sleepMs));
-      }
+    if (!readyScripts[state]) {
+      throw new Error(`Unsupported load state: ${state}`);
     }
 
-    // Fallback to browser.wait for unknown states or when script_evaluate unavailable
-    const condition = state === "networkidle" ? "network-idle" : "dom-ready";
-    return this._transport.command("browser.wait", {
-      condition,
-      state,
-      ...opts,
-    });
+    while (Date.now() < deadline) {
+      const result = await this._evalBoolean(readyScripts[state]);
+      if (result === true) return;
+      if (result === undefined) {
+        throw new Error("script_evaluate is required for waitForLoadState");
+      }
+      await new Promise((resolve) => setTimeout(resolve, sleepMs));
+    }
+    throw new TimeoutError(`waitForLoadState('${state}') timed out after ${timeoutMs}ms`, state, await this._tab?.url?.());
   }
 
   async waitForURL(pattern, options = {}) {
@@ -1277,7 +1340,7 @@ class PlaywrightSurface {
 
   async _evalBoolean(script) {
     try {
-      const raw = await this._transport.command("script_evaluate", { script, awaitPromise: false, timeout: 5000 });
+      const raw = await this._transport.command("script_evaluate", { expression: script, awaitPromise: false, timeout: 5000 });
       if (typeof raw === "boolean") return raw;
       if (raw && typeof raw === "object" && typeof raw.result === "boolean") return raw.result;
     } catch {
@@ -1641,7 +1704,7 @@ class Locator {
       if (raw && typeof raw === "object" && typeof raw.result === "number") return raw.result;
       return 0;
     }
-    const raw = await this._transport.command("script_evaluate", { script });
+    const raw = await this._transport.command("script_evaluate", { expression: script });
     if (typeof raw === "number") return raw;
     if (raw && typeof raw === "object" && typeof raw.result === "number") return raw.result;
     return 0;
@@ -1669,7 +1732,7 @@ class Locator {
       safety: options.safety,
     });
     return this._transport.command("browser.dom.type", this._withFrameContext({
-      target,
+      ...targetToTypeArgs(target),
       text,
       clearFirst: options.clearFirst ?? true,
     }));
@@ -1752,7 +1815,7 @@ class Locator {
     if (this._hasFrameContext()) {
       return this._transport.command("frame_evaluate", { frameSelectors: this._frameSelectors(), script, ...commandOptions });
     }
-    return this._transport.command("script_evaluate", { script, ...commandOptions });
+    return this._transport.command("script_evaluate", { expression: script, ...commandOptions });
   }
 
   async dblclick(options = {}) {
@@ -1896,7 +1959,7 @@ class Locator {
       return String(raw ?? "");
     }
     const raw = await this._transport.command("script_evaluate", {
-      script,
+      expression: script,
       awaitPromise: false,
       timeout: options.timeoutMs ?? options.timeout ?? 30000,
     });
@@ -1915,7 +1978,7 @@ class Locator {
       safety: options.safety,
     });
     return this._transport.command("browser.dom.type", this._withFrameContext({
-      target,
+      ...targetToTypeArgs(target),
       text,
       clearFirst: false,
     }));
@@ -1940,7 +2003,7 @@ class Locator {
     `;
     const getUrl = this._hasFrameContext()
       ? await this._transport.command("frame_evaluate", { frameSelectors: this._frameSelectors(), script, timeout: options.timeoutMs ?? options.timeout ?? 30000 })
-      : await this._transport.command("script_evaluate", { script, awaitPromise: false, timeout: options.timeoutMs ?? options.timeout ?? 30000 });
+      : await this._transport.command("script_evaluate", { expression: script, awaitPromise: false, timeout: options.timeoutMs ?? options.timeout ?? 30000 });
     const resolvedUrl = typeof getUrl === "string" ? getUrl : (getUrl?.result || "");
     if (!resolvedUrl) throw new Error("downloadMedia: element has no src or href");
 
@@ -1959,7 +2022,7 @@ class Locator {
     if (this._hasFrameContext()) {
       await this._transport.command("frame_evaluate", { frameSelectors: this._frameSelectors(), script: downloadScript, timeout: 10000 });
     } else {
-      await this._transport.command("script_evaluate", { script: downloadScript, awaitPromise: false, timeout: 10000 });
+      await this._transport.command("script_evaluate", { expression: downloadScript, awaitPromise: false, timeout: 10000 });
     }
     return { url: resolvedUrl, suggestedFilename: options.suggestedFilename || null };
   }
@@ -2268,13 +2331,13 @@ class CuaSurface {
       const map = { 1: "left", 2: "middle", 3: "right", 4: "back", 5: "forward" };
       button = map[button] || "left";
     }
-    return this._transport.command("browser.cua.click", {
+    return this._transport.command("browser.cua.click", omitUndefined({
       x,
       y,
       button,
       keypress,
       ...commandOptions,
-    });
+    }));
   }
 
   async double_click(options = {}) {
@@ -2480,7 +2543,7 @@ class DomCuaSurface {
       const { node_id, x, y } = options;
       if (node_id !== undefined) {
         return this._transport.command("script_evaluate", {
-          script: `(function() {
+          expression: `(function() {
             const el = document.querySelector('[data-link2chrome-node-id="${node_id}"]') || document.querySelector('[data-node-id="${node_id}"]') || document.getElementById(${JSON.stringify(node_id)});
             if (el && el.scrollBy) { el.scrollBy(${x || 0}, ${y || 0}); return true; }
             return false;

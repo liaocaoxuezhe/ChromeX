@@ -150,8 +150,8 @@ async function main() {
     await loc.downloadMedia();
     const cmds = mock.commands.filter((c) => c.name === "script_evaluate");
     assertTrue(cmds.length >= 1, "script_evaluate should be called at least once");
-    assertIncludes(cmds[0].args.script, "document.querySelector", "first script_evaluate should query element");
-    assertIncludes(cmds[0].args.script, "el.src || el.href", "should read src or href");
+    assertIncludes(cmds[0].args.expression, "document.querySelector", "first script_evaluate should query element");
+    assertIncludes(cmds[0].args.expression, "el.src || el.href", "should read src or href");
   });
 
   await test("downloadMedia sends second script_evaluate to trigger download", async () => {
@@ -160,8 +160,8 @@ async function main() {
     await loc.downloadMedia({ suggestedFilename: "logo.png" });
     const cmds = mock.commands.filter((c) => c.name === "script_evaluate");
     assertTrue(cmds.length >= 2, "script_evaluate should be called twice");
-    assertIncludes(cmds[1].args.script, "document.createElement('a')", "second script should create anchor");
-    assertIncludes(cmds[1].args.script, "a.click()", "second script should click anchor");
+    assertIncludes(cmds[1].args.expression, "document.createElement('a')", "second script should create anchor");
+    assertIncludes(cmds[1].args.expression, "a.click()", "second script should click anchor");
   });
 
   await test("downloadMedia returns url and suggestedFilename", async () => {

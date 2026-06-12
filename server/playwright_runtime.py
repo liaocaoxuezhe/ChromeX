@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Link2Chrome Playwright Runtime
+Link2Chrome legacy Extension-side code runtime
 
-为 playwright_run 工具提供 Python 端编排：
+为旧 Extension-side page shim 提供 Python 端编排。当前主工具是
+browser_code_run，Node.js Runtime 是主路径。
+
+本文件保留给旧测试和旧集成路径：
 - 将用户代码发送到 Extension 的 playwright_batch 命令
 - 处理超时和错误
 - 截断过大的返回结果
@@ -19,7 +22,7 @@ class PlaywrightRuntime:
     """Python 侧 Playwright 运行时编排器。
 
     采用 Extension-side page shim 架构：
-    - Server 收到 playwright_run(code=...) 后，把 code 原样发送给 Extension
+    - Server 收到旧 browser code 请求后，把 code 原样发送给 Extension
     - Extension 在 cmdPlaywrightBatch 中构建 page 对象并执行用户代码
     - Server 只负责超时控制、结果截断和错误包装
     """
@@ -54,9 +57,9 @@ class PlaywrightRuntime:
                 timeout=timeout / 1000.0 + 5.0,  # 给通信留一点余量
             )
         except asyncio.TimeoutError:
-            return {"ok": False, "error": f"playwright_run timed out after {timeout}ms"}
+            return {"ok": False, "error": f"legacy browser code runtime timed out after {timeout}ms"}
         except Exception as e:
-            return {"ok": False, "error": f"playwright_run failed: {e}"}
+            return {"ok": False, "error": f"legacy browser code runtime failed: {e}"}
 
         # Extension 返回的 payload 在 result 字段下
         if isinstance(result, dict):
