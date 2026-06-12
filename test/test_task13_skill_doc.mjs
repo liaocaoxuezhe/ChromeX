@@ -145,14 +145,14 @@ await test("淘汰写法检查：SKILL.md 不含旧写法", () => {
 // 4. 必备章节检查
 // ============================================================================
 const REQUIRED_SECTIONS = [
-  "Bootstrap",
+  "启动说明",
   "文档自学习",
-  "Tab Management",
-  "API Use Behavior",
-  "Snapshot Discipline",
+  "标签页管理",
+  "API 使用行为",
+  "快照纪律",
   "Locator 策略",
   "错误恢复",
-  "Browser Safety",
+  "浏览器安全",
 ];
 
 await test("必备章节检查", () => {

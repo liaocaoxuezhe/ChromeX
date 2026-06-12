@@ -18,12 +18,12 @@ def test_local_browser_skill_prefers_open_tabs_and_claim_tab_for_complex_tasks()
 
     required_flow = (
         "browser_diagnose -> browser_tabs_list -> browser_session(action='create' 或 'new_tab') "
-        "-> assert current URL -> globalThis.tab = target tab"
+        "-> browser_code_run 中读取 API 文档 -> 断言当前 URL -> globalThis.tab = target tab"
     )
     assert required_flow in skill
     assert "browser.user.openTabs()" in skill
     assert "browser.user.claimTab" in skill
-    assert "复杂任务不要默认从 browser.tabs.selected() 开始" in skill
+    assert "复杂任务不要默认从 `browser.tabs.selected()` 开始" in skill
 
 
 def test_runtime_exposes_browser_code_run_startup_summary_contract():

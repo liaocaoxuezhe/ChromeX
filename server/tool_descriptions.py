@@ -569,9 +569,9 @@ TOOL_DEFINITIONS = [
     {
         "name": "browser_code_run",
         "description": (
-            "Execute JavaScript code to control the real Chrome browser for long-running, multi-step browser tasks. "
-            "This is the primary code-based browser automation tool: use it when writing code is clearer than issuing many small MCP actions. "
-            "The code runs with async/await support, closures, and cross-call variable persistence (variables declared with 'const' or 'let' in one tool call remain available in subsequent calls).\n\n"
+            "Preferred tool for complex browser automation. Write JavaScript code with Playwright-style APIs to control the user's real Chrome browser across multiple steps, tabs, waits, loops, and data extraction. "
+            "Use this instead of many small browser/action tool calls whenever a task has 3+ browser steps, conditional logic, repeated actions, explicit waiting, or long-running page work. "
+            "The code runs in a persistent Node.js context with async/await support and cross-call variables: values declared in one call can be reused in later calls.\n\n"
             "**Execution Environment:**\n"
             "- Runs in a Node.js subprocess via stdio IPC.\n"
             "- Pre-injected globals: `browser` (Browser instance), `link2chrome` (client API namespace), `console` (redirected to MCP logs).\n"
@@ -610,9 +610,9 @@ TOOL_DEFINITIONS = [
                 "code": {
                     "type": "string",
                     "description": (
-                        "Playwright-style JavaScript code executed in the Node.js runtime. "
+                        "JavaScript browser-automation program executed in the Node.js runtime with Playwright-style APIs. "
                         "Use the pre-bound `browser` and `link2chrome` objects. "
-                        "Use 'return' to send serializable results back to the MCP client."
+                        "Use 'return' to send serializable results back to the MCP client. Prefer this for multi-step browser workflows."
                     ),
                 },
                 "timeout": {
@@ -630,7 +630,9 @@ TOOL_DEFINITIONS = [
     {
         "name": "script_evaluate",
         "description": (
-            "Evaluate JavaScript in the page context and return JSON. Use for framework state or precise custom extraction."
+            "Evaluate a short JavaScript expression in the current page context and return JSON. "
+            "Use this for one-off page state checks or precise custom extraction inside the current tab. "
+            "Do not use it for multi-step browser automation, waits, tab management, loops, or workflows; use browser_code_run instead."
         ),
         "inputSchema": _obj_schema(
             {
