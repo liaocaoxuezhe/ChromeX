@@ -26,6 +26,29 @@ def test_local_browser_skill_prefers_open_tabs_and_claim_tab_for_complex_tasks()
     assert "复杂任务不要默认从 `browser.tabs.selected()` 开始" in skill
 
 
+def test_skill_first_screen_contains_playwright_migration_template():
+    skill = _read("skills/link2chrome-browser-mcp/SKILL.md")
+
+    first_screen = skill.split("## 文档自学习", 1)[0]
+
+    assert "Playwright 迁移速记" in first_screen
+    assert "page 是 Link2Chrome 兼容 facade" in first_screen
+    assert "const tab = await browser.tabs.selected()" in first_screen
+    assert "const page = tab.playwright" in first_screen
+    assert "await page.evaluate(() => document.title)" in first_screen
+
+
+def test_api_doc_leads_with_preinjected_browser_and_page_facade():
+    api = _read("runtime/docs/api.md")
+
+    first_screen = api.split("---", 1)[0]
+
+    assert "browser 已预注入" in first_screen
+    assert "page 是 Link2Chrome 兼容 facade" in first_screen
+    assert "const tab = await browser.tabs.selected()" in first_screen
+    assert "const page = tab.playwright" in first_screen
+
+
 def test_runtime_exposes_browser_code_run_startup_summary_contract():
     runtime = _read("runtime/nodejs-playwright-runtime.mjs")
 

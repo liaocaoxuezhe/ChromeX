@@ -574,7 +574,8 @@ TOOL_DEFINITIONS = [
             "The code runs in a persistent Node.js context with async/await support and cross-call variables: values declared in one call can be reused in later calls.\n\n"
             "**Execution Environment:**\n"
             "- Runs in a Node.js subprocess via stdio IPC.\n"
-            "- Pre-injected globals: `browser` (Browser instance), `link2chrome` (client API namespace), `console` (redirected to MCP logs).\n"
+            "- Pre-injected globals: `browser` (Browser instance), `page` (Link2Chrome Playwright Page facade), `link2chrome` (client API namespace), `console` (redirected to MCP logs).\n"
+            "- `page` is a compatibility facade for common Playwright habits such as `page.evaluate(...)`, `page.locator(...)`, `page.getByRole(...)`, and `page.waitForLoadState(...)`; it is not a full Playwright Page.\n"
             "- Under the hood, the Node.js process connects to the Browser Hub via WebSocket (ws://localhost:8766) and reuses the Chrome Extension + CDP transport.\n\n"
             "**Startup metadata:** each successful call returns `meta.startupSummary` with the currently bound tab id, URL, title, debuggable state, and session/group hints when available.\n\n"
             "**When to use:**\n"
@@ -588,6 +589,12 @@ TOOL_DEFINITIONS = [
             "- Just reading page content → use browser_dom_get_text\n"
             "- Just taking a screenshot → use browser_screenshot\n\n"
             "**Examples:**\n"
+            "```javascript\n"
+            "// Playwright migration quick start: page is a Link2Chrome facade.\n"
+            "const tab = await browser.tabs.selected();\n"
+            "const page = tab.playwright;\n"
+            "return await page.evaluate(() => document.title);\n"
+            "```\n\n"
             "```javascript\n"
             "// Prefer openTabs + claimTab for existing user tabs; fall back to a new tab.\n"
             "const tabs = await browser.user.openTabs();\n"
@@ -611,7 +618,7 @@ TOOL_DEFINITIONS = [
                     "type": "string",
                     "description": (
                         "JavaScript browser-automation program executed in the Node.js runtime with Playwright-style APIs. "
-                        "Use the pre-bound `browser` and `link2chrome` objects. "
+                        "Use the pre-bound `browser`, `page`, and `link2chrome` objects. "
                         "Use 'return' to send serializable results back to the MCP client. Prefer this for multi-step browser workflows."
                     ),
                 },

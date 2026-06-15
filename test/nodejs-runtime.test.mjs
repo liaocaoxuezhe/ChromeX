@@ -326,11 +326,85 @@ describe("错误处理", () => {
     });
   });
 
+  it("page is not defined 返回指向 page facade 的修复提示", async () => {
+    await withRuntime(async (rt) => {
+      const res = await execute(rt, "throw new ReferenceError('page is not defined')");
+      assert.equal(res.ok, false);
+      assert.equal(res.errorType, "ReferenceError");
+      assert.match(res.hint, /page facade/);
+      assert.match(res.hint, /const tab = await browser\.tabs\.selected\(\)/);
+      assert.match(res.hint, /const page = tab\.playwright/);
+    });
+  });
+
   it("语法错误返回 ok:false 并携带错误信息", async () => {
     await withRuntime(async (rt) => {
       const res = await execute(rt, "return { a: 1");
       assert.equal(res.ok, false);
       assert.ok(typeof res.error === "string" && res.error.length > 0, "期望存在 error 字符串");
+    });
+  });
+});
+
+describe("Playwright page facade", () => {
+  async function withRuntime(fn) {
+    const rt = startRuntime();
+    await rt.waitFor((m) => m.type === "ready", STARTUP_TIMEOUT);
+    try {
+      await fn(rt);
+    } finally {
+      rt.shutdown();
+      await new Promise((resolve) => rt.proc.on("exit", resolve));
+    }
+  }
+
+  async function execute(rt, code, timeout = 5000) {
+    const id = `page-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    rt.send({ id, type: "execute", code, timeout });
+    return rt.waitFor((m) => m.id === id, timeout + 2000);
+  }
+
+  it("预注入 page，并将 evaluate 委托给当前 tab.playwright", async () => {
+    await withRuntime(async (rt) => {
+      const res = await execute(rt, `
+        globalThis.tab = {
+          playwright: {
+            async evaluate(fn) {
+              return fn();
+            }
+          }
+        };
+        return await page.evaluate(() => "page-ok");
+      `);
+
+      assert.equal(res.ok, true);
+      assert.equal(res.result, "page-ok");
+    });
+  });
+
+  it("page.locator 链式调用会延迟委托给当前 tab.playwright locator", async () => {
+    await withRuntime(async (rt) => {
+      const res = await execute(rt, `
+        globalThis.tab = {
+          playwright: {
+            locator(selector) {
+              return {
+                nth(index) {
+                  return {
+                    async textContent() {
+                      return selector + ":" + index;
+                    }
+                  };
+                }
+              };
+            }
+          }
+        };
+        return await page.locator(".item").nth(2).textContent();
+      `);
+
+      assert.equal(res.ok, true);
+      assert.equal(res.result, ".item:2");
     });
   });
 });

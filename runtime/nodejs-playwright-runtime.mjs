@@ -60,6 +60,128 @@ let agent = null;
 let transport = null;
 let hubConnected = false;
 
+const LOCATOR_CHAIN_METHODS = new Set([
+  "locator",
+  "frameLocator",
+  "getByText",
+  "getByRole",
+  "getByLabel",
+  "getByPlaceholder",
+  "getByTestId",
+  "filter",
+  "nth",
+  "first",
+  "last",
+]);
+
+const TAB_METHODS = new Set([
+  "goto",
+  "reload",
+  "back",
+  "forward",
+  "goBack",
+  "goForward",
+  "url",
+  "title",
+  "info",
+  "screenshot",
+  "waitFor",
+  "close",
+]);
+
+async function resolveCurrentTabForPageFacade() {
+  if (globalThis.tab) return globalThis.tab;
+  if (!browser?.tabs?.selected) {
+    throw new Error("page facade 无法获取当前标签页：browser.tabs.selected() 不可用。");
+  }
+
+  const selected = await browser.tabs.selected();
+  if (!selected) {
+    throw new Error("page facade 无法获取当前标签页：请先用 browser.tabs.new(url) 或 browser.user.claimTab(...) 绑定标签页。");
+  }
+
+  globalThis.tab = selected;
+  return selected;
+}
+
+function createLocatorFacade(resolveLocator) {
+  return new Proxy({}, {
+    get(_target, prop) {
+      if (prop === "then") return undefined;
+      if (prop === Symbol.toStringTag) return "Link2ChromeLocatorFacade";
+
+      return (...args) => {
+        if (LOCATOR_CHAIN_METHODS.has(prop)) {
+          return createLocatorFacade(async () => {
+            const locator = await resolveLocator();
+            const fn = locator?.[prop];
+            if (typeof fn !== "function") {
+              throw new TypeError(`page locator facade 不支持 ${String(prop)}()`);
+            }
+            return await fn.apply(locator, args);
+          });
+        }
+
+        return (async () => {
+          const locator = await resolveLocator();
+          const value = locator?.[prop];
+          if (typeof value === "function") {
+            return await value.apply(locator, args);
+          }
+          if (args.length > 0) {
+            throw new TypeError(`page locator facade 属性 ${String(prop)} 不是函数`);
+          }
+          return value;
+        })();
+      };
+    },
+  });
+}
+
+function createPageFacade() {
+  return new Proxy({}, {
+    get(_target, prop) {
+      if (prop === "then") return undefined;
+      if (prop === Symbol.toStringTag) return "Link2ChromePageFacade";
+
+      if (prop === "tab") {
+        return resolveCurrentTabForPageFacade;
+      }
+
+      if (TAB_METHODS.has(prop)) {
+        return async (...args) => {
+          const tab = await resolveCurrentTabForPageFacade();
+          const fn = tab?.[prop];
+          if (typeof fn !== "function") {
+            throw new TypeError(`page facade 无法在 tab 上调用 ${String(prop)}()`);
+          }
+          return await fn.apply(tab, args);
+        };
+      }
+
+      if (LOCATOR_CHAIN_METHODS.has(prop)) {
+        return (...args) => createLocatorFacade(async () => {
+          const tab = await resolveCurrentTabForPageFacade();
+          const fn = tab?.playwright?.[prop];
+          if (typeof fn !== "function") {
+            throw new TypeError(`page facade 无法在 tab.playwright 上调用 ${String(prop)}()`);
+          }
+          return await fn.apply(tab.playwright, args);
+        });
+      }
+
+      return async (...args) => {
+        const tab = await resolveCurrentTabForPageFacade();
+        const fn = tab?.playwright?.[prop];
+        if (typeof fn !== "function") {
+          throw new TypeError(`page facade 不支持 ${String(prop)}()；请改用 tab.playwright 或 browser.tabs API。`);
+        }
+        return await fn.apply(tab.playwright, args);
+      };
+    },
+  });
+}
+
 async function setupClient() {
   await resolveWebSocketImpl();
 
@@ -80,6 +202,7 @@ async function setupClient() {
 function setupReplContext() {
   globalThis.link2chrome = link2chrome;
   globalThis.browser = browser;
+  globalThis.page = createPageFacade();
   globalThis.console = ipcConsole;
   agent = {
     browsers: link2chrome.browsers,
@@ -260,6 +383,50 @@ function persistTopLevelDeclarations(code) {
   }).join("\n");
 }
 
+function buildErrorHint(error) {
+  const name = error?.name || "";
+  const message = error?.message || String(error);
+
+  if (name === "ReferenceError" && /\bpage\b.*not defined|page is not defined/i.test(message)) {
+    return "page is not defined：browser_code_run 现在会预注入 page facade；若在旧上下文或局部作用域中遇到该错误，请使用 `const tab = await browser.tabs.selected(); const page = tab.playwright;`，或直接调用预注入的 `page.evaluate(...)`。page facade 是 Link2Chrome 的 Playwright 兼容层，不是完整 Playwright Page。";
+  }
+
+  if (name === "ReferenceError" && /\btab\b.*not defined|tab is not defined/i.test(message)) {
+    return "tab is not defined：请先用 `const tab = await browser.tabs.selected()` 获取当前标签页；复杂任务优先 `browser.user.openTabs()` + `browser.user.claimTab(...)`，再通过 `tab.playwright` 操作页面。";
+  }
+
+  if (name === "ReferenceError") {
+    return "变量未定义。请检查拼写、作用域；若要跨 browser_code_run 调用复用变量，请赋值到 globalThis。";
+  }
+
+  if (name === "SyntaxError") {
+    return "JavaScript 语法错误。请检查括号、引号、逗号和 return 语句位置。";
+  }
+
+  if (name === "TypeError") {
+    return "类型错误。常见原因是对象为空、API 名称写错、异步调用缺少 await，或在错误的对象上调用方法。";
+  }
+
+  if (message.includes("Timeout after")) {
+    return "代码执行超时。请检查等待条件是否会结束，避免无限等待；必要时提高 timeout。";
+  }
+
+  if (/playwright|locator|selector|timeout/i.test(message)) {
+    return "浏览器自动化调用失败。请确认目标 tab 正确、选择器存在；使用 tab.playwright 或 page facade 前先读取对应文档。";
+  }
+
+  return "执行 browser_code_run 代码失败。请查看 error 和 stack，必要时先读取 await browser.documentation()。";
+}
+
+function describeExecutionError(error) {
+  return {
+    error: error?.message || String(error),
+    errorType: error?.name || "Error",
+    hint: buildErrorHint(error),
+    stack: error?.stack || "",
+  };
+}
+
 // ─── 代码执行器 ───────────────────────────────────────────
 // 使用 new Function 保持原型链完整，与 Codex Chrome Plugin 策略一致
 async function executeCode({ id, code, timeout = 30000 }) {
@@ -298,8 +465,7 @@ async function executeCode({ id, code, timeout = 30000 }) {
     sendIpc({
       id,
       ok: false,
-      error: error?.message || String(error),
-      stack: error?.stack || "",
+      ...describeExecutionError(error),
       meta: { elapsedMs, startupSummary },
     });
   }

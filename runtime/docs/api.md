@@ -1,9 +1,24 @@
 ## API Reference
 
-本文档是 Link2Chrome Browser MCP 的完整 API 参考。所有接口均基于 `agent.browsers.*` 表面暴露，与 Codex Chrome Extension Plugin 的 API 签名保持一致。
+本文档是 Link2Chrome Browser MCP 的完整 API 参考。`browser_code_run` 的 Node.js Runtime 已经预注入 `browser`、`page`、`agent`、`link2chrome` 和 `console`。
+
+### Playwright 迁移速记
+
+page 是 Link2Chrome 兼容 facade，用来吸收模型常写的 Playwright Page 风格代码；它不是完整 Playwright Page。推荐复杂任务仍显式绑定 `tab`：
+
+```js
+// 已有 Playwright 习惯时，先这样迁移：
+const tab = await browser.tabs.selected();
+const page = tab.playwright;
+return await page.evaluate(() => document.title);
+```
+
+也可以直接使用预注入的 `page.evaluate(...)`、`page.locator(...)`、`page.getByRole(...)` 等高频兼容方法。多标签页、用户已打开标签页、session/finalize 等能力仍通过 `browser.tabs` 和 `browser.user` 管理。
+
+所有接口均基于预注入的 `browser` 以及 `agent.browsers.*` 表面暴露，与 Codex Chrome Extension Plugin 的 API 签名保持一致。
 
 ```ts
-// 通过 Node.js Runtime 注入的全局 agent 使用
+// browser 已预注入；也可以通过 agent 获取同一个 Extension Browser
 const browser = await agent.browsers.get("extension");
 
 interface Agent {
