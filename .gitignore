@@ -33,3 +33,8 @@ output/
 .agents/
 .claude/worktrees/
 orchestration/
+
+# Documents
+docs/
+test/
+Output/
