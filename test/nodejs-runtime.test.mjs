@@ -337,6 +337,18 @@ describe("错误处理", () => {
     });
   });
 
+  it("未定义变量返回 ReferenceError 类型和修复提示", async () => {
+    await withRuntime(async (rt) => {
+      const res = await execute(rt, "missingValue;");
+      assert.equal(res.ok, false);
+      assert.equal(res.errorType, "ReferenceError");
+      assert.ok(res.error.includes("missingValue"), `期望错误包含变量名，实际: ${res.error}`);
+      assert.ok(res.hint.includes("未定义"), `期望 hint 提醒未定义变量，实际: ${res.hint}`);
+      assert.ok(typeof res.stack === "string" && res.stack.length > 0, "期望存在 stack");
+      assert.ok(typeof res.meta === "object" && res.meta !== null, "期望存在 meta");
+    });
+  });
+
   it("语法错误返回 ok:false 并携带错误信息", async () => {
     await withRuntime(async (rt) => {
       const res = await execute(rt, "return { a: 1");

@@ -57,9 +57,12 @@ class SessionManager:
                 }
                 return self._sessions[session]
 
+            seed_tab_id = result.get("tabId")
+            tab_ids = {seed_tab_id} if seed_tab_id is not None else set()
+
             self._sessions[session] = {
                 "group_id": group_id,
-                "tab_ids": set(),
+                "tab_ids": tab_ids,
                 "group_title": title,
             }
             logger.info(f"创建 session '{session}' → group {group_id} (title='{title}')")

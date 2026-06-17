@@ -883,11 +883,16 @@ async def tool_browser_code_run(args: dict) -> list[TextContent]:
                 return _json_content(payload)
             else:
                 # Node.js 正常执行但用户代码出错，直接返回错误（含堆栈）
-                return _json_content({
+                payload = {
                     "ok": False,
                     "error": result.get("error", "未知错误"),
+                    "errorType": result.get("errorType"),
+                    "hint": result.get("hint"),
                     "stack": result.get("stack"),
-                })
+                }
+                if result.get("meta") is not None:
+                    payload["meta"] = result["meta"]
+                return _json_content(payload)
         except Exception as exc:
             logger.warning(
                 f"Node.js Runtime 异常: {exc}，拒绝降级到 Extension 端 PlaywrightRuntime"

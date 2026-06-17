@@ -1159,10 +1159,9 @@ async function waitForTabsNavigation(tabId, url, timeoutMs) {
 }
 
 async function navigateWithTabs(url, timeoutMs) {
-  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  let tabId = activeTab?.id || null;
+  let tabId = null;
 
-  if (!tabId && targetTabId) {
+  if (targetTabId) {
     try {
       const tab = await chrome.tabs.get(targetTabId);
       tabId = tab.id;
@@ -1170,6 +1169,11 @@ async function navigateWithTabs(url, timeoutMs) {
     } catch (err) {
       console.log(`[Link2Chrome] targetTabId ${targetTabId} 无效，将创建新标签页`);
     }
+  }
+
+  if (!tabId) {
+    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    tabId = activeTab?.id || null;
   }
 
   if (!tabId) {
@@ -2769,24 +2773,14 @@ async function cmdDomGetText(params) {
 
 async function cmdTabGroupCreate(params) {
   const title = params.title || "Link2Chrome Session";
-  // 创建标签组需要一个初始 tab。先获取当前目标 tab 或创建一个临时 tab。
-  let tabId = targetTabId;
-  if (!tabId) {
-    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (tabs.length > 0) {
-      tabId = tabs[0].id;
-    }
-  }
-  if (!tabId) {
-    // 没有可用 tab，创建一个空白标签页
-    const newTab = await chrome.tabs.create({ url: "about:blank" });
-    tabId = newTab.id;
-    targetTabId = tabId;
-  }
+  const newTab = await chrome.tabs.create({ url: "about:blank", active: true });
+  const tabId = newTab.id;
+  targetTabId = tabId;
+  attachedTabId = null;
 
   const groupId = await chrome.tabs.group({ tabIds: [tabId] });
   await chrome.tabGroups.update(groupId, { title, color: "blue" });
-  return { groupId, title };
+  return { groupId, title, tabId };
 }
 
 async function cmdTabGroupAdd(params) {

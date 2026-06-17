@@ -400,6 +400,8 @@ class NodeJSRuntimeManager:
                     future.set_result({
                         "ok": False,
                         "error": msg.get("error", "未知错误"),
+                        "errorType": msg.get("errorType"),
+                        "hint": msg.get("hint"),
                         "stack": msg.get("stack"),
                         "meta": msg.get("meta"),
                     })

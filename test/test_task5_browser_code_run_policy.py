@@ -215,11 +215,18 @@ def test_browser_code_run_starts_nodejs_then_executes(monkeypatch):
 
 def test_browser_code_run_passthrough_user_code_error(monkeypatch):
     """Node.js 执行成功但用户代码报错时，应透传错误信息。"""
+    meta = {
+        "elapsedMs": 12,
+        "startupSummary": {"hubConnected": True, "boundTab": {"id": 7}},
+    }
     mock_nodejs = _make_ready_mock()
     mock_nodejs.execute = AsyncMock(return_value={
         "ok": False,
         "error": "ReferenceError: x is not defined",
+        "errorType": "ReferenceError",
+        "hint": "变量 x 未定义。",
         "stack": "at eval (eval at execute)",
+        "meta": meta,
     })
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
@@ -228,7 +235,10 @@ def test_browser_code_run_passthrough_user_code_error(monkeypatch):
 
     assert payload["ok"] is False
     assert payload["error"] == "ReferenceError: x is not defined"
+    assert payload["errorType"] == "ReferenceError"
+    assert payload["hint"] == "变量 x 未定义。"
     assert payload["stack"] == "at eval (eval at execute)"
+    assert payload["meta"] == meta
 
 
 # --------------------------------------------------------------------------- #

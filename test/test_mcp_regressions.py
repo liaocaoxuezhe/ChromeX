@@ -144,6 +144,66 @@ def test_playwright_run_is_no_longer_callable(monkeypatch):
     mock_nodejs.execute.assert_not_awaited()
 
 
+def test_session_manager_tracks_seed_tab_created_for_group(monkeypatch):
+    """创建 session 时，标签组种子 tab 应纳入 session 生命周期。"""
+    fake = FakeWsManager()
+    monkeypatch.setattr(main, "ws_manager", fake)
+    monkeypatch.setattr(main, "session_manager", main.SessionManager())
+
+    async def send_command(command, args=None, **kwargs):
+        fake.commands.append((command, args or {}))
+        if command == "tab_group_create":
+            return {"groupId": 55, "tabId": 99}
+        raise AssertionError(f"unexpected command: {command}")
+
+    fake.send_command = send_command
+
+    result = asyncio.run(
+        main.call_tool(
+            "browser_session",
+            {"action": "create", "session": "seeded", "group_title": "种子组"},
+        )
+    )
+
+    assert _payload(result)["ok"] is True
+    sessions = main.session_manager.list_sessions()
+    assert sessions == [
+        {
+            "session": "seeded",
+            "groupTitle": "种子组",
+            "tabCount": 1,
+            "groupId": 55,
+        }
+    ]
+
+
+def test_extension_tab_group_create_uses_agent_seed_tab_not_user_active_tab():
+    """tab_group_create 不应把用户当前页或陈旧 targetTabId 当建组种子。"""
+    source = Path("extension/background.js").read_text(encoding="utf-8")
+    start = source.index("async function cmdTabGroupCreate")
+    end = source.index("async function cmdTabGroupAdd", start)
+    body = source[start:end]
+
+    assert "chrome.tabs.create" in body
+    assert "chrome.tabs.query({ active: true, lastFocusedWindow: true })" not in body
+    assert "let tabId = targetTabId" not in body
+    assert "return { groupId, title, tabId }" in body
+
+
+def test_extension_navigation_prefers_tracked_target_over_user_active_tab():
+    """已有 session 种子 tab 时，导航应优先复用 targetTabId 而不是用户当前页。"""
+    source = Path("extension/background.js").read_text(encoding="utf-8")
+    start = source.index("async function navigateWithTabs")
+    end = source.index("async function cmdNavigate", start)
+    body = source[start:end]
+
+    target_lookup = body.find("if (targetTabId)")
+    active_lookup = body.find("chrome.tabs.query({ active: true, lastFocusedWindow: true })")
+    assert target_lookup != -1
+    assert active_lookup != -1
+    assert target_lookup < active_lookup
+
+
 def test_browser_code_run_smoke_sequence_covers_session_reuse_persistence_and_finalize(monkeypatch):
     """稳定冒烟：建标签组、打开目标页、复用 tab、跨调用变量持久化、保存后 finalize。"""
     from unittest.mock import AsyncMock, MagicMock

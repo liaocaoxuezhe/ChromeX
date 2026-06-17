@@ -462,10 +462,11 @@ async function executeCode({ id, code, timeout = 30000 }) {
     });
   } catch (error) {
     const elapsedMs = Date.now() - startTime;
+    const executionError = describeExecutionError(error);
     sendIpc({
       id,
       ok: false,
-      ...describeExecutionError(error),
+      ...executionError,
       meta: { elapsedMs, startupSummary },
     });
   }
