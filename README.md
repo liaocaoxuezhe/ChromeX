@@ -100,6 +100,21 @@ node scripts/dev-extension/install.mjs
 
 将 `claude_config_snippet.json` 中的配置合并到 Claude Code 的配置文件中，并根据本机路径调整 `command`、`args` 和 `cwd`。
 
+## Codex Plugin
+
+This repository includes a local Codex plugin at `plugins/chromex`.
+
+After restarting Codex, install `ChromeX` from the `ChromeX Local Plugins` marketplace. Then run:
+
+```bash
+codex plugin marketplace add /Users/zhangyu/PycharmProjects/Link2Chrome
+codex plugin add chromex@chromex-local
+node plugins/chromex/scripts/install.mjs
+node plugins/chromex/scripts/diagnose.mjs
+```
+
+If your default Python is 3.9, the installer will look for `python3.10`, `python3.11`, or `python3.12` and create `server/venv` with Python 3.10+ before installing dependencies.
+
 ## browser_code_run 示例
 
 对于需要 3 步以上、含条件逻辑、循环、显式等待或长程页面状态轮询的操作，推荐使用 `browser_code_run` 一次发送代码，而不是逐个调用 MCP 工具：

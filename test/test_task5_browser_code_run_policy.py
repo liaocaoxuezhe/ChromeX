@@ -60,6 +60,23 @@ def _payload(result):
     return json.loads(result[0].text)
 
 
+class _FakeSessionWsManager:
+    _lease_token = None
+
+    async def send_command(self, command, args=None, **kwargs):
+        if command == "tab_group_create":
+            return {"groupId": 88}
+        raise AssertionError(f"unexpected command: {command}")
+
+
+def _install_test_session(monkeypatch, session: str = "browser-code-run-policy") -> str:
+    fake_ws = _FakeSessionWsManager()
+    monkeypatch.setattr(main, "ws_manager", fake_ws)
+    monkeypatch.setattr(main, "session_manager", main.SessionManager())
+    asyncio.run(main.session_manager.ensure_session(session, session, fake_ws))
+    return session
+
+
 # --------------------------------------------------------------------------- #
 # 辅助夹具
 # --------------------------------------------------------------------------- #
@@ -95,6 +112,7 @@ def _make_none():
 
 def test_browser_code_run_uses_nodejs_when_ready(monkeypatch):
     """Node.js Runtime 已就绪时，应直接走 execute，绝不调用旧 Extension 端 runtime.run。"""
+    session = _install_test_session(monkeypatch)
     mock_nodejs = _make_ready_mock()
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
@@ -102,7 +120,7 @@ def test_browser_code_run_uses_nodejs_when_ready(monkeypatch):
     mock_pw_runtime.run = AsyncMock()
     monkeypatch.setattr(main, "playwright_runtime", mock_pw_runtime)
 
-    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;", "session": session}))
     payload = _payload(result)
 
     assert payload["ok"] is True
@@ -117,6 +135,7 @@ def test_browser_code_run_uses_nodejs_when_ready(monkeypatch):
 
 def test_browser_code_run_rejects_fallback_on_startup_error(monkeypatch):
     """Node.js Runtime 启动失败时，应返回明确错误，不再降级到旧 Extension 端 runtime.run。"""
+    session = _install_test_session(monkeypatch)
     mock_nodejs = _make_startup_error_mock("未检测到 Node.js 运行时。")
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
@@ -124,7 +143,7 @@ def test_browser_code_run_rejects_fallback_on_startup_error(monkeypatch):
     mock_pw_runtime.run = AsyncMock()
     monkeypatch.setattr(main, "playwright_runtime", mock_pw_runtime)
 
-    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;", "session": session}))
     payload = _payload(result)
 
     assert payload["ok"] is False
@@ -142,6 +161,7 @@ def test_browser_code_run_rejects_fallback_on_startup_error(monkeypatch):
 
 def test_browser_code_run_rejects_fallback_on_execute_exception(monkeypatch):
     """Node.js Runtime execute 异常时，应返回明确错误，不再降级到旧 Extension 端 runtime.run。"""
+    session = _install_test_session(monkeypatch)
     mock_nodejs = _make_ready_mock()
     mock_nodejs.execute = AsyncMock(side_effect=RuntimeError("IPC broken"))
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
@@ -150,7 +170,7 @@ def test_browser_code_run_rejects_fallback_on_execute_exception(monkeypatch):
     mock_pw_runtime.run = AsyncMock()
     monkeypatch.setattr(main, "playwright_runtime", mock_pw_runtime)
 
-    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;", "session": session}))
     payload = _payload(result)
 
     assert payload["ok"] is False
@@ -166,13 +186,14 @@ def test_browser_code_run_rejects_fallback_on_execute_exception(monkeypatch):
 
 def test_browser_code_run_rejects_when_nodejs_is_none(monkeypatch):
     """Node.js Runtime 未配置时，应返回明确错误。"""
+    session = _install_test_session(monkeypatch)
     monkeypatch.setattr(main, "nodejs_runtime", None)
 
     mock_pw_runtime = MagicMock()
     mock_pw_runtime.run = AsyncMock()
     monkeypatch.setattr(main, "playwright_runtime", mock_pw_runtime)
 
-    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "return 1;", "session": session}))
     payload = _payload(result)
 
     assert payload["ok"] is False
@@ -189,6 +210,7 @@ def test_browser_code_run_rejects_when_nodejs_is_none(monkeypatch):
 
 def test_browser_code_run_starts_nodejs_then_executes(monkeypatch):
     """Node.js Runtime 未就绪但启动成功时，应先 start 再 execute。"""
+    session = _install_test_session(monkeypatch)
     mock_nodejs = _make_startup_error_mock()
     mock_nodejs.is_ready = False
     mock_nodejs.start = AsyncMock(return_value=True)
@@ -199,7 +221,7 @@ def test_browser_code_run_starts_nodejs_then_executes(monkeypatch):
     mock_pw_runtime.run = AsyncMock()
     monkeypatch.setattr(main, "playwright_runtime", mock_pw_runtime)
 
-    result = asyncio.run(main.tool_browser_code_run({"code": "return 42;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "return 42;", "session": session}))
     payload = _payload(result)
 
     assert payload["ok"] is True
@@ -215,6 +237,7 @@ def test_browser_code_run_starts_nodejs_then_executes(monkeypatch):
 
 def test_browser_code_run_passthrough_user_code_error(monkeypatch):
     """Node.js 执行成功但用户代码报错时，应透传错误信息。"""
+    session = _install_test_session(monkeypatch)
     meta = {
         "elapsedMs": 12,
         "startupSummary": {"hubConnected": True, "boundTab": {"id": 7}},
@@ -230,7 +253,7 @@ def test_browser_code_run_passthrough_user_code_error(monkeypatch):
     })
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
-    result = asyncio.run(main.tool_browser_code_run({"code": "x;"}))
+    result = asyncio.run(main.tool_browser_code_run({"code": "x;", "session": session}))
     payload = _payload(result)
 
     assert payload["ok"] is False
@@ -247,6 +270,7 @@ def test_browser_code_run_passthrough_user_code_error(monkeypatch):
 
 def test_browser_code_run_truncation_preserved(monkeypatch):
     """结果超长时，应保持截断格式与改造前一致。"""
+    session = _install_test_session(monkeypatch)
     long_result = "a" * 30000
     mock_nodejs = _make_ready_mock()
     mock_nodejs.execute = AsyncMock(return_value={"ok": True, "result": long_result})
@@ -255,6 +279,7 @@ def test_browser_code_run_truncation_preserved(monkeypatch):
     result = asyncio.run(main.tool_browser_code_run({
         "code": "return 'a'.repeat(30000);",
         "max_result_chars": 20000,
+        "session": session,
     }))
     payload = _payload(result)
 

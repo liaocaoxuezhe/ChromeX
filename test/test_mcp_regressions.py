@@ -47,6 +47,10 @@ def _payload(result):
     return json.loads(result[0].text)
 
 
+async def _ensure_test_session(name: str, ws_manager=None):
+    await main.session_manager.ensure_session(name, name, ws_manager or main.ws_manager)
+
+
 class _AsyncOperation:
     async def __aenter__(self):
         return self
@@ -97,14 +101,22 @@ class FakeWsManager:
 def test_browser_navigate_preserves_data_url(monkeypatch):
     fake = FakeWsManager()
     monkeypatch.setattr(main, "ws_manager", fake)
+    monkeypatch.setattr(main, "session_manager", main.SessionManager())
+    asyncio.run(_ensure_test_session("data-url", fake))
 
     url = "data:text/html;charset=utf-8,%E4%B8%AD%E6%96%87"
-    result = asyncio.run(main.tool_agent_first("browser_navigate", {"url": url}))
+    expected_scope = main.session_manager.scope_payload("data-url")
+    result = asyncio.run(main.tool_agent_first("browser_navigate", {"url": url, "session": "data-url"}))
 
     assert _payload(result)["finalUrl"] == url
-    assert fake.commands[0] == (
+    assert next(command for command in fake.commands if command[0] == "navigate") == (
         "navigate",
-        {"url": url, "waitUntil": "dom-ready", "timeout": 10000},
+        {
+            "url": url,
+            "waitUntil": "dom-ready",
+            "timeout": 10000,
+            "scope": expected_scope,
+        },
     )
 
 
@@ -119,7 +131,15 @@ def test_browser_code_run_dispatch_reaches_runtime(monkeypatch):
     mock_nodejs.execute = AsyncMock(return_value={"ok": True, "result": {"ran": True}})
     monkeypatch.setattr(main, "nodejs_runtime", mock_nodejs)
 
-    result = asyncio.run(main.call_tool("browser_code_run", {"code": "return { ran: true };"}))
+    monkeypatch.setattr(main, "session_manager", main.SessionManager())
+    asyncio.run(_ensure_test_session("runtime-dispatch"))
+
+    result = asyncio.run(
+        main.call_tool(
+            "browser_code_run",
+            {"code": "return { ran: true };", "session": "runtime-dispatch"},
+        )
+    )
 
     assert _payload(result)["ok"] is True
     assert _payload(result)["result"] == {"ran": True}
@@ -173,6 +193,7 @@ def test_session_manager_tracks_seed_tab_created_for_group(monkeypatch):
             "groupTitle": "种子组",
             "tabCount": 1,
             "groupId": 55,
+            "closed": False,
         }
     ]
 
@@ -218,7 +239,7 @@ def test_browser_code_run_smoke_sequence_covers_session_reuse_persistence_and_fi
     mock_nodejs.startup_error = None
     mock_nodejs.start = AsyncMock(return_value=True)
 
-    async def _execute(code, timeout=30000, *, lease_token=None):
+    async def _execute(code, timeout=30000, *, lease_token=None, session=None, scope=None):
         calls.append(code)
         if "livePersistedValue" in code and "return livePersistedValue" in code:
             return {"ok": True, "result": "persisted-ok", "meta": {"startupSummary": {"boundTab": {"id": 101}}}}
@@ -246,10 +267,11 @@ def test_browser_code_run_smoke_sequence_covers_session_reuse_persistence_and_fi
         main.call_tool(
             "browser_code_run",
             {
+                "session": "smoke-browser-code",
                 "code": (
                     "const tabs = await browser.user.openTabs();\n"
                     "const target = tabs.find(t => (t.raw?.url || '').includes('example.com'));\n"
-                    "globalThis.tab = target ? await browser.user.claimTab(target) : await browser.tabs.new('https://example.com/form');\n"
+                    "globalThis.tab = target ? await browser.user.claimTab(target) : await browser.tabs.new({ url: 'https://example.com/form', active: false });\n"
                     "const livePersistedValue = 'persisted-ok';\n"
                     "return { bound: true };"
                 )
@@ -258,13 +280,21 @@ def test_browser_code_run_smoke_sequence_covers_session_reuse_persistence_and_fi
     )
     assert _payload(first)["meta"]["startupSummary"]["boundTab"]["id"] == 101
 
-    second = asyncio.run(main.call_tool("browser_code_run", {"code": "return livePersistedValue;"}))
+    second = asyncio.run(
+        main.call_tool(
+            "browser_code_run",
+            {"code": "return livePersistedValue;", "session": "smoke-browser-code"},
+        )
+    )
     assert _payload(second)["result"] == "persisted-ok"
 
     finalized = asyncio.run(
         main.call_tool(
             "browser_code_run",
-            {"code": "await browser.tabs.finalize({ keep: [{ tab: globalThis.tab, status: 'handoff' }] }); return { finalized: true };"},
+            {
+                "code": "await browser.tabs.finalize({ keep: [{ tab: globalThis.tab, status: 'handoff' }] }); return { finalized: true };",
+                "session": "smoke-browser-code",
+            },
         )
     )
     assert _payload(finalized)["result"] == {"finalized": True}
@@ -278,11 +308,13 @@ def test_browser_code_run_smoke_sequence_covers_session_reuse_persistence_and_fi
 def test_dom_get_text_selector_falls_back_when_extension_command_is_missing(monkeypatch):
     fake = FakeWsManager()
     monkeypatch.setattr(main, "ws_manager", fake)
+    monkeypatch.setattr(main, "session_manager", main.SessionManager())
+    asyncio.run(_ensure_test_session("dom-text", fake))
 
     result = asyncio.run(
         main.tool_agent_first(
             "browser_dom_get_text",
-            {"selector": "#status", "include_meta": True},
+            {"selector": "#status", "include_meta": True, "session": "dom-text"},
         )
     )
 

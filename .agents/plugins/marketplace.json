@@ -1,0 +1,20 @@
+{
+  "name": "chromex-local",
+  "interface": {
+    "displayName": "ChromeX Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "chromex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/chromex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

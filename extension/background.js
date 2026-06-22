@@ -1119,7 +1119,9 @@ async function snapshotActiveTabForAction() {
   };
 }
 
-async function detectActionTabChange(before, timeoutMs = 700) {
+async function detectActionTabChange(before, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 700;
+  const focusWindow = options.focusWindow === true;
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() <= deadline) {
@@ -1133,7 +1135,7 @@ async function detectActionTabChange(before, timeoutMs = 700) {
     if (openedTabId != null) {
       try {
         await chrome.tabs.update(openedTabId, { active: true });
-        if (openedTab.windowId != null) {
+        if (focusWindow === true && openedTab.windowId != null) {
           await chrome.windows.update(openedTab.windowId, { focused: true });
         }
       } catch (_) {}
@@ -2243,7 +2245,9 @@ async function cmdAgentBrowserTabSwitch(params) {
   const tabId = params.tabId;
   if (!tabId) throw new Error("tabId is required");
   const tab = await chrome.tabs.get(tabId);
-  await chrome.windows.update(tab.windowId, { focused: true });
+  if (params.focusWindow === true) {
+    await chrome.windows.update(tab.windowId, { focused: true });
+  }
   await chrome.tabs.update(tabId, { active: true });
   targetTabId = tabId;
   attachedTabId = null;
@@ -2252,6 +2256,9 @@ async function cmdAgentBrowserTabSwitch(params) {
 
 async function cmdAgentBrowserTabNew(params) {
   const tab = await chrome.tabs.create({ url: params.url || "about:blank", active: params.active !== false });
+  if (params.focusWindow === true && tab.windowId != null) {
+    await chrome.windows.update(tab.windowId, { focused: true });
+  }
   targetTabId = tab.id;
   attachedTabId = null;
   return { ok: true, tabId: tab.id, url: tab.url || params.url || "about:blank" };
@@ -2471,7 +2478,7 @@ async function cmdActionClick(params) {
       button: params.button || "left",
       clickCount: params.clickCount || 1
     });
-    const tabChange = await detectActionTabChange(beforeTabs);
+    const tabChange = await detectActionTabChange(beforeTabs, { focusWindow: params.focusWindow === true });
     if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000 });
     return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result, ...tabChange };
   }
@@ -2483,14 +2490,14 @@ async function cmdActionClick(params) {
     const started = Date.now();
     const beforeTabs = await snapshotActiveTabForAction();
     await cmdClick({ x: el.x, y: el.y, button: params.button || "left", clickCount: params.clickCount || 1 });
-    const tabChange = await detectActionTabChange(beforeTabs);
+    const tabChange = await detectActionTabChange(beforeTabs, { focusWindow: params.focusWindow === true });
     return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...tabChange };
   }
   if (!selector && target.ariaLabel) selector = `[aria-label*="${cssEscape(target.ariaLabel)}"]`;
   const started = Date.now();
   const beforeTabs = await snapshotActiveTabForAction();
   const result = await cmdClick({ selector, button: params.button || "left", clickCount: params.clickCount || 1 });
-  const tabChange = await detectActionTabChange(beforeTabs);
+  const tabChange = await detectActionTabChange(beforeTabs, { focusWindow: params.focusWindow === true });
   if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000 });
   return { ok: true, target: { ...target, selector }, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result, ...tabChange };
 }

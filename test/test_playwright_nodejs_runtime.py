@@ -333,8 +333,12 @@ async def test_tool_browser_code_run_rejects_fallback_when_nodejs_runtime_fails(
     caplog.set_level(logging.WARNING)
 
     fake_ws = MagicMock()
+    fake_ws._lease_token = None
     fake_ws.send_command = AsyncMock(return_value={"ok": True, "result": {"fallback": True}})
     monkeypatch.setattr(main_module, "ws_manager", fake_ws)
+    monkeypatch.setattr(main_module, "session_manager", main_module.SessionManager())
+    await main_module.session_manager.ensure_session("nodejs-runtime-fail", "nodejs-runtime-fail", fake_ws)
+    fake_ws.send_command.reset_mock()
 
     # mock Node.js Runtime 启动失败
     fake_nodejs_runtime = MagicMock()
@@ -344,7 +348,7 @@ async def test_tool_browser_code_run_rejects_fallback_when_nodejs_runtime_fails(
     _ensure_module_attr(main_module, "nodejs_runtime", None)
     monkeypatch.setattr(main_module, "nodejs_runtime", fake_nodejs_runtime)
 
-    result = await main_module.tool_browser_code_run({"code": "return 1+1"})
+    result = await main_module.tool_browser_code_run({"code": "return 1+1", "session": "nodejs-runtime-fail"})
     payload = json.loads(result[0].text)
 
     assert payload["ok"] is False
@@ -361,12 +365,16 @@ async def test_tool_browser_code_run_rejects_when_nodejs_runtime_is_none(monkeyp
         pytest.skip("当前 main.py 尚未包含 Node.js Runtime 降级逻辑（Task 3 未合并）")
 
     fake_ws = MagicMock()
+    fake_ws._lease_token = None
     fake_ws.send_command = AsyncMock(return_value={"ok": True, "result": {"direct_fallback": True}})
     monkeypatch.setattr(main_module, "ws_manager", fake_ws)
+    monkeypatch.setattr(main_module, "session_manager", main_module.SessionManager())
+    await main_module.session_manager.ensure_session("nodejs-runtime-none", "nodejs-runtime-none", fake_ws)
+    fake_ws.send_command.reset_mock()
     _ensure_module_attr(main_module, "nodejs_runtime", None)
     monkeypatch.setattr(main_module, "nodejs_runtime", None)
 
-    result = await main_module.tool_browser_code_run({"code": "return 1+1"})
+    result = await main_module.tool_browser_code_run({"code": "return 1+1", "session": "nodejs-runtime-none"})
     payload = json.loads(result[0].text)
 
     assert payload["ok"] is False

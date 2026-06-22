@@ -492,7 +492,12 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             tab_id = args.get("tabId")
             if tab_id is None:
                 return _json_content({"ok": False, "error": "tabId is required for switch"})
-            result = await _scoped_send("agent_browser_tab_switch", {"tabId": tab_id}, session, tab_id=tab_id)
+            result = await _scoped_send(
+                "agent_browser_tab_switch",
+                {"tabId": tab_id, "focusWindow": args.get("focusWindow", False)},
+                session,
+                tab_id=tab_id,
+            )
             if result.get("ok") is False:
                 return _json_content(result)
             return _json_content({"ok": True, "action": "switch", "tabId": tab_id})
@@ -535,7 +540,12 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             info = await session_manager.ensure_session(session, group_title, ws_manager)
             seed_tab_id = session_manager.claim_seed_tab_for_navigation(session)
             if seed_tab_id is not None:
-                await _scoped_send("agent_browser_tab_switch", {"tabId": seed_tab_id}, session, tab_id=seed_tab_id)
+                await _scoped_send(
+                    "agent_browser_tab_switch",
+                    {"tabId": seed_tab_id, "focusWindow": args.get("focusWindow", False)},
+                    session,
+                    tab_id=seed_tab_id,
+                )
                 tab_result = await _scoped_send(
                     "navigate",
                     {
@@ -550,7 +560,9 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 tab_id = seed_tab_id
             else:
                 tab_result = await ws_manager.send_command("agent_browser_tab_new", {
-                    "url": url, "active": True,
+                    "url": url,
+                    "active": args.get("active", False),
+                    "focusWindow": args.get("focusWindow", False),
                 })
                 tab_id = tab_result.get("tabId")
                 if tab_id is not None:

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "local-browser": {
+      "command": "node",
+      "args": ["./scripts/mcp-server.mjs"],
+      "env": {
+        "LOG_LEVEL": "INFO",
+        "LOG_CONSOLE": "false"
+      }
+    }
+  }
+}
