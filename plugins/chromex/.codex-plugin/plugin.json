@@ -1,0 +1,31 @@
+{
+  "name": "chromex",
+  "version": "0.1.0",
+  "description": "ChromeX browser automation for Codex using Link2Chrome, a local MCP server, a Chrome extension, and a native messaging bridge.",
+  "author": {
+    "name": "ChromeX"
+  },
+  "homepage": "https://github.com/local/chromex",
+  "repository": "https://github.com/local/chromex",
+  "license": "MIT",
+  "keywords": ["browser", "chrome", "mcp", "automation", "link2chrome"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "ChromeX",
+    "shortDescription": "Control real Chrome with Link2Chrome",
+    "longDescription": "ChromeX lets Codex control your local Chrome browser through the Link2Chrome MCP server, Chrome extension, and native messaging bridge. It can navigate pages, inspect DOM, take screenshots, run Playwright-style browser code, and reuse your real browser session when you explicitly choose browser automation.",
+    "developerName": "ChromeX",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read"],
+    "defaultPrompt": [
+      "Use ChromeX to inspect the current Chrome page",
+      "Use ChromeX to automate a multi-step browser workflow",
+      "Use ChromeX to diagnose my Link2Chrome connection"
+    ],
+    "brandColor": "#2563EB",
+    "composerIcon": "./assets/composer.png",
+    "logo": "./assets/icon128.png",
+    "screenshots": []
+  }
+}
