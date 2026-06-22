@@ -129,25 +129,18 @@ return rows;
 
 ## Session 机制
 
-每个任务可以绑定一个命名 Session，对应 Chrome 中的一个标签组。创建 session 后，后续的导航和新建标签会自动加入该组：
+每个任务可以绑定一个命名 Session，对应 Chrome 中的一个标签组。Session 同时也是浏览器控制权限边界；页面读取、点击、输入、截图、脚本执行、切换和关闭标签页都必须传同一个 `session`：
 
 ```
-# 创建 session（设为活跃，后续操作自动加入）
 browser_session(action="create", session="research", group_title="调研")
-
-# 后续导航自动加入活跃 session 的标签组
-browser_navigate(action="goto", url="https://example.com")
-browser_tab(action="new", url="https://other.com")
-
-# 或者一步到位：新建标签并加入 session
 browser_session(action="new_tab", session="research", url="https://example.com")
-
-# 关闭 session 及其所有标签
-browser_session(action="close", session="research")
-
-# 列出所有活跃 session
+browser_dom_overview(session="research")
+browser_screenshot(session="research")
+browser_session(action="finalize", session="research", keep=[])
 browser_session(action="list")
 ```
+
+如需接管用户已有标签页，先通过 runtime 的 `browser.user.openTabs()` 获取候选，再把返回对象原样传给 `browser.user.claimTab(tab)`；不要猜测裸 `tabId`。
 
 ## 开发与测试
 

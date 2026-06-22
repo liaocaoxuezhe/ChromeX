@@ -38,4 +38,9 @@ orchestration/
 # Documents
 docs/
 test/
+!test/
+!test/test_session_scope.py
+!test/test_session_scope_e2e.py
+!test/session-scope-runtime.test.mjs
+!test/extension-session-scope.test.mjs
 Output/

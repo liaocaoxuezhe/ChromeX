@@ -15,6 +15,12 @@ def _obj_schema(properties=None, required=None):
     }
 
 
+SESSION_PROPERTY = {
+    "type": "string",
+    "description": "Required task session name. Browser control is limited to tabs in this session.",
+}
+
+
 TOOL_DEFINITIONS = [
     # ==================== 导航与 Session（3 个）====================
     {
@@ -120,7 +126,7 @@ TOOL_DEFINITIONS = [
             {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "new_tab", "add", "close", "list"],
+                    "enum": ["create", "new_tab", "add", "claim", "finalize", "close", "list"],
                     "description": "Tab group operation.",
                 },
                 "session": {
@@ -137,7 +143,23 @@ TOOL_DEFINITIONS = [
                 },
                 "tabId": {
                     "type": "integer",
-                    "description": "Tab ID to add to the group. Required for 'add'. Get IDs from browser_tabs_list.",
+                    "description": "Tab ID to add/claim. Get user-tab candidates from browser_tabs_list(open=true) or runtime openTabs().",
+                },
+                "claimToken": {
+                    "type": "string",
+                    "description": "Opaque token returned by open-tabs listing; required to claim user tabs outside the session.",
+                },
+                "keep": {
+                    "type": "array",
+                    "description": "Tabs to keep when action='finalize'. Each item: {tabId, status}; status is 'handoff' or 'deliverable'.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tabId": {"type": "integer"},
+                            "status": {"type": "string", "enum": ["handoff", "deliverable"]},
+                        },
+                        "required": ["tabId", "status"],
+                    },
                 },
             },
             ["action"],
@@ -895,3 +917,10 @@ TOOL_DEFINITIONS = [
     tool for tool in TOOL_DEFINITIONS
     if tool["name"] in PUBLIC_TOOL_NAMES
 ]
+
+
+SESSION_SCOPED_TOOLS = PUBLIC_TOOL_NAMES - {"browser_diagnose", "browser_session"}
+
+for tool in TOOL_DEFINITIONS:
+    if tool["name"] in SESSION_SCOPED_TOOLS:
+        tool["inputSchema"].setdefault("properties", {})["session"] = SESSION_PROPERTY

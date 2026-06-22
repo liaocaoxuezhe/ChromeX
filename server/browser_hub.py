@@ -48,6 +48,7 @@ class BrowserHub:
         self._operation_lock = asyncio.Lock()
         self._lease_token: str | None = None
         self._lease_name: str | None = None
+        self._lease_scope: dict[str, Any] | None = None
         self._lease_started_at: float | None = None
         self._adapter_connections: set[ServerConnection] = set()
         self._hub_id = str(uuid.uuid4())[:8]
@@ -114,6 +115,11 @@ class BrowserHub:
 
             # One real browser, one visible UI: serialize operations from all
             # adapters. This is deliberately conservative for the first pass.
+            if message.get("session"):
+                params = dict(params)
+                params.setdefault("scope", {})
+                params["scope"].setdefault("session", message["session"])
+
             if message.get("lease_token") == self._lease_token:
                 data = await self.extension_ws.send_command(command, params)
             else:
@@ -139,6 +145,7 @@ class BrowserHub:
             "extension_startup_error": self.extension_ws.startup_error,
             "queue_locked": self._operation_lock.locked(),
             "lease_name": self._lease_name,
+            "lease_scope": self._lease_scope,
             "lease_age_seconds": lease_age,
         }
 
@@ -153,6 +160,7 @@ class BrowserHub:
 
         self._lease_token = str(uuid.uuid4())
         self._lease_name = params.get("name", "tool_call")
+        self._lease_scope = {"session": params.get("session")} if params.get("session") else None
         self._lease_started_at = time.monotonic()
         return self._ok(
             request_id,
@@ -174,6 +182,7 @@ class BrowserHub:
     def _release_current_lease(self):
         self._lease_token = None
         self._lease_name = None
+        self._lease_scope = None
         self._lease_started_at = None
         if self._operation_lock.locked():
             self._operation_lock.release()
