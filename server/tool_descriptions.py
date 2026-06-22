@@ -592,7 +592,8 @@ TOOL_DEFINITIONS = [
         "name": "browser_code_run",
         "description": (
             "Preferred tool for complex browser automation. Write JavaScript code with Playwright-style APIs to control the user's real Chrome browser across multiple steps, tabs, waits, loops, and data extraction. "
-            "Use this instead of many small browser/action tool calls whenever a task has 3+ browser steps, conditional logic, repeated actions, explicit waiting, or long-running page work. "
+            "Default to this instead of many small browser/action tool calls whenever a task has 3+ browser steps, dynamic/infinite-scroll content, conditional logic, repeated actions, explicit waiting, data extraction, or long-running page work. "
+            "For dynamic sites, prefer starting with browser_code_run after creating the session; small action_* tools are mainly for one-off clicks, screenshots, or quick visual checks. "
             "The code runs in a persistent Node.js context with async/await support and cross-call variables: values declared in one call can be reused in later calls.\n\n"
             "**Execution Environment:**\n"
             "- Runs in a Node.js subprocess via stdio IPC.\n"

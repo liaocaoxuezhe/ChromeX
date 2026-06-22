@@ -199,14 +199,34 @@ async function setupClient() {
 
 async function bindRuntimeSession(session, scope) {
   if (!session || !browser) return;
-  if (scope && transport?.setSessionScope) {
-    transport.setSessionScope(scope);
-    browser.sessionName = session;
+  const previousSession = browser.sessionName;
+  const previousTab = globalThis.tab;
+  if (scope && typeof browser._bindSession === "function") {
+    browser._bindSession(session, scope);
   } else {
     if (browser.sessionName === session) return;
     await browser.nameSession(session, { groupTitle: session });
   }
-  globalThis.tab = null;
+  if (shouldResetBoundTab(previousSession, session, previousTab, scope)) {
+    globalThis.tab = null;
+  }
+}
+
+function tabIdFromObject(tab) {
+  return tab?.id ?? tab?.raw?.id ?? tab?.raw?.tabId ?? null;
+}
+
+function tabIsAllowedByScope(tab, scope) {
+  const allowedTabIds = scope?.allowedTabIds;
+  if (!Array.isArray(allowedTabIds)) return true;
+  const tabId = tabIdFromObject(tab);
+  return tabId != null && allowedTabIds.includes(tabId);
+}
+
+function shouldResetBoundTab(previousSession, nextSession, previousTab, scope) {
+  if (!previousTab) return false;
+  if (previousSession && previousSession !== nextSession) return true;
+  return !tabIsAllowedByScope(previousTab, scope);
 }
 
 // ─── REPL 上下文持久化 ────────────────────────────────────
@@ -272,11 +292,6 @@ async function collectStartupSummary() {
     return summary;
   }
 
-  if (!hubConnected) {
-    summary.source = "hub-unavailable";
-    return summary;
-  }
-
   if (!browser?.sessionName) {
     summary.source = "session-required";
     summary.sessionRequired = true;
@@ -288,6 +303,7 @@ async function collectStartupSummary() {
     summary.tabs = await Promise.all(scopedTabs.map((tab) => summarizeTab(tab)));
     const active = scopedTabs.find((tab) => tab.raw?.active) || scopedTabs[0];
     if (active) {
+      globalThis.tab = active;
       summary.boundTab = await summarizeTab(active);
       summary.group = summary.boundTab?.group ?? null;
       summary.source = "browser.tabs.list";
@@ -297,6 +313,9 @@ async function collectStartupSummary() {
     summary.tabsError = error?.message || String(error);
   }
 
+  if (!hubConnected) {
+    summary.source = "hub-unavailable";
+  }
   return summary;
 }
 

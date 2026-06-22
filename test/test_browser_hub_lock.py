@@ -12,9 +12,11 @@ from server import browser_hub
 class BrowserHubLockTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.original_acquire_timeout = browser_hub.ACQUIRE_WAIT_TIMEOUT
+        self.original_idle_timeout = browser_hub.LEASE_IDLE_TIMEOUT
 
     async def asyncTearDown(self):
         browser_hub.ACQUIRE_WAIT_TIMEOUT = self.original_acquire_timeout
+        browser_hub.LEASE_IDLE_TIMEOUT = self.original_idle_timeout
 
     async def test_acquire_times_out_instead_of_waiting_forever(self):
         browser_hub.ACQUIRE_WAIT_TIMEOUT = 0.01
@@ -23,6 +25,7 @@ class BrowserHubLockTests(unittest.IsolatedAsyncioTestCase):
         hub._lease_token = "busy-token"
         hub._lease_name = "busy-tool"
         hub._lease_started_at = time.monotonic()
+        hub._lease_last_seen_at = time.monotonic()
 
         response = await hub._handle_adapter_message(
             json.dumps(
@@ -42,12 +45,40 @@ class BrowserHubLockTests(unittest.IsolatedAsyncioTestCase):
 
         hub._release_current_lease()
 
+    async def test_acquire_reclaims_idle_orphaned_lease_after_wait_timeout(self):
+        browser_hub.ACQUIRE_WAIT_TIMEOUT = 0.01
+        browser_hub.LEASE_IDLE_TIMEOUT = 0.01
+        hub = browser_hub.BrowserHub()
+        await hub._operation_lock.acquire()
+        hub._lease_token = "orphan-token"
+        hub._lease_name = "action_scroll"
+        hub._lease_started_at = time.monotonic() - 5
+        hub._lease_last_seen_at = time.monotonic() - 5
+
+        response = await hub._handle_adapter_message(
+            json.dumps(
+                {
+                    "request_id": "req-2",
+                    "command": "__hub_acquire__",
+                    "params": {"name": "browser_code_run"},
+                }
+            )
+        )
+
+        assert response["request_id"] == "req-2"
+        assert response["success"] is True
+        assert hub._operation_lock.locked()
+        assert hub._lease_name == "browser_code_run"
+
+        hub._release_current_lease()
+
     async def test_undelivered_acquire_response_releases_lease(self):
         hub = browser_hub.BrowserHub()
         await hub._operation_lock.acquire()
         hub._lease_token = "new-token"
         hub._lease_name = "new-tool"
         hub._lease_started_at = time.monotonic()
+        hub._lease_last_seen_at = hub._lease_started_at
 
         hub._release_undelivered_lease(
             {

@@ -49,6 +49,8 @@ class SessionManager:
             "claimed_tab_ids": set(),
             "handoff_tab_ids": set(),
             "deliverable_tab_ids": set(),
+            "seed_tab_id": seed_tab_id,
+            "seed_consumed": seed_tab_id is None,
             "closed": False,
         }
 
@@ -199,8 +201,20 @@ class SessionManager:
             "groupTitle": info.get("group_title"),
             "allowedTabIds": sorted(allowed),
             "claimedTabIds": sorted(info["claimed_tab_ids"]),
+            "seedTabId": info.get("seed_tab_id"),
+            "seedConsumed": bool(info.get("seed_consumed")),
             "mode": "session",
         }
+
+    def claim_seed_tab_for_navigation(self, session: str) -> Optional[int]:
+        info = self._require_session(session)
+        seed_tab_id = info.get("seed_tab_id")
+        if info.get("seed_consumed") or seed_tab_id is None:
+            return None
+        info["seed_consumed"] = True
+        info["agent_created_tab_ids"].add(seed_tab_id)
+        info["tab_ids"].add(seed_tab_id)
+        return seed_tab_id
 
     async def finalize_session(
         self,

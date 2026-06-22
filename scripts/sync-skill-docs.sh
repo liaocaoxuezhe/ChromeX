@@ -13,6 +13,7 @@ REPLICAS=(
   "$ROOT_DIR/.claude/skills/link2chrome-browser-mcp/SKILL.md"
   "$ROOT_DIR/.codex/skills/link2chrome-browser-mcp/SKILL.md"
   "$ROOT_DIR/.agents/skills/link2chrome-browser-mcp/SKILL.md"
+  "$ROOT_DIR/.kimi-code/skills/link2chrome-browser-mcp/SKILL.md"
 )
 
 if [[ ! -f "$SOURCE" ]]; then

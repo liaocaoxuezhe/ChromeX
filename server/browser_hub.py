@@ -38,6 +38,7 @@ op_logger = get_operation_logger()
 HUB_HOST = os.getenv("LINK2CHROME_HUB_HOST", "localhost")
 HUB_CONTROL_PORT = int(os.getenv("LINK2CHROME_HUB_CONTROL_PORT", "8766"))
 LEASE_TIMEOUT = float(os.getenv("LINK2CHROME_HUB_LEASE_TIMEOUT", "300"))
+LEASE_IDLE_TIMEOUT = float(os.getenv("LINK2CHROME_HUB_LEASE_IDLE_TIMEOUT", "60"))
 ACQUIRE_WAIT_TIMEOUT = float(os.getenv("LINK2CHROME_HUB_ACQUIRE_TIMEOUT", "30"))
 
 
@@ -50,6 +51,7 @@ class BrowserHub:
         self._lease_name: str | None = None
         self._lease_scope: dict[str, Any] | None = None
         self._lease_started_at: float | None = None
+        self._lease_last_seen_at: float | None = None
         self._adapter_connections: set[ServerConnection] = set()
         self._hub_id = str(uuid.uuid4())[:8]
 
@@ -121,6 +123,7 @@ class BrowserHub:
                 params["scope"].setdefault("session", message["session"])
 
             if message.get("lease_token") == self._lease_token:
+                self._lease_last_seen_at = time.monotonic()
                 data = await self.extension_ws.send_command(command, params)
             else:
                 async with self._operation_lock:
@@ -138,6 +141,9 @@ class BrowserHub:
         lease_age = None
         if self._lease_started_at is not None:
             lease_age = round(time.monotonic() - self._lease_started_at, 3)
+        lease_idle = None
+        if self._lease_last_seen_at is not None:
+            lease_idle = round(time.monotonic() - self._lease_last_seen_at, 3)
         return {
             "hub_id": self._hub_id,
             "adapter_connections": len(self._adapter_connections),
@@ -147,21 +153,27 @@ class BrowserHub:
             "lease_name": self._lease_name,
             "lease_scope": self._lease_scope,
             "lease_age_seconds": lease_age,
+            "lease_idle_seconds": lease_idle,
         }
 
     async def _acquire_lease(self, request_id: str | None, params: dict[str, Any]) -> dict[str, Any]:
         try:
             await asyncio.wait_for(self._operation_lock.acquire(), timeout=ACQUIRE_WAIT_TIMEOUT)
         except asyncio.TimeoutError as exc:
-            raise TimeoutError(
-                f"Browser Hub 操作锁等待超时 ({ACQUIRE_WAIT_TIMEOUT}s), "
-                f"当前 lease={self._lease_name or 'unknown'}"
-            ) from exc
+            self._release_expired_lease()
+            if not self._operation_lock.locked():
+                await self._operation_lock.acquire()
+            else:
+                raise TimeoutError(
+                    f"Browser Hub 操作锁等待超时 ({ACQUIRE_WAIT_TIMEOUT}s), "
+                    f"当前 lease={self._lease_name or 'unknown'}"
+                ) from exc
 
         self._lease_token = str(uuid.uuid4())
         self._lease_name = params.get("name", "tool_call")
         self._lease_scope = {"session": params.get("session")} if params.get("session") else None
         self._lease_started_at = time.monotonic()
+        self._lease_last_seen_at = self._lease_started_at
         return self._ok(
             request_id,
             {
@@ -184,15 +196,22 @@ class BrowserHub:
         self._lease_name = None
         self._lease_scope = None
         self._lease_started_at = None
+        self._lease_last_seen_at = None
         if self._operation_lock.locked():
             self._operation_lock.release()
 
     def _release_expired_lease(self):
         if not self._lease_started_at:
             return
-        if time.monotonic() - self._lease_started_at <= LEASE_TIMEOUT:
+        now = time.monotonic()
+        age = now - self._lease_started_at
+        idle = now - (self._lease_last_seen_at or self._lease_started_at)
+        if age <= LEASE_TIMEOUT and idle <= LEASE_IDLE_TIMEOUT:
             return
-        logger.warning(f"Browser Hub 操作锁超时释放: {self._lease_name}")
+        logger.warning(
+            f"Browser Hub 操作锁超时释放: {self._lease_name} "
+            f"(age={age:.1f}s, idle={idle:.1f}s)"
+        )
         self._release_current_lease()
 
     @staticmethod

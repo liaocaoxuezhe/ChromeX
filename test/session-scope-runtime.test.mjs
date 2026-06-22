@@ -77,3 +77,26 @@ test("claimTab sends claim token when present", async () => {
   const claimCall = transport.calls.find((call) => call.name === "browser_session" && call.args.action === "claim");
   assert.equal(claimCall.args.claimToken, "token-88");
 });
+
+test("locked runtime session prevents nested nameSession from creating a second group", async () => {
+  const transport = fakeTransport();
+  const client = createLink2ChromeClient({ transport });
+  const browser = await client.browsers.get("extension");
+
+  browser._bindSession("outer-session", {
+    session: "outer-session",
+    groupId: 7,
+    groupTitle: "Outer",
+    allowedTabIds: [100],
+    claimedTabIds: [],
+    mode: "session",
+  });
+  const result = await browser.nameSession("inner-title");
+  await browser.tabs.list();
+
+  assert.equal(result.name, "outer-session");
+  assert.equal(result.locked, true);
+  assert.equal(transport.calls.some((call) => call.name === "browser_session" && call.args.action === "create"), false);
+  assert.equal(transport.calls[0].name, "browser_tabs_list");
+  assert.equal(transport.calls[0].args.session, "outer-session");
+});

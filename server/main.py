@@ -204,6 +204,23 @@ async def _scoped_send(command: str, params: dict, session: str, tab_id: int | N
     return await ws_manager.send_command(command, _params_with_scope(params, session))
 
 
+def _tab_ids_from_action_result(result: dict) -> list[int]:
+    seen: set[int] = set()
+    tab_ids: list[int] = []
+    for key in ("openedTabId", "activeTabId", "newActiveTabId"):
+        value = result.get(key)
+        if isinstance(value, int) and value not in seen:
+            seen.add(value)
+            tab_ids.append(value)
+    return tab_ids
+
+
+async def _add_action_result_tabs_to_session(session: str, result: dict) -> None:
+    for tab_id in _tab_ids_from_action_result(result):
+        if not session_manager.is_tab_allowed(session, tab_id):
+            await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=True)
+
+
 def _flatten_tabs(raw: dict) -> list[dict]:
     tabs = []
     for window_tabs in raw.get("windows", {}).values():
@@ -516,12 +533,28 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             url = _normalize_url(url)
             group_title = args.get("group_title")
             info = await session_manager.ensure_session(session, group_title, ws_manager)
-            tab_result = await ws_manager.send_command("agent_browser_tab_new", {
-                "url": url, "active": True,
-            })
-            tab_id = tab_result.get("tabId")
-            if tab_id is not None:
-                await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=True)
+            seed_tab_id = session_manager.claim_seed_tab_for_navigation(session)
+            if seed_tab_id is not None:
+                await _scoped_send("agent_browser_tab_switch", {"tabId": seed_tab_id}, session, tab_id=seed_tab_id)
+                tab_result = await _scoped_send(
+                    "navigate",
+                    {
+                        "tabId": seed_tab_id,
+                        "url": url,
+                        "waitUntil": args.get("waitUntil", "dom-ready"),
+                        "timeout": args.get("timeout", 10000),
+                    },
+                    session,
+                    tab_id=seed_tab_id,
+                )
+                tab_id = seed_tab_id
+            else:
+                tab_result = await ws_manager.send_command("agent_browser_tab_new", {
+                    "url": url, "active": True,
+                })
+                tab_id = tab_result.get("tabId")
+                if tab_id is not None:
+                    await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=True)
             return _json_content({
                 "ok": True, "action": "new_tab", "session": session,
                 "tabId": tab_id, "url": url,
@@ -814,14 +847,18 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
 
     if name == "action_click":
         session = _require_session_arg(args)
-        return _json_content(await _scoped_send("action_click", args, session))
+        result = await _scoped_send("action_click", args, session)
+        await _add_action_result_tabs_to_session(session, result)
+        return _json_content(result)
 
     if name == "action_double_click":
         target = args.get("target")
         if not target:
             return _json_content({"ok": False, "error": "target is required"})
         session = _require_session_arg(args)
-        return _json_content(await _scoped_send("action_click", {"target": target, "clickCount": 2}, session))
+        result = await _scoped_send("action_click", {"target": target, "clickCount": 2}, session)
+        await _add_action_result_tabs_to_session(session, result)
+        return _json_content(result)
 
     if name == "action_hover":
         session = _require_session_arg(args)

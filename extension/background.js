@@ -1110,6 +1110,50 @@ async function cmdClick(params) {
   return { clicked: true, x, y, selector: selector || null };
 }
 
+async function snapshotActiveTabForAction() {
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const allTabs = await chrome.tabs.query({});
+  return {
+    activeTabId: activeTab?.id ?? null,
+    tabIds: new Set(allTabs.map((tab) => tab.id).filter((id) => id != null)),
+  };
+}
+
+async function detectActionTabChange(before, timeoutMs = 700) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() <= deadline) {
+    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const allTabs = await chrome.tabs.query({});
+    const openedTab = allTabs.find((tab) => tab.id != null && !before.tabIds.has(tab.id));
+    const activeTabId = activeTab?.id ?? null;
+    const openedTabId = openedTab?.id ?? null;
+    const activeChanged = activeTabId != null && activeTabId !== before.activeTabId;
+
+    if (openedTabId != null) {
+      try {
+        await chrome.tabs.update(openedTabId, { active: true });
+        if (openedTab.windowId != null) {
+          await chrome.windows.update(openedTab.windowId, { focused: true });
+        }
+      } catch (_) {}
+      targetTabId = openedTabId;
+      attachedTabId = null;
+      return { activeTabId: openedTabId, openedTabId };
+    }
+
+    if (activeChanged) {
+      targetTabId = activeTabId;
+      attachedTabId = null;
+      return { activeTabId };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  return {};
+}
+
 // -- type --
 async function cmdType(params) {
   const { text, clearFirst = false, pressEnter = false, selector, x, y } = params;
@@ -2420,14 +2464,16 @@ async function cmdActionClick(params) {
   const target = params.target || {};
   if (typeof target.x === "number" && typeof target.y === "number") {
     const started = Date.now();
+    const beforeTabs = await snapshotActiveTabForAction();
     const result = await cmdClick({
       x: target.x,
       y: target.y,
       button: params.button || "left",
       clickCount: params.clickCount || 1
     });
+    const tabChange = await detectActionTabChange(beforeTabs);
     if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000 });
-    return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result };
+    return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result, ...tabChange };
   }
   let selector = target.selector;
   if (!selector && target.text) {
@@ -2435,14 +2481,18 @@ async function cmdActionClick(params) {
     const el = found.elements?.find(e => e.visible);
     if (!el) throw new Error(`No visible element found by text: ${target.text}`);
     const started = Date.now();
+    const beforeTabs = await snapshotActiveTabForAction();
     await cmdClick({ x: el.x, y: el.y, button: params.button || "left", clickCount: params.clickCount || 1 });
-    return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started };
+    const tabChange = await detectActionTabChange(beforeTabs);
+    return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...tabChange };
   }
   if (!selector && target.ariaLabel) selector = `[aria-label*="${cssEscape(target.ariaLabel)}"]`;
   const started = Date.now();
+  const beforeTabs = await snapshotActiveTabForAction();
   const result = await cmdClick({ selector, button: params.button || "left", clickCount: params.clickCount || 1 });
+  const tabChange = await detectActionTabChange(beforeTabs);
   if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000 });
-  return { ok: true, target: { ...target, selector }, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result };
+  return { ok: true, target: { ...target, selector }, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result, ...tabChange };
 }
 
 async function resolveActionPoint(target) {

@@ -17,13 +17,20 @@ def test_local_browser_skill_prefers_open_tabs_and_claim_tab_for_complex_tasks()
     skill = _read("skills/link2chrome-browser-mcp/SKILL.md")
 
     required_flow = (
-        "browser_diagnose -> browser_tabs_list -> browser_session(action='create' 或 'new_tab') "
-        "-> browser_code_run 中读取 API 文档 -> 断言当前 URL -> globalThis.tab = target tab"
+        "browser_diagnose -> browser_session(action='create' 或 'new_tab') "
+        "-> browser_code_run(session='task-name') 中读取 API 文档 -> 断言当前 URL -> globalThis.tab = target tab"
     )
     assert required_flow in skill
+    assert "预计超过 3 个浏览器动作" in skill
     assert "browser.user.openTabs()" in skill
     assert "browser.user.claimTab" in skill
     assert "复杂任务不要默认从 `browser.tabs.selected()` 开始" in skill
+
+
+def test_kimi_skill_replica_is_synced_by_script():
+    sync_script = _read("scripts/sync-skill-docs.sh")
+
+    assert ".kimi-code/skills/link2chrome-browser-mcp/SKILL.md" in sync_script
 
 
 def test_skill_first_screen_contains_playwright_migration_template():
