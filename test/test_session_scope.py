@@ -84,6 +84,14 @@ class FakeWS:
             return {"ok": True, "closedCount": 1}
         if command == "tab_manage":
             return {"ok": True}
+        if command == "agent_browser_tab_switch":
+            return {"ok": True, "tabId": params["tabId"]}
+        if command == "navigate":
+            return {"ok": True, "url": params["url"], "status": "complete"}
+        if command == "agent_browser_tab_new":
+            return {"ok": True, "tabId": 101, "url": params.get("url")}
+        if command == "action_click":
+            return {"ok": True, "openedTabId": 102, "activeTabId": 102}
         if command == "get_all_tabs":
             return {
                 "windows": {
@@ -201,3 +209,46 @@ async def test_claim_requires_matching_claim_token(monkeypatch):
         {"action": "claim", "session": "接管", "tabId": 9, "claimToken": "token-9"},
     )
     assert json.loads(accepted[0].text)["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_browser_session_new_tab_reuses_seed_blank_tab(monkeypatch):
+    install_mcp_stubs()
+    import server.main as main
+
+    ws = FakeWS()
+    monkeypatch.setattr(main, "ws_manager", ws)
+    monkeypatch.setattr(main, "session_manager", SessionManager())
+
+    await main.tool_agent_first("browser_session", {"action": "create", "session": "复用空白页"})
+    result = await main.tool_agent_first(
+        "browser_session",
+        {"action": "new_tab", "session": "复用空白页", "url": "https://example.com"},
+    )
+
+    payload = json.loads(result[0].text)
+    assert payload["tabId"] == 100
+    assert ("agent_browser_tab_new", {"url": "https://example.com", "active": True}) not in ws.commands
+    assert ("agent_browser_tab_switch", {"tabId": 100, "scope": main.session_manager.scope_payload("复用空白页")}) in ws.commands
+    assert any(command == "navigate" and params["url"] == "https://example.com" for command, params in ws.commands)
+
+
+@pytest.mark.asyncio
+async def test_action_click_adds_newly_opened_tab_to_session(monkeypatch):
+    install_mcp_stubs()
+    import server.main as main
+
+    ws = FakeWS()
+    monkeypatch.setattr(main, "ws_manager", ws)
+    monkeypatch.setattr(main, "session_manager", SessionManager())
+
+    await main.tool_agent_first("browser_session", {"action": "create", "session": "点击开页"})
+    result = await main.tool_agent_first(
+        "action_click",
+        {"session": "点击开页", "target": {"text": "详情"}},
+    )
+
+    payload = json.loads(result[0].text)
+    assert payload["ok"] is True
+    assert main.session_manager.is_tab_allowed("点击开页", 102) is True
+    assert ("tab_group_add", {"groupId": 7, "tabId": 102}) in ws.commands

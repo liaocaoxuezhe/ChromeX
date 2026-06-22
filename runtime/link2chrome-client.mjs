@@ -588,6 +588,8 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       tabIds: new Set(result.tabId != null ? [result.tabId] : []),
       agentCreatedTabIds: new Set(),
       claimedTabIds: new Set(),
+      seedTabId: result.tabId ?? null,
+      seedConsumed: result.tabId == null,
       closed: false,
     };
     sessions.set(session, record);
@@ -599,6 +601,8 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
     groupTitle: record.groupTitle,
     allowedTabIds: Array.from(new Set([...record.tabIds, ...record.claimedTabIds])).sort((a, b) => a - b),
     claimedTabIds: Array.from(record.claimedTabIds).sort((a, b) => a - b),
+    seedTabId: record.seedTabId,
+    seedConsumed: record.seedConsumed,
     mode: "session",
   });
   const importScope = (scope = {}) => {
@@ -610,6 +614,8 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       tabIds: new Set(scope.allowedTabIds || []),
       agentCreatedTabIds: new Set(),
       claimedTabIds: new Set(scope.claimedTabIds || []),
+      seedTabId: scope.seedTabId ?? null,
+      seedConsumed: Boolean(scope.seedConsumed ?? scope.seedTabId == null),
       closed: false,
     };
     sessions.set(scope.session, record);
@@ -706,6 +712,27 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
         }
         if (action === "new_tab") {
           const record = await ensureLocalSession(send, args.session, args.group_title || args.groupTitle || args.session);
+          if (record.seedTabId != null && !record.seedConsumed) {
+            record.seedConsumed = true;
+            record.agentCreatedTabIds.add(record.seedTabId);
+            await send("agent_browser_tab_switch", { tabId: record.seedTabId, scope: scopeFor(record) });
+            const nav = await send("navigate", {
+              tabId: record.seedTabId,
+              url: args.url || "about:blank",
+              waitUntil: args.waitUntil || "dom-ready",
+              timeout: args.timeout || 10000,
+              scope: scopeFor(record),
+            });
+            return {
+              ok: true,
+              action,
+              session: record.session,
+              tabId: record.seedTabId,
+              url: nav.url || args.url || "about:blank",
+              groupId: record.groupId,
+              groupTitle: record.groupTitle,
+            };
+          }
           const created = await send("agent_browser_tab_new", {
             url: args.url || "about:blank",
             active: args.active !== false,
@@ -1062,7 +1089,24 @@ class Browser {
     this.capabilities = new CapabilityCollection({ scope: "browser", registry: browserCapabilityRegistry, owner: this, transport, safety });
   }
 
+  _bindSession(name, scope) {
+    if (scope && typeof this._transport.setSessionScope === "function") {
+      this._transport.setSessionScope(scope);
+    }
+    this.sessionName = name;
+    this._lockedSessionName = name;
+    return { ok: true, name, locked: true };
+  }
+
   async nameSession(name, options = {}) {
+    if (this._lockedSessionName) {
+      return {
+        ok: true,
+        name: this._lockedSessionName,
+        requestedName: name,
+        locked: true,
+      };
+    }
     this.sessionName = name;
     await this._transport.command("browser_session", {
       action: "create",

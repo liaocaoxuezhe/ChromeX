@@ -6,12 +6,11 @@
 
 ```js
 const browser = await agent.browsers.get("extension");
-await browser.nameSession("runtime-task");
 const tab = await browser.tabs.new("https://example.com");
 console.log(await browser.documentation());
 ```
 
-`agent` 与 `browser` 已预注入 `browser_code_run` 的全局作用域，变量跨调用通过 `globalThis` 持久化。控制浏览器前必须先调用 `browser.nameSession(name)`；`browser.tabs.list()`、`browser.tabs.new()`、`browser.user.claimTab()` 和 `browser.tabs.finalize()` 都会绑定到当前 session。
+`agent` 与 `browser` 已预注入 `browser_code_run` 的全局作用域，变量跨调用通过 `globalThis` 持久化。通过 MCP `browser_code_run(session="...")` 执行时，运行时已经绑定到该 session；代码内部不要使用另一个名字重新 `browser.nameSession(...)`。`browser.tabs.list()`、`browser.tabs.new()`、`browser.user.claimTab()` 和 `browser.tabs.finalize()` 都会绑定到当前 session。
 
 ## Breaking Changes
 
@@ -72,7 +71,7 @@ node scripts/setup-playwright-runtime.mjs
 
 ## Session-First Runtime
 
-- `await browser.nameSession("任务名")` 会创建 server/runtime session，并作为后续浏览器控制权限边界。
+- `await browser.nameSession("任务名")` 可在纯 runtime 场景创建 session；通过 MCP `browser_code_run(session="...")` 进入时，外层 session 是权威边界。
 - `await browser.tabs.list()` 只返回当前 session 内的标签页。
 - `await browser.user.openTabs()` 返回用户标签页候选和 `claimToken`；只能把返回对象原样传给 `browser.user.claimTab(tab)`。
 - `await browser.tabs.finalize({ keep })` 会关闭未保留的 agent-created 标签页，并释放 claimed 用户标签页。
