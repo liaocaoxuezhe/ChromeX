@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "test:session-scope": "node --test test/session-scope-runtime.test.mjs test/extension-session-scope.test.mjs"
+  },
   "dependencies": {
     "ws": "^8.21.0"
   }

@@ -575,6 +575,67 @@ export function createNativeMessagingTransport({
 
 export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocketImpl = globalThis.WebSocket, commandTimeoutMs = 30000 } = {}) {
   let leaseToken = null;
+  const sessions = new Map();
+  const claimTokens = new Map();
+  const ensureLocalSession = async (send, session, groupTitle = session) => {
+    if (!session) throw new Error("session is required");
+    if (sessions.has(session)) return sessions.get(session);
+    const result = await send("tab_group_create", { title: groupTitle || session });
+    const record = {
+      session,
+      groupId: result.groupId ?? null,
+      groupTitle: groupTitle || session,
+      tabIds: new Set(result.tabId != null ? [result.tabId] : []),
+      agentCreatedTabIds: new Set(),
+      claimedTabIds: new Set(),
+      closed: false,
+    };
+    sessions.set(session, record);
+    return record;
+  };
+  const scopeFor = (record) => ({
+    session: record.session,
+    groupId: record.groupId,
+    groupTitle: record.groupTitle,
+    allowedTabIds: Array.from(new Set([...record.tabIds, ...record.claimedTabIds])).sort((a, b) => a - b),
+    claimedTabIds: Array.from(record.claimedTabIds).sort((a, b) => a - b),
+    mode: "session",
+  });
+  const importScope = (scope = {}) => {
+    if (!scope.session) return null;
+    const record = {
+      session: scope.session,
+      groupId: scope.groupId ?? null,
+      groupTitle: scope.groupTitle || scope.session,
+      tabIds: new Set(scope.allowedTabIds || []),
+      agentCreatedTabIds: new Set(),
+      claimedTabIds: new Set(scope.claimedTabIds || []),
+      closed: false,
+    };
+    sessions.set(scope.session, record);
+    return record;
+  };
+  const flattenTabs = (raw) => {
+    const tabs = [];
+    for (const windowTabs of Object.values(raw.windows || {})) {
+      for (const { id, windowId, active, url, title, status, favIconUrl, groupId, debugable, debuggable } of windowTabs) {
+        tabs.push({
+          id,
+          windowId,
+          active,
+          url,
+          title,
+          status: status || "unknown",
+          favicon: favIconUrl,
+          groupId,
+          tabGroup: groupId,
+          debugable,
+          debuggable,
+        });
+      }
+    }
+    return tabs;
+  };
   const command = (commandName, params = {}, options = {}) => sendHubCommand({
     url,
     WebSocketImpl,
@@ -587,10 +648,13 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
     setLeaseToken(token) {
       leaseToken = token;
     },
+    setSessionScope(scope) {
+      return importScope(scope);
+    },
     async healthCheck({ timeoutMs = 750 } = {}) {
       if (!WebSocketImpl) return false;
       try {
-        await command("get_info", {}, { timeoutMs });
+        await command("ping_version", {}, { timeoutMs });
         return true;
       } catch {
         return false;
@@ -628,24 +692,98 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
         throw new Error("createWebSocketTransport requires global WebSocket or WebSocketImpl");
       }
       const send = (commandName, params = {}) => command(commandName, params);
-      if (name === "browser_tabs_list") {
-        const raw = await send("get_all_tabs", args);
-        const tabs = [];
-        for (const windowTabs of Object.values(raw.windows || {})) {
-          for (const { id, windowId, active, url, title, status, favIconUrl } of windowTabs) {
-            tabs.push({
-              id,
-              windowId,
-              active,
-              url,
-              title,
-              status: status || "unknown",
-              favicon: favIconUrl,
-            });
+      const addSessionScope = (params = {}) => {
+        if (params.scope || !params.session) return params;
+        const record = sessions.get(params.session);
+        if (!record) return params;
+        return { ...params, scope: scopeFor(record) };
+      };
+      if (name === "browser_session") {
+        const action = args.action || "list";
+        if (action === "create") {
+          const record = await ensureLocalSession(send, args.session, args.group_title || args.groupTitle || args.session);
+          return { ok: true, action, session: record.session, groupId: record.groupId, groupTitle: record.groupTitle };
+        }
+        if (action === "new_tab") {
+          const record = await ensureLocalSession(send, args.session, args.group_title || args.groupTitle || args.session);
+          const created = await send("agent_browser_tab_new", {
+            url: args.url || "about:blank",
+            active: args.active !== false,
+            scope: scopeFor(record),
+          });
+          if (created.tabId != null) {
+            record.tabIds.add(created.tabId);
+            record.agentCreatedTabIds.add(created.tabId);
+            if (record.groupId != null) {
+              await send("tab_group_add", { tabId: created.tabId, groupId: record.groupId });
+            }
           }
+          return { ok: true, action, session: record.session, tabId: created.tabId, url: created.url || args.url, groupId: record.groupId, groupTitle: record.groupTitle };
+        }
+        if (action === "claim") {
+          const record = await ensureLocalSession(send, args.session, args.group_title || args.groupTitle || args.session);
+          if (!record.tabIds.has(args.tabId)) {
+            if (!args.claimToken) throw new Error("claimToken is required for claiming user tabs");
+            const tokenTabId = claimTokens.get(args.claimToken);
+            claimTokens.delete(args.claimToken);
+            if (tokenTabId !== args.tabId) throw new Error("claimToken does not match tabId");
+          }
+          record.tabIds.add(args.tabId);
+          record.claimedTabIds.add(args.tabId);
+          return { ok: true, action, session: record.session, tabId: args.tabId, groupId: record.groupId };
+        }
+        if (action === "finalize") {
+          const record = await ensureLocalSession(send, args.session, args.group_title || args.groupTitle || args.session);
+          const keep = new Map((args.keep || []).map((item) => [item.tabId, item.status || "handoff"]));
+          const closedTabIds = [];
+          const releasedTabIds = [];
+          for (const tabId of Array.from(record.agentCreatedTabIds).sort((a, b) => a - b)) {
+            if (["handoff", "deliverable"].includes(keep.get(tabId))) {
+              releasedTabIds.push(tabId);
+              continue;
+            }
+            await send("agent_browser_tab_close", { tabId, scope: scopeFor(record) });
+            closedTabIds.push(tabId);
+          }
+          for (const tabId of record.claimedTabIds) releasedTabIds.push(tabId);
+          record.closed = true;
+          return { ok: true, action, session: record.session, closedTabIds, releasedTabIds: Array.from(new Set(releasedTabIds)).sort((a, b) => a - b) };
+        }
+        if (action === "list") {
+          return { ok: true, sessions: Array.from(sessions.values()).filter((record) => !record.closed).map((record) => ({
+            session: record.session,
+            groupId: record.groupId,
+            groupTitle: record.groupTitle,
+            tabCount: record.tabIds.size,
+          })) };
+        }
+      }
+      if (name === "browser_tabs_list") {
+        if (args.open || args.user || args.allUserTabs) {
+          const raw = await send("get_all_tabs", args);
+          const tabs = flattenTabs(raw).map((tab) => {
+            const claimToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            claimTokens.set(claimToken, tab.id);
+            return { ...tab, claimToken };
+          });
+          return { ok: true, tabs, totalCount: tabs.length, raw, claimRequired: true };
+        }
+        const raw = await send("get_all_tabs", args);
+        let tabs = flattenTabs(raw);
+        if (args.session) {
+          const record = sessions.get(args.session);
+          if (!record) throw new Error(`Session '${args.session}' does not exist`);
+          const allowed = new Set(scopeFor(record).allowedTabIds);
+          tabs = tabs.filter((tab) => allowed.has(tab.id));
         }
         return { tabs, totalCount: tabs.length, raw };
       }
+      if (name === "browser_tab") {
+        if (args.action === "info") return send("agent_browser_tab_info", { tabId: args.tabId, scope: sessions.has(args.session) ? scopeFor(sessions.get(args.session)) : args.scope });
+        if (args.action === "switch") return send("agent_browser_tab_switch", { tabId: args.tabId, scope: scopeFor(sessions.get(args.session)) });
+        if (args.action === "close") return send("agent_browser_tab_close", { tabId: args.tabId, scope: scopeFor(sessions.get(args.session)) });
+      }
+      if (name === "browser_screenshot") return send("screenshot", { ...args, scope: args.scope || (args.session && sessions.has(args.session) ? scopeFor(sessions.get(args.session)) : undefined) });
       if (name === "browser_tab_info") return send("agent_browser_tab_info", args);
       if (name === "browser_tab_switch") return send("agent_browser_tab_switch", args);
       if (name === "browser_tab_new") return send("agent_browser_tab_new", args);
@@ -655,20 +793,21 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       if (name === "browser.wait") return send("agent_browser_wait", args);
       if (name === "browser.clipboard.readText") return send("clipboard_read", args);
       if (name === "browser.clipboard.writeText") return send("clipboard_write", args);
-      if (name === "script_evaluate") return send("script_evaluate", normalizeScriptEvaluateArgs(args));
-      if (name === "browser_navigate") return send("navigate", args);
-      if (name === "browser.dom.overview") return send("dom_overview", args);
-      if (name === "browser.dom.query") return send("dom_query", args);
-      if (name === "browser.dom.search") return send("dom_search", args);
-      if (name === "browser.dom.click") return send("action_click", args);
-      if (name === "browser.dom.type") return send("type", normalizeTypeArgs(args));
-      if (name === "browser.dom.scroll") return send("action_scroll", args);
+      if (name === "script_evaluate") return send("script_evaluate", addSessionScope(normalizeScriptEvaluateArgs(args)));
+      if (name === "browser_navigate") return send("navigate", addSessionScope(args));
+      if (name === "browser.dom.overview") return send("dom_overview", addSessionScope(args));
+      if (name === "browser.dom.query") return send("dom_query", addSessionScope(args));
+      if (name === "browser.dom.search") return send("dom_search", addSessionScope(args));
+      if (name === "browser.dom.click") return send("action_click", addSessionScope(args));
+      if (name === "browser.dom.type") return send("type", addSessionScope(normalizeTypeArgs(args)));
+      if (name === "browser.dom.scroll") return send("action_scroll", addSessionScope(args));
       if (name === "browser.cua.screenshot") {
         const image = await send("screenshot", {
+          ...addSessionScope(args),
           format: args.format || "png",
           quality: args.quality || 80,
         });
-        const info = await send("get_info", {});
+        const info = await send("get_info", addSessionScope(args));
         const viewport = info.viewport || {};
         const dpr = Number(viewport.devicePixelRatio || 1);
         const cssWidth = viewport.innerWidth;
@@ -691,37 +830,40 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       }
       if (name === "browser.cua.click") {
         const point = await screenshotPointToCss(send, args.x, args.y);
-        return send("click", {
+        return send("click", addSessionScope({
+          ...args,
           x: point.x,
           y: point.y,
           button: args.button || "left",
           clickCount: args.clickCount || 1,
           keypress: args.keypress,
-        });
+        }));
       }
       if (name === "browser.cua.double_click") {
         const point = await screenshotPointToCss(send, args.x, args.y);
-        return send("click", { x: point.x, y: point.y, button: "left", clickCount: 2, keypress: args.keypress });
+        return send("click", addSessionScope({ ...args, x: point.x, y: point.y, button: "left", clickCount: 2, keypress: args.keypress }));
       }
       if (name === "browser.cua.move") {
         const point = await screenshotPointToCss(send, args.x, args.y);
-        return send("action_hover", { target: point });
+        return send("action_hover", addSessionScope({ ...args, target: point }));
       }
-      if (name === "browser.cua.type") return send("type", args);
-      if (name === "browser.cua.key") return send("send_keys", { keys: args.combo || args.key });
+      if (name === "browser.cua.type") return send("type", addSessionScope(args));
+      if (name === "browser.cua.key") return send("send_keys", addSessionScope({ ...args, keys: args.combo || args.key }));
       if (name === "browser.cua.scroll") {
-        return send("scroll", {
+        return send("scroll", addSessionScope({
+          ...args,
           x: args.x || 0,
           y: args.y || 0,
           deltaX: args.dx || 0,
           deltaY: args.dy ?? args.deltaY ?? 500,
           keypress: args.keypress,
-        });
+        }));
       }
       if (name === "browser.cua.drag") {
         const start = await screenshotPointToCss(send, args.x1, args.y1);
         const end = await screenshotPointToCss(send, args.x2, args.y2);
-        return send("drag", {
+        return send("drag", addSessionScope({
+          ...args,
           startX: start.x,
           startY: start.y,
           endX: end.x,
@@ -729,10 +871,10 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
           duration: args.duration || 500,
           keys: args.keys,
           path: args.path,
-        });
+        }));
       }
 
-      return send(name, args);
+      return send(name, addSessionScope(args));
     },
   };
 }
@@ -920,9 +1062,21 @@ class Browser {
     this.capabilities = new CapabilityCollection({ scope: "browser", registry: browserCapabilityRegistry, owner: this, transport, safety });
   }
 
-  async nameSession(name) {
+  async nameSession(name, options = {}) {
     this.sessionName = name;
+    await this._transport.command("browser_session", {
+      action: "create",
+      session: name,
+      group_title: options.groupTitle || options.group_title || name,
+    });
     return { ok: true, name };
+  }
+
+  _requireSession() {
+    if (!this.sessionName) {
+      throw new Error("Call browser.nameSession(name) before controlling Chrome.");
+    }
+    return this.sessionName;
   }
 
   async documentation() {
@@ -939,14 +1093,16 @@ class Tabs {
   }
 
   async list() {
-    const raw = await this._transport.command("browser_tabs_list", {});
+    const session = this._browser._requireSession();
+    const raw = await this._transport.command("browser_tabs_list", { session });
     return (raw.tabs || []).map(
       (tab) => new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: tab, raw: tab })
     );
   }
 
   async selected() {
-    const raw = await this._transport.command("browser_tab_info", {});
+    const session = this._browser._requireSession();
+    const raw = await this._transport.command("browser_tab", { action: "info", session });
     return new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: raw, raw });
   }
 
@@ -959,28 +1115,27 @@ class Tabs {
     const args = typeof urlOrOptions === "object" && urlOrOptions !== null
       ? { ...urlOrOptions }
       : { ...(urlOrOptions ? { url: urlOrOptions } : {}), ...options };
-    const raw = await this._transport.command("browser_tab_new", args);
+    const session = this._browser._requireSession();
+    const raw = await this._transport.command("browser_session", {
+      action: "new_tab",
+      session,
+      url: args.url || "about:blank",
+      group_title: args.groupTitle || args.group_title,
+    });
     return new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: raw, raw });
   }
 
   async finalize({ keep = [] } = {}) {
+    const session = this._browser._requireSession();
     const normalizedKeep = keep.map((item) => ({
       tabId: item.tab?.id ?? item.tabId ?? null,
       status: item.status || "handoff",
     }));
-    try {
-      return await this._transport.command("browser.tabs.finalize", { keep: normalizedKeep });
-    } catch (error) {
-      if (!isUnsupportedCommandError(error)) {
-        throw error;
-      }
-    }
-    return {
-      ok: true,
+    return this._transport.command("browser_session", {
       action: "finalize",
-      kept: normalizedKeep,
-      raw: null,
-    };
+      session,
+      keep: normalizedKeep,
+    });
   }
 }
 
@@ -993,16 +1148,27 @@ class UserSurface {
 
   async openTabs() {
     // browser.user.openTabs: list real user Chrome tabs before claiming one.
-    return this._browser.tabs.list();
+    const raw = await this._transport.command("browser_tabs_list", { open: true });
+    return (raw.tabs || []).map(
+      (tab) => new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: tab, raw: tab })
+    );
   }
 
   async claimTab(tabOrOptions = {}) {
     // browser.user.claimTab: accept a Tab, raw tab object, or { tabId }.
+    const session = this._browser._requireSession();
     const tabId = tabOrOptions?.tabId ?? tabOrOptions?.id ?? tabOrOptions?.raw?.id;
-    if (tabId !== undefined && tabId !== null) {
-      await this._transport.command("browser_tab_switch", { tabId });
+    if (tabId === undefined || tabId === null) {
+      throw new Error("browser.user.claimTab expects a tab returned by browser.user.openTabs() or { tabId }");
     }
-    return this._browser.tabs.selected();
+    const claimToken = tabOrOptions?.claimToken ?? tabOrOptions?.raw?.claimToken;
+    const raw = await this._transport.command("browser_session", {
+      action: "claim",
+      session,
+      tabId,
+      ...(claimToken ? { claimToken } : {}),
+    });
+    return new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: { id: tabId, ...raw }, raw });
   }
 
   async history(options = {}) {
@@ -1038,25 +1204,36 @@ class SafetyManager {
 class Tab {
   constructor({ browser, transport, safety, data = {}, raw = data }) {
     this.browser = browser;
-    this._transport = transport;
     this._safety = safety;
     this.id = data.id;
     this._url = data.url;
     this._title = data.title;
     this.active = data.active;
     this.raw = raw;
-    this.playwright = new PlaywrightSurface({ tab: this, transport, safety });
-    this.cua = new CuaSurface({ tab: this, transport, safety });
-    this.dom_cua = new DomCuaSurface({ tab: this, transport, safety });
-    this.dev = new DevSurface({ tab: this, transport });
-    this.clipboard = new ClipboardSurface({ tab: this, transport, safety });
-    this.dialog = new DialogSurface({ tab: this, transport, safety });
-    this.capabilities = new CapabilityCollection({ scope: "tab", registry: tabCapabilityRegistry, owner: this, transport, safety });
+    this._transport = {
+      ...transport,
+      command: (name, args = {}) => transport.command(name, {
+        session: this.browser._requireSession(),
+        tabId: this.id,
+        ...args,
+      }),
+    };
+    this.playwright = new PlaywrightSurface({ tab: this, transport: this._transport, safety });
+    this.cua = new CuaSurface({ tab: this, transport: this._transport, safety });
+    this.dom_cua = new DomCuaSurface({ tab: this, transport: this._transport, safety });
+    this.dev = new DevSurface({ tab: this, transport: this._transport });
+    this.clipboard = new ClipboardSurface({ tab: this, transport: this._transport, safety });
+    this.dialog = new DialogSurface({ tab: this, transport: this._transport, safety });
+    this.capabilities = new CapabilityCollection({ scope: "tab", registry: tabCapabilityRegistry, owner: this, transport: this._transport, safety });
   }
 
   async url() {
     try {
-      const info = await this._transport.command("browser_tab_info", { tabId: this.id });
+      const info = await this._transport.command("browser_tab", {
+        action: "info",
+        session: this.browser._requireSession(),
+        tabId: this.id,
+      });
       return info.url ?? this._url;
     } catch {
       return this._url;
@@ -1065,7 +1242,11 @@ class Tab {
 
   async title() {
     try {
-      const info = await this._transport.command("browser_tab_info", { tabId: this.id });
+      const info = await this._transport.command("browser_tab", {
+        action: "info",
+        session: this.browser._requireSession(),
+        tabId: this.id,
+      });
       return info.title ?? this._title;
     } catch {
       return this._title;
@@ -1073,7 +1254,7 @@ class Tab {
   }
 
   async goto(url) {
-    return this._transport.command("browser_navigate", { url });
+    return this._transport.command("browser_navigate", { session: this.browser._requireSession(), url });
   }
 
   async reload() {
@@ -1090,19 +1271,19 @@ class Tab {
   }
 
   async goBack() {
-    return this._transport.command("go_back", {});
+    return this._transport.command("browser_navigate", { action: "back", session: this.browser._requireSession() });
   }
 
   async goForward() {
-    return this._transport.command("go_forward", {});
+    return this._transport.command("browser_navigate", { action: "forward", session: this.browser._requireSession() });
   }
 
   async info() {
-    return this._transport.command("browser_tab_info", { tabId: this.id });
+    return this._transport.command("browser_tab", { action: "info", session: this.browser._requireSession(), tabId: this.id });
   }
 
   async screenshot(options = {}) {
-    const result = await this._transport.command("browser.cua.screenshot", options);
+    const result = await this._transport.command("browser_screenshot", { ...options, session: this.browser._requireSession() });
     if (options.raw === true) {
       return result;
     }
@@ -1119,7 +1300,7 @@ class Tab {
   }
 
   async close() {
-    return this._transport.command("browser_tab_close", { tabId: this.id });
+    return this._transport.command("browser_tab", { action: "close", session: this.browser._requireSession(), tabId: this.id });
   }
 }
 

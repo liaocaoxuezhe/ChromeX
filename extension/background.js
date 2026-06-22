@@ -69,6 +69,109 @@ function isDebugableUrl(url) {
   return isDebugable;
 }
 
+function isScopeProvided(scope) {
+  return Boolean(scope && scope.mode === "session" && scope.session);
+}
+
+async function assertTabInScope(tabId, scope) {
+  if (!isScopeProvided(scope)) {
+    throw new Error("session scope is required for browser control");
+  }
+  const tab = await chrome.tabs.get(tabId);
+  const allowedById = Array.isArray(scope.allowedTabIds) && scope.allowedTabIds.includes(tabId);
+  const allowedByGroup = scope.groupId !== undefined && scope.groupId !== null && tab.groupId === scope.groupId;
+  if (!allowedById && !allowedByGroup) {
+    throw new Error(`tab ${tabId} is outside session ${scope.session}`);
+  }
+}
+
+async function resolveScopedTargetTab(params = {}) {
+  const scope = params.scope;
+  const requestedTabId = params.tabId ?? targetTabId;
+  if (requestedTabId === undefined || requestedTabId === null) {
+    throw new Error("no target tab is selected for this session");
+  }
+  await assertTabInScope(requestedTabId, scope);
+  targetTabId = requestedTabId;
+  return requestedTabId;
+}
+
+const SCOPE_REQUIRED_COMMANDS = new Set([
+  "screenshot",
+  "click",
+  "type",
+  "scroll",
+  "navigate",
+  "get_dom",
+  "get_info",
+  "tab_manage",
+  "go_back",
+  "go_forward",
+  "reload",
+  "drag",
+  "extract_content",
+  "execute_script",
+  "send_keys",
+  "find_text",
+  "scrape_with_scroll",
+  "agent_browser_tab_info",
+  "agent_browser_tab_switch",
+  "agent_browser_tab_new",
+  "agent_browser_tab_close",
+  "dom_overview",
+  "dom_query",
+  "dom_search",
+  "dom_element_detail",
+  "dom_wait_for",
+  "action_click",
+  "action_drag",
+  "action_scroll",
+  "action_hover",
+  "upload_file",
+  "handle_dialog",
+  "wait_for_download",
+  "action_press_key",
+  "network_capture",
+  "network_list",
+  "network_query",
+  "network_fetch",
+  "network_replay",
+  "console_capture",
+  "console_list",
+  "console_get",
+  "console_clear",
+  "script_evaluate",
+  "frame_evaluate",
+  "dom_get_text",
+  "playwright_batch",
+  "save_as_pdf",
+  "browser.clipboard.read",
+  "browser.clipboard.write",
+  "page_assets_list",
+  "page_assets_bundle"
+]);
+
+const EXPLICIT_TAB_COMMANDS = new Set([
+  "agent_browser_tab_switch",
+  "agent_browser_tab_close"
+]);
+
+async function applySessionScopeGuard(command, params = {}) {
+  if (!SCOPE_REQUIRED_COMMANDS.has(command)) return params;
+  if (command === "agent_browser_tab_new" || (command === "tab_manage" && params.action === "new")) {
+    if (!isScopeProvided(params.scope)) {
+      throw new Error("session scope is required for browser control");
+    }
+    return params;
+  }
+  if (EXPLICIT_TAB_COMMANDS.has(command) || (command === "tab_manage" && ["switch", "close"].includes(params.action))) {
+    await assertTabInScope(params.tabId, params.scope);
+    return params;
+  }
+  const tabId = await resolveScopedTargetTab(params);
+  return { ...params, tabId };
+}
+
 // ==================== Native Host / WebSocket 管理 ====================
 
 function isExpectedExtensionId() {
@@ -759,30 +862,31 @@ async function handleCommand(message) {
   const response = { request_id };
 
   try {
+    const guardedParams = await applySessionScopeGuard(command, params);
     switch (command) {
       case "screenshot":
-        response.data = await cmdScreenshot(params);
+        response.data = await cmdScreenshot(guardedParams);
         break;
       case "click":
-        response.data = await cmdClick(params);
+        response.data = await cmdClick(guardedParams);
         break;
       case "type":
-        response.data = await cmdType(params);
+        response.data = await cmdType(guardedParams);
         break;
       case "scroll":
-        response.data = await cmdScroll(params);
+        response.data = await cmdScroll(guardedParams);
         break;
       case "navigate":
-        response.data = await cmdNavigate(params);
+        response.data = await cmdNavigate(guardedParams);
         break;
       case "get_dom":
-        response.data = await cmdGetDom(params);
+        response.data = await cmdGetDom(guardedParams);
         break;
       case "get_info":
         response.data = await cmdGetInfo();
         break;
       case "tab_manage":
-        response.data = await cmdTabManage(params);
+        response.data = await cmdTabManage(guardedParams);
         break;
       case "go_back":
         response.data = await cmdGoBack();
@@ -794,109 +898,109 @@ async function handleCommand(message) {
         response.data = await cmdReload();
         break;
       case "drag":
-        response.data = await cmdDrag(params);
+        response.data = await cmdDrag(guardedParams);
         break;
       case "get_all_tabs":
         response.data = await cmdGetAllTabs();
         break;
       case "extract_content":
-        response.data = await cmdExtractContent(params);
+        response.data = await cmdExtractContent(guardedParams);
         break;
       case "execute_script":
-        response.data = await cmdExecuteScript(params);
+        response.data = await cmdExecuteScript(guardedParams);
         break;
       case "send_keys":
-        response.data = await cmdSendKeys(params);
+        response.data = await cmdSendKeys(guardedParams);
         break;
       case "find_text":
-        response.data = await cmdFindText(params);
+        response.data = await cmdFindText(guardedParams);
         break;
       case "scrape_with_scroll":
-        response.data = await cmdScrapeWithScroll(params);
+        response.data = await cmdScrapeWithScroll(guardedParams);
         break;
       case "agent_browser_tab_info":
-        response.data = await cmdAgentBrowserTabInfo(params);
+        response.data = await cmdAgentBrowserTabInfo(guardedParams);
         break;
       case "agent_browser_tab_switch":
-        response.data = await cmdAgentBrowserTabSwitch(params);
+        response.data = await cmdAgentBrowserTabSwitch(guardedParams);
         break;
       case "agent_browser_tab_new":
-        response.data = await cmdAgentBrowserTabNew(params);
+        response.data = await cmdAgentBrowserTabNew(guardedParams);
         break;
       case "agent_browser_tab_close":
-        response.data = await cmdAgentBrowserTabClose(params);
+        response.data = await cmdAgentBrowserTabClose(guardedParams);
         break;
       case "dom_overview":
-        response.data = await cmdDomOverview(params);
+        response.data = await cmdDomOverview(guardedParams);
         break;
       case "dom_query":
-        response.data = await cmdDomQuery(params);
+        response.data = await cmdDomQuery(guardedParams);
         break;
       case "dom_search":
-        response.data = await cmdDomSearch(params);
+        response.data = await cmdDomSearch(guardedParams);
         break;
       case "dom_element_detail":
-        response.data = await cmdDomElementDetail(params);
+        response.data = await cmdDomElementDetail(guardedParams);
         break;
       case "dom_wait_for":
-        response.data = await cmdDomWaitFor(params);
+        response.data = await cmdDomWaitFor(guardedParams);
         break;
       case "action_click":
-        response.data = await cmdActionClick(params);
+        response.data = await cmdActionClick(guardedParams);
         break;
       case "action_drag":
-        response.data = await cmdActionDrag(params);
+        response.data = await cmdActionDrag(guardedParams);
         break;
       case "action_scroll":
-        response.data = await cmdActionScroll(params);
+        response.data = await cmdActionScroll(guardedParams);
         break;
       case "action_hover":
-        response.data = await cmdActionHover(params);
+        response.data = await cmdActionHover(guardedParams);
         break;
       case "upload_file":
-        response.data = await cmdUploadFile(params);
+        response.data = await cmdUploadFile(guardedParams);
         break;
       case "handle_dialog":
-        response.data = await cmdHandleDialog(params);
+        response.data = await cmdHandleDialog(guardedParams);
         break;
       case "wait_for_download":
-        response.data = await cmdWaitForDownload(params);
+        response.data = await cmdWaitForDownload(guardedParams);
         break;
       case "action_press_key":
-        response.data = await cmdActionPressKey(params);
+        response.data = await cmdActionPressKey(guardedParams);
         break;
       case "network_capture":
-        response.data = await cmdNetworkCapture(params);
+        response.data = await cmdNetworkCapture(guardedParams);
         break;
       case "network_list":
-        response.data = await cmdNetworkList(params);
+        response.data = await cmdNetworkList(guardedParams);
         break;
       case "network_query":
-        response.data = await cmdNetworkQuery(params);
+        response.data = await cmdNetworkQuery(guardedParams);
         break;
       case "network_fetch":
-        response.data = await cmdNetworkFetch(params);
+        response.data = await cmdNetworkFetch(guardedParams);
         break;
       case "network_replay":
-        response.data = await cmdNetworkReplay(params);
+        response.data = await cmdNetworkReplay(guardedParams);
         break;
       case "console_capture":
-        response.data = await cmdConsoleCapture(params);
+        response.data = await cmdConsoleCapture(guardedParams);
         break;
       case "console_list":
-        response.data = await cmdConsoleList(params);
+        response.data = await cmdConsoleList(guardedParams);
         break;
       case "console_get":
-        response.data = await cmdConsoleGet(params);
+        response.data = await cmdConsoleGet(guardedParams);
         break;
       case "console_clear":
-        response.data = await cmdConsoleClear(params);
+        response.data = await cmdConsoleClear(guardedParams);
         break;
       case "script_evaluate":
-        response.data = await cmdScriptEvaluate(params);
+        response.data = await cmdScriptEvaluate(guardedParams);
         break;
       case "frame_evaluate":
-        response.data = await cmdFrameEvaluate(params);
+        response.data = await cmdFrameEvaluate(guardedParams);
         break;
       case "ping_version":
         response.data = {
@@ -907,34 +1011,34 @@ async function handleCommand(message) {
         };
         break;
       case "dom_get_text":
-        response.data = await cmdDomGetText(params);
+        response.data = await cmdDomGetText(guardedParams);
         break;
       case "tab_group_create":
-        response.data = await cmdTabGroupCreate(params);
+        response.data = await cmdTabGroupCreate(guardedParams);
         break;
       case "tab_group_add":
-        response.data = await cmdTabGroupAdd(params);
+        response.data = await cmdTabGroupAdd(guardedParams);
         break;
       case "tab_group_close":
-        response.data = await cmdTabGroupClose(params);
+        response.data = await cmdTabGroupClose(guardedParams);
         break;
       case "playwright_batch":
-        response.data = await cmdPlaywrightBatch(params);
+        response.data = await cmdPlaywrightBatch(guardedParams);
         break;
       case "save_as_pdf":
-        response.data = await cmdSaveAsPdf(params);
+        response.data = await cmdSaveAsPdf(guardedParams);
         break;
       case "browser.clipboard.read":
-        response.data = await cmdClipboardRead(params);
+        response.data = await cmdClipboardRead(guardedParams);
         break;
       case "browser.clipboard.write":
-        response.data = await cmdClipboardWrite(params);
+        response.data = await cmdClipboardWrite(guardedParams);
         break;
       case "page_assets_list":
-        response.data = await cmdPageAssetsList(params);
+        response.data = await cmdPageAssetsList(guardedParams);
         break;
       case "page_assets_bundle":
-        response.data = await cmdPageAssetsBundle(params);
+        response.data = await cmdPageAssetsBundle(guardedParams);
         break;
       default:
         throw new Error(`未知指令: ${command}`);

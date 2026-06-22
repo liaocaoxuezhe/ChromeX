@@ -227,6 +227,8 @@ class NodeJSRuntimeManager:
         timeout: int = 30000,
         *,
         lease_token: str | None = None,
+        session: str | None = None,
+        scope: dict[str, Any] | None = None,
         restart_on_closed_stdout: bool = True,
     ) -> dict[str, Any]:
         """向 Node.js 子进程发送 Playwright 代码并等待执行结果。
@@ -264,6 +266,10 @@ class NodeJSRuntimeManager:
         }
         if lease_token:
             message["lease_token"] = lease_token
+        if session:
+            message["session"] = session
+        if scope:
+            message["scope"] = scope
 
         try:
             data = json.dumps(message, ensure_ascii=False) + "\n"
@@ -301,6 +307,8 @@ class NodeJSRuntimeManager:
                     code,
                     timeout,
                     lease_token=lease_token,
+                    session=session,
+                    scope=scope,
                     restart_on_closed_stdout=False,
                 )
             return {

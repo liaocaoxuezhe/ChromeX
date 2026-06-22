@@ -197,6 +197,18 @@ async function setupClient() {
   }
 }
 
+async function bindRuntimeSession(session, scope) {
+  if (!session || !browser) return;
+  if (scope && transport?.setSessionScope) {
+    transport.setSessionScope(scope);
+    browser.sessionName = session;
+  } else {
+    if (browser.sessionName === session) return;
+    await browser.nameSession(session, { groupTitle: session });
+  }
+  globalThis.tab = null;
+}
+
 // ─── REPL 上下文持久化 ────────────────────────────────────
 // 将 browser/link2chrome/console 注入 globalThis，实现跨执行变量共享
 function setupReplContext() {
@@ -265,27 +277,24 @@ async function collectStartupSummary() {
     return summary;
   }
 
-  try {
-    const openTabs = await browser.user.openTabs();
-    summary.tabs = await Promise.all(openTabs.map((tab) => summarizeTab(tab)));
-    const active = openTabs.find((tab) => tab.raw?.active) || openTabs.find((tab) => tab.raw?.debuggable || tab.raw?.debugable);
-    if (active) {
-      summary.boundTab = await summarizeTab(active);
-      summary.group = summary.boundTab?.group ?? null;
-      summary.source = "browser.user.openTabs";
-      return summary;
-    }
-  } catch (error) {
-    summary.openTabsError = error?.message || String(error);
+  if (!browser?.sessionName) {
+    summary.source = "session-required";
+    summary.sessionRequired = true;
+    return summary;
   }
 
   try {
-    const selected = await browser.tabs.selected();
-    summary.boundTab = await summarizeTab(selected);
-    summary.group = summary.boundTab?.group ?? null;
-    summary.source = "browser.tabs.selected";
+    const scopedTabs = await browser.tabs.list();
+    summary.tabs = await Promise.all(scopedTabs.map((tab) => summarizeTab(tab)));
+    const active = scopedTabs.find((tab) => tab.raw?.active) || scopedTabs[0];
+    if (active) {
+      summary.boundTab = await summarizeTab(active);
+      summary.group = summary.boundTab?.group ?? null;
+      summary.source = "browser.tabs.list";
+      return summary;
+    }
   } catch (error) {
-    summary.selectedError = error?.message || String(error);
+    summary.tabsError = error?.message || String(error);
   }
 
   return summary;
@@ -520,6 +529,9 @@ async function main() {
     if (message.type === "execute") {
       if (message.lease_token && transport && transport.setLeaseToken) {
         transport.setLeaseToken(message.lease_token);
+      }
+      if (message.session) {
+        await bindRuntimeSession(message.session, message.scope);
       }
       await executeCode({
         id: message.id,

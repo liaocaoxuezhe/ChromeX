@@ -16,6 +16,7 @@ import shutil
 import sys
 import tempfile
 import time
+import uuid
 from io import BytesIO
 
 # 确保项目根目录在 Python 路径中（解决模块导入问题）
@@ -62,6 +63,7 @@ debugger_manager = DebuggerManager(ws_manager=ws_manager)
 session_manager = SessionManager()
 dom_cache = DomSnapshotCache()
 playwright_runtime = PlaywrightRuntime()
+_claim_tokens: dict[str, int] = {}
 
 if NodeJSRuntimeManager is not None:
     nodejs_runtime: Optional[NodeJSRuntimeManager] = NodeJSRuntimeManager(project_root=_project_root)
@@ -101,6 +103,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
             op_logger.log_operation(name, arguments, result_summary=result_summary)
             return result
 
+        if hasattr(ws_manager, "set_session_scope"):
+            ws_manager.set_session_scope(arguments.get("session"))
         async with ws_manager.operation(name):
             # New unified 27-tool routing
             if name in {
@@ -181,6 +185,57 @@ def _json_content(payload: object) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2))]
 
 
+def _require_session_arg(args: dict) -> str:
+    session = args.get("session")
+    if not isinstance(session, str) or not session.strip():
+        raise ValueError("session is required for scoped browser control")
+    return session.strip()
+
+
+def _params_with_scope(params: dict, session: str) -> dict:
+    scoped = dict(params or {})
+    scoped["scope"] = session_manager.scope_payload(session)
+    return scoped
+
+
+async def _scoped_send(command: str, params: dict, session: str, tab_id: int | None = None) -> dict:
+    if tab_id is not None and not session_manager.is_tab_allowed(session, tab_id):
+        return {"ok": False, "error": f"tab {tab_id} is outside session {session}"}
+    return await ws_manager.send_command(command, _params_with_scope(params, session))
+
+
+def _flatten_tabs(raw: dict) -> list[dict]:
+    tabs = []
+    for window_tabs in raw.get("windows", {}).values():
+        for tab in window_tabs:
+            tabs.append(
+                {
+                    "id": tab.get("id"),
+                    "windowId": tab.get("windowId"),
+                    "active": tab.get("active"),
+                    "url": tab.get("url"),
+                    "title": tab.get("title"),
+                    "status": tab.get("status", "unknown"),
+                    "favicon": tab.get("favIconUrl"),
+                    "groupId": tab.get("groupId"),
+                    "tabGroup": tab.get("groupId"),
+                }
+            )
+    return tabs
+
+
+def _with_claim_tokens(tabs: list[dict]) -> list[dict]:
+    candidates = []
+    for tab in tabs:
+        tab_id = tab.get("id")
+        if tab_id is None:
+            continue
+        token = str(uuid.uuid4())
+        _claim_tokens[token] = tab_id
+        candidates.append({**tab, "claimToken": token})
+    return candidates
+
+
 def _normalize_url(url: str) -> str:
     """Add https:// only for host-like inputs; preserve explicit schemes such as data:."""
     if not url:
@@ -259,6 +314,7 @@ async def tool_diagnose(args: dict) -> list[TextContent | ImageContent]:
 
 async def tool_scrape_with_scroll(args: dict) -> list[TextContent]:
     """批量爬取操作"""
+    session = _require_session_arg(args)
     extract_script = args["extract_script"]
     max_items = args.get("max_items", 100)
     batch_size = args.get("batch_size", 10)
@@ -277,7 +333,7 @@ async def tool_scrape_with_scroll(args: dict) -> list[TextContent]:
 
     logger.info(f"开始批量爬取: max_items={max_items}, dedupe_by={dedupe_by}")
 
-    result = await ws_manager.send_command("scrape_with_scroll", params)
+    result = await _scoped_send("scrape_with_scroll", params, session)
 
     items = result.get("items", [])
     total = result.get("total", 0)
@@ -308,46 +364,48 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
     """Dispatch the unified 27-tool namespace and return JSON-only observations."""
 
     if name == "browser_tabs_list":
-        raw = await ws_manager.send_command("get_all_tabs")
-        tabs = []
-        for window_tabs in raw.get("windows", {}).values():
-            for tab in window_tabs:
-                tabs.append(
-                    {
-                        "id": tab.get("id"),
-                        "windowId": tab.get("windowId"),
-                        "active": tab.get("active"),
-                        "url": tab.get("url"),
-                        "title": tab.get("title"),
-                        "status": tab.get("status", "unknown"),
-                        "favicon": tab.get("favIconUrl"),
-                    }
-                )
+        if args.get("open") or args.get("user") or args.get("allUserTabs"):
+            raw = await ws_manager.send_command("get_all_tabs")
+            tabs = _with_claim_tokens(_flatten_tabs(raw))
+            return _json_content({"ok": True, "tabs": tabs, "totalCount": len(tabs), "claimRequired": True})
+
+        if not args.get("session"):
+            return _json_content({
+                "ok": False,
+                "error": "session is required for browser_tabs_list. Use browser_session(action='list') for session summaries.",
+            })
+        session = _require_session_arg(args)
+        raw = await _scoped_send("get_all_tabs", {}, session)
+        allowed = set(session_manager.scope_payload(session)["allowedTabIds"])
+        tabs = [tab for tab in _flatten_tabs(raw) if tab.get("id") in allowed]
         return _json_content({"tabs": tabs, "totalCount": len(tabs)})
 
     if name == "browser_navigate":
+        session = _require_session_arg(args)
         action = args.get("action", "goto")
         if action == "goto":
             started = time.monotonic()
             url = args.get("url", "")
             url = _normalize_url(url)
-            result = await ws_manager.send_command(
+            result = await _scoped_send(
                 "navigate",
                 {
                     "url": url,
                     "waitUntil": args.get("waitUntil", "dom-ready"),
                     "timeout": args.get("timeout", 10000),
                 },
+                session,
             )
             final_url = result.get("url", url)
 
             joined_session = None
-            if session_manager.active_session:
+            if session:
                 try:
                     tab_info = await ws_manager.send_command("get_info")
                     tab_id = tab_info.get("tabId")
                     if tab_id is not None:
-                        joined_session = await session_manager.auto_add_tab(tab_id, ws_manager)
+                        await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=True)
+                        joined_session = session
                 except Exception:
                     pass
 
@@ -365,7 +423,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 resp["session"] = joined_session
             return _json_content(resp)
         elif action == "back":
-            result = await ws_manager.send_command("go_back")
+            result = await _scoped_send("go_back", {}, session)
             return _json_content({
                 "ok": True,
                 "action": "back",
@@ -374,7 +432,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 "hint": "Navigated back.",
             })
         elif action == "forward":
-            result = await ws_manager.send_command("go_forward")
+            result = await _scoped_send("go_forward", {}, session)
             return _json_content({
                 "ok": True,
                 "action": "forward",
@@ -383,7 +441,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 "hint": "Navigated forward.",
             })
         elif action == "reload":
-            result = await ws_manager.send_command("reload")
+            result = await _scoped_send("reload", {}, session)
             return _json_content({
                 "ok": True,
                 "action": "reload",
@@ -394,17 +452,19 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             return _json_content({"ok": False, "error": f"unknown navigation action: {action}"})
 
     if name == "browser_tab":
+        session = _require_session_arg(args)
         action = args.get("action")
         if action == "new":
-            result = await ws_manager.send_command("agent_browser_tab_new", {
+            result = await _scoped_send("agent_browser_tab_new", {
                 "url": args.get("url"),
                 "active": args.get("active", True)
-            })
+            }, session)
             tab_id = result.get("tabId")
             joined_session = None
-            if tab_id is not None and session_manager.active_session:
+            if tab_id is not None:
                 try:
-                    joined_session = await session_manager.auto_add_tab(tab_id, ws_manager)
+                    await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=True)
+                    joined_session = session
                 except Exception:
                     pass
             resp = {"ok": True, "action": "new", "tabId": tab_id}
@@ -415,16 +475,20 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             tab_id = args.get("tabId")
             if tab_id is None:
                 return _json_content({"ok": False, "error": "tabId is required for switch"})
-            result = await ws_manager.send_command("agent_browser_tab_switch", {"tabId": tab_id})
+            result = await _scoped_send("agent_browser_tab_switch", {"tabId": tab_id}, session, tab_id=tab_id)
+            if result.get("ok") is False:
+                return _json_content(result)
             return _json_content({"ok": True, "action": "switch", "tabId": tab_id})
         elif action == "close":
             tab_id = args.get("tabId")
             if tab_id is None:
                 return _json_content({"ok": False, "error": "tabId is required for close"})
-            result = await ws_manager.send_command("agent_browser_tab_close", {"tabId": tab_id})
+            result = await _scoped_send("agent_browser_tab_close", {"tabId": tab_id}, session, tab_id=tab_id)
+            if result.get("ok") is False:
+                return _json_content(result)
             return _json_content({"ok": True, "action": "close", "tabId": tab_id})
         elif action == "info":
-            result = await ws_manager.send_command("agent_browser_tab_info", {})
+            result = await _scoped_send("agent_browser_tab_info", {}, session)
             return _json_content({"ok": True, "action": "info", **result})
         else:
             return _json_content({"ok": False, "error": f"unknown tab action: {action}"})
@@ -457,7 +521,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             })
             tab_id = tab_result.get("tabId")
             if tab_id is not None:
-                await session_manager.add_tab_to_session(session, tab_id, ws_manager)
+                await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=True)
             return _json_content({
                 "ok": True, "action": "new_tab", "session": session,
                 "tabId": tab_id, "url": url,
@@ -471,8 +535,40 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             if tab_id is None:
                 return _json_content({"ok": False, "error": "tabId is required for 'add'"})
             await session_manager.ensure_session(session, None, ws_manager)
-            await session_manager.add_tab_to_session(session, tab_id, ws_manager)
+            if not session_manager.is_tab_allowed(session, tab_id):
+                claim_token = args.get("claimToken")
+                if not claim_token:
+                    return _json_content({"ok": False, "error": "claimToken is required for adding user tabs"})
+                token_tab_id = _claim_tokens.pop(claim_token, None)
+                if token_tab_id != tab_id:
+                    return _json_content({"ok": False, "error": "claimToken does not match tabId"})
+            await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=False)
             return _json_content({"ok": True, "action": "add", "session": session, "tabId": tab_id})
+        if action == "claim":
+            session = _require_session_arg(args)
+            tab_id = args.get("tabId")
+            if tab_id is None:
+                return _json_content({"ok": False, "error": "tabId is required for 'claim'"})
+            info = await session_manager.ensure_session(session, args.get("group_title"), ws_manager)
+            claim_token = args.get("claimToken")
+            if not session_manager.is_tab_allowed(session, tab_id):
+                if not claim_token:
+                    return _json_content({"ok": False, "error": "claimToken is required for claiming user tabs"})
+                token_tab_id = _claim_tokens.pop(claim_token, None)
+                if token_tab_id != tab_id:
+                    return _json_content({"ok": False, "error": "claimToken does not match tabId"})
+            session_manager.claim_tab(session, tab_id)
+            return _json_content({
+                "ok": True,
+                "action": "claim",
+                "session": session,
+                "tabId": tab_id,
+                "groupId": info.get("group_id"),
+            })
+        if action == "finalize":
+            session = _require_session_arg(args)
+            result = await session_manager.finalize_session(session, args.get("keep") or [], ws_manager)
+            return _json_content(result)
         if action == "close":
             session = args.get("session")
             if not session:
@@ -488,7 +584,8 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         return _json_content({"ok": False, "error": f"unknown session action: {action}"})
 
     if name == "browser_dom_overview":
-        raw = await ws_manager.send_command("dom_overview", args)
+        session = _require_session_arg(args)
+        raw = await _scoped_send("dom_overview", args, session)
         try:
             info = await ws_manager.send_command("get_info")
             current_url = info.get("url", "")
@@ -513,23 +610,26 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         )
 
     if name == "browser_dom_query":
-        return _json_content(await ws_manager.send_command("dom_query", args))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("dom_query", args, session))
 
     if name == "browser_dom_search":
-        return _json_content(await ws_manager.send_command("dom_search", args))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("dom_search", args, session))
 
     if name == "browser_dom_get_text":
+        session = _require_session_arg(args)
         selector = args.get("selector")
         max_chars = args.get("max_chars", 20000)
         include_meta = args.get("include_meta", False)
 
         if selector:
             try:
-                result = await ws_manager.send_command("dom_get_text", {"selector": selector})
+                result = await _scoped_send("dom_get_text", {"selector": selector}, session)
             except Exception as e:
                 if "dom_get_text" not in str(e) and "未知指令" not in str(e):
                     raise
-                result = await ws_manager.send_command(
+                result = await _scoped_send(
                     "script_evaluate",
                     {
                         "expression": f"""
@@ -555,6 +655,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                         "awaitPromise": True,
                         "timeout": 5000,
                     },
+                    session,
                 )
                 if not result.get("ok", True):
                     return _json_content({"ok": False, "error": result.get("error", "dom_get_text fallback failed")})
@@ -576,7 +677,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 payload["meta"] = result.get("meta", {})
             return _json_content(payload)
         else:
-            result = await ws_manager.send_command("extract_content", {})
+            result = await _scoped_send("extract_content", {}, session)
             if "error" in result:
                 return _json_content({"ok": False, "error": result["error"]})
 
@@ -622,6 +723,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             )
 
     if name == "browser_dom_diff":
+        session = _require_session_arg(args)
         try:
             info = await ws_manager.send_command("get_info")
             current_url = info.get("url", "")
@@ -632,7 +734,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         if current_tab_id is None:
             return _json_content({"ok": False, "error": "无法确定当前标签页 ID"})
 
-        raw = await ws_manager.send_command("dom_overview", args)
+        raw = await _scoped_send("dom_overview", args, session)
         raw_json = json.dumps(raw, ensure_ascii=False)
         current_overview = compress_dom(raw_json, max_chars=args.get("max_chars", 30000))
 
@@ -647,7 +749,8 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         )
 
     if name == "browser_screenshot":
-        screenshot = await ws_manager.send_command(
+        session = _require_session_arg(args)
+        screenshot = await _scoped_send(
             "screenshot",
             {
                 "format": args.get("format", "jpeg"),
@@ -655,6 +758,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 "selector": args.get("selector"),
                 "fullPage": args.get("fullPage", False),
             },
+            session,
         )
 
         image_b64 = screenshot.get("image", "")
@@ -709,24 +813,30 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         })
 
     if name == "action_click":
-        return _json_content(await ws_manager.send_command("action_click", args))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("action_click", args, session))
 
     if name == "action_double_click":
         target = args.get("target")
         if not target:
             return _json_content({"ok": False, "error": "target is required"})
-        return _json_content(await ws_manager.send_command("action_click", {"target": target, "clickCount": 2}))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("action_click", {"target": target, "clickCount": 2}, session))
 
     if name == "action_hover":
-        return _json_content(await ws_manager.send_command("action_hover", args))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("action_hover", args, session))
 
     if name == "action_scroll":
-        return _json_content(await ws_manager.send_command("action_scroll", args))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("action_scroll", args, session))
 
     if name == "action_drag":
-        return _json_content(await ws_manager.send_command("action_drag", args))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("action_drag", args, session))
 
     if name == "action_fill":
+        session = _require_session_arg(args)
         target = args.get("target")
         value = args.get("value", "")
         if not target:
@@ -748,79 +858,86 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 params["selector"] = f"[name={json.dumps(target['name'])}]"
             else:
                 params["target"] = target
-        return _json_content(await ws_manager.send_command("type", params))
+        return _json_content(await _scoped_send("type", params, session))
 
     if name == "action_press_key":
-        return _json_content(await ws_manager.send_command("action_press_key", args))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("action_press_key", args, session))
 
     if name == "upload_file":
-        return _json_content(await ws_manager.send_command("upload_file", args))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("upload_file", args, session))
 
     if name == "handle_dialog":
-        return _json_content(await ws_manager.send_command("handle_dialog", args))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("handle_dialog", args, session))
 
     if name == "script_evaluate":
-        return _json_content(await ws_manager.send_command("script_evaluate", args))
+        session = _require_session_arg(args)
+        return _json_content(await _scoped_send("script_evaluate", args, session))
 
     if name == "save_as_pdf":
         return _json_content({"ok": False, "error": "not implemented in this phase"})
 
     if name == "console_check":
+        session = _require_session_arg(args)
         action = args.get("action")
         if action in ("start", "stop", "status", "clear"):
-            return _json_content(await ws_manager.send_command("console_capture", {
+            return _json_content(await _scoped_send("console_capture", {
                 "action": action,
                 "maxEntries": args.get("maxEntries", 300)
-            }))
+            }, session))
         elif action == "list":
-            return _json_content(await ws_manager.send_command("console_list", {
+            return _json_content(await _scoped_send("console_list", {
                 "types": args.get("types"),
                 "limit": args.get("limit", 50)
-            }))
+            }, session))
         elif action == "get":
-            return _json_content(await ws_manager.send_command("console_get", {"id": args.get("id")}))
+            return _json_content(await _scoped_send("console_get", {"id": args.get("id")}, session))
         else:
             return _json_content({"ok": False, "error": f"unknown console action: {action}"})
 
     if name == "network_check":
+        session = _require_session_arg(args)
         action = args.get("action")
         if action in ("start", "stop", "status", "clear"):
-            return _json_content(await ws_manager.send_command("network_capture", {
+            return _json_content(await _scoped_send("network_capture", {
                 "action": action,
                 "maxEntries": args.get("maxEntries", 500),
                 "includeResponseBody": args.get("includeResponseBody", False)
-            }))
+            }, session))
         elif action == "list":
             list_params = {"limit": args.get("limit", 50)}
             for key in ("resourceType", "status", "method"):
                 if args.get(key) is not None:
                     list_params[key] = args[key]
-            return _json_content(await ws_manager.send_command("network_list", list_params))
+            return _json_content(await _scoped_send("network_list", list_params, session))
         elif action == "query":
             query_params = {"limit": args.get("limit", 50)}
             for key in ("urlContains", "method", "status", "resourceType", "hasResponseBody", "includeBody"):
                 if args.get(key) is not None:
                     query_params[key] = args[key]
-            return _json_content(await ws_manager.send_command("network_query", query_params))
+            return _json_content(await _scoped_send("network_query", query_params, session))
         elif action == "fetch":
-            return _json_content(await ws_manager.send_command("network_fetch", {
+            return _json_content(await _scoped_send("network_fetch", {
                 "url": args.get("url"),
                 "method": args.get("method", "GET"),
                 "headers": args.get("headers"),
                 "body": args.get("body"),
                 "responseType": args.get("responseType", "text")
-            }))
+            }, session))
         elif action == "replay":
-            return _json_content(await ws_manager.send_command("network_replay", {
+            return _json_content(await _scoped_send("network_replay", {
                 "id": args.get("id"),
                 "requestId": args.get("requestId"),
                 "overrideHeaders": args.get("overrideHeaders"),
                 "overrideBody": args.get("overrideBody")
-            }))
+            }, session))
         else:
             return _json_content({"ok": False, "error": f"unknown network action: {action}"})
 
     if name == "browser_scrape_with_scroll":
+        _require_session_arg(args)
         # Reuse the existing implementation for consistent text formatting
         return await tool_scrape_with_scroll(args)
 
@@ -834,6 +951,7 @@ async def tool_browser_code_run(args: dict) -> list[TextContent]:
     Node.js 不可用时返回明确错误，不再降级到 Extension 端执行。
     """
     code = args["code"]
+    session = _require_session_arg(args)
     timeout = args.get("timeout", 30000)
     max_result_chars = args.get("max_result_chars", 20000)
 
@@ -875,6 +993,8 @@ async def tool_browser_code_run(args: dict) -> list[TextContent]:
                 code,
                 timeout,
                 lease_token=getattr(ws_manager, "_lease_token", None),
+                session=session,
+                scope=session_manager.scope_payload(session),
             )
             if result.get("ok"):
                 payload = _truncate_result(result["result"])
@@ -922,6 +1042,7 @@ async def tool_save_as_pdf(args: dict) -> list[TextContent]:
     """将当前页面渲染为 PDF 文件。"""
     import base64
     import tempfile
+    session = _require_session_arg(args)
 
     params = {
         "format": args.get("format", "a4"),
@@ -941,7 +1062,7 @@ async def tool_save_as_pdf(args: dict) -> list[TextContent]:
             pass
         output_path = os.path.join(tempfile.gettempdir(), f"{title}-{int(time.time() * 1000)}.pdf")
 
-    result = await ws_manager.send_command("save_as_pdf", params)
+    result = await _scoped_send("save_as_pdf", params, session)
 
     if not result.get("ok"):
         return _json_content({

@@ -39,6 +39,7 @@ class HubClient:
         self._startup_error: str | None = None
         self._started = False
         self._lease_token: str | None = None
+        self._session_scope: str | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -49,6 +50,9 @@ class HubClient:
     @property
     def startup_error(self) -> str | None:
         return self._startup_error
+
+    def set_session_scope(self, session: str | None) -> None:
+        self._session_scope = session
 
     async def start(self):
         """Ensure the singleton hub is reachable, spawning it if necessary."""
@@ -105,6 +109,8 @@ class HubClient:
         }
         if self._lease_token:
             message["lease_token"] = self._lease_token
+        if self._session_scope:
+            message["session"] = self._session_scope
 
         try:
             async with websockets.connect(self.control_url, proxy=None) as websocket:
@@ -136,7 +142,10 @@ class HubClient:
             yield
             return
 
-        lease = await self.send_command("__hub_acquire__", {"name": name}, timeout=REQUEST_TIMEOUT)
+        payload = {"name": name}
+        if self._session_scope:
+            payload["session"] = self._session_scope
+        lease = await self.send_command("__hub_acquire__", payload, timeout=REQUEST_TIMEOUT)
         token = lease["lease_token"]
         self._lease_token = token
         try:
