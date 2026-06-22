@@ -107,6 +107,8 @@ This repository includes a local Codex plugin at `plugins/chromex`.
 After restarting Codex, install `ChromeX` from the `ChromeX Local Plugins` marketplace. Then run:
 
 ```bash
+codex plugin marketplace add /Users/zhangyu/PycharmProjects/Link2Chrome
+codex plugin add chromex@chromex-local
 node plugins/chromex/scripts/install.mjs
 node plugins/chromex/scripts/diagnose.mjs
 ```
