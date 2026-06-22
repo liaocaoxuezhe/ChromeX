@@ -715,7 +715,11 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
           if (record.seedTabId != null && !record.seedConsumed) {
             record.seedConsumed = true;
             record.agentCreatedTabIds.add(record.seedTabId);
-            await send("agent_browser_tab_switch", { tabId: record.seedTabId, scope: scopeFor(record) });
+            await send("agent_browser_tab_switch", {
+              tabId: record.seedTabId,
+              focusWindow: args.focusWindow === true,
+              scope: scopeFor(record),
+            });
             const nav = await send("navigate", {
               tabId: record.seedTabId,
               url: args.url || "about:blank",
@@ -735,7 +739,8 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
           }
           const created = await send("agent_browser_tab_new", {
             url: args.url || "about:blank",
-            active: args.active !== false,
+            active: args.active === true,
+            focusWindow: args.focusWindow === true,
             scope: scopeFor(record),
           });
           if (created.tabId != null) {
@@ -807,7 +812,13 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       }
       if (name === "browser_tab") {
         if (args.action === "info") return send("agent_browser_tab_info", { tabId: args.tabId, scope: sessions.has(args.session) ? scopeFor(sessions.get(args.session)) : args.scope });
-        if (args.action === "switch") return send("agent_browser_tab_switch", { tabId: args.tabId, scope: scopeFor(sessions.get(args.session)) });
+        if (args.action === "switch") {
+          return send("agent_browser_tab_switch", {
+            tabId: args.tabId,
+            focusWindow: args.focusWindow === true,
+            scope: scopeFor(sessions.get(args.session)),
+          });
+        }
         if (args.action === "close") return send("agent_browser_tab_close", { tabId: args.tabId, scope: scopeFor(sessions.get(args.session)) });
       }
       if (name === "browser_screenshot") return send("screenshot", { ...args, scope: args.scope || (args.session && sessions.has(args.session) ? scopeFor(sessions.get(args.session)) : undefined) });
@@ -1165,6 +1176,8 @@ class Tabs {
       session,
       url: args.url || "about:blank",
       group_title: args.groupTitle || args.group_title,
+      active: args.active === true,
+      focusWindow: args.focusWindow === true,
     });
     return new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: raw, raw });
   }

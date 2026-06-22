@@ -831,13 +831,34 @@ test("tab close maps to browser tab close command with tab id", async () => {
 test("tabs.new preserves creation options for model-authored code", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
+  await browser.nameSession("runtime-tabs-new");
 
   await browser.tabs.new("https://background.test", { active: false });
-  await browser.tabs.new({ url: "https://object.test", active: true });
+  await browser.tabs.new({ url: "https://object.test", active: true, focusWindow: true });
 
   assert.deepEqual(transport.calls.slice(-2), [
-    { name: "browser_tab_new", args: { url: "https://background.test", active: false } },
-    { name: "browser_tab_new", args: { url: "https://object.test", active: true } },
+    {
+      name: "browser_session",
+      args: {
+        action: "new_tab",
+        session: "runtime-tabs-new",
+        url: "https://background.test",
+        group_title: undefined,
+        active: false,
+        focusWindow: false,
+      },
+    },
+    {
+      name: "browser_session",
+      args: {
+        action: "new_tab",
+        session: "runtime-tabs-new",
+        url: "https://object.test",
+        group_title: undefined,
+        active: true,
+        focusWindow: true,
+      },
+    },
   ]);
 });
 

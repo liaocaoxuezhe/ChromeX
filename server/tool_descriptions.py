@@ -96,6 +96,10 @@ TOOL_DEFINITIONS = [
                     "type": "boolean",
                     "description": "Activate the new tab. Only used with action='new'. Defaults to true.",
                 },
+                "focusWindow": {
+                    "type": "boolean",
+                    "description": "Bring the Chrome window to the foreground. Defaults to false; use true only for handoff/manual interaction.",
+                },
             },
             ["action"],
         ),
@@ -141,6 +145,10 @@ TOOL_DEFINITIONS = [
                     "type": "string",
                     "description": "URL to open. Required for 'new_tab'.",
                 },
+                "active": {
+                    "type": "boolean",
+                    "description": "Activate the new tab. Only used with action='new_tab'. Defaults to false to avoid stealing focus.",
+                },
                 "tabId": {
                     "type": "integer",
                     "description": "Tab ID to add/claim. Get user-tab candidates from browser_tabs_list(open=true) or runtime openTabs().",
@@ -148,6 +156,10 @@ TOOL_DEFINITIONS = [
                 "claimToken": {
                     "type": "string",
                     "description": "Opaque token returned by open-tabs listing; required to claim user tabs outside the session.",
+                },
+                "focusWindow": {
+                    "type": "boolean",
+                    "description": "Bring the Chrome window to the foreground when opening or reusing a tab. Defaults to false.",
                 },
                 "keep": {
                     "type": "array",
@@ -369,6 +381,10 @@ TOOL_DEFINITIONS = [
                 "waitForSelector": {
                     "type": "string",
                     "description": "CSS selector to wait for after click (useful for dynamic content).",
+                },
+                "focusWindow": {
+                    "type": "boolean",
+                    "description": "If the click opens a new tab, bring Chrome to the foreground. Defaults to false.",
                 },
             },
             ["target"],

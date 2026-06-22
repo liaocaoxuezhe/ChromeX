@@ -229,7 +229,14 @@ async def test_browser_session_new_tab_reuses_seed_blank_tab(monkeypatch):
     payload = json.loads(result[0].text)
     assert payload["tabId"] == 100
     assert ("agent_browser_tab_new", {"url": "https://example.com", "active": True}) not in ws.commands
-    assert ("agent_browser_tab_switch", {"tabId": 100, "scope": main.session_manager.scope_payload("复用空白页")}) in ws.commands
+    assert (
+        "agent_browser_tab_switch",
+        {
+            "tabId": 100,
+            "focusWindow": False,
+            "scope": main.session_manager.scope_payload("复用空白页"),
+        },
+    ) in ws.commands
     assert any(command == "navigate" and params["url"] == "https://example.com" for command, params in ws.commands)
 
 

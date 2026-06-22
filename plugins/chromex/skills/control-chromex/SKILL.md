@@ -27,6 +27,7 @@ Rules:
 - One task equals one `session` equals one Chrome tab group.
 - Use the user's language for `group_title`; in Chinese conversations, use a Chinese tab-group title.
 - Before navigation, tab creation, page reading, interaction, screenshots, or code execution, create or reuse a session.
+- Browser setup should avoid stealing the user's OS focus by default. Use `focusWindow: true` only when handing control to the user for manual interaction, login, CAPTCHA, approval, or visual inspection.
 - Before switching session tabs, call `browser_tabs_list(session='<task-name>')`.
 - To take over existing user tabs, use `browser.user.openTabs()` and pass the returned object to `browser.user.claimTab(tab)`. Do not guess tab IDs.
 - If temporary research tabs are created, close or finalize them when done. Keep tabs only when they are deliverables or handoff points for the user.
@@ -62,7 +63,10 @@ const tabs = await browser.user.openTabs();
 const target = tabs.find(t => (t.raw?.url || "").includes("example.com"));
 globalThis.tab = target
   ? await browser.user.claimTab(target)
-  : await browser.tabs.new("https://example.com");
+  : await browser.tabs.new({ url: "https://example.com", active: false });
+
+// If the user needs to take over the page manually, opt in explicitly:
+// await browser.tabs.new({ url: "https://example.com", active: true, focusWindow: true });
 
 const tab = globalThis.tab;
 const url = await tab.url();
