@@ -55,6 +55,12 @@ class WSManager:
         self._connected_event = asyncio.Event()
         self._startup_error: str | None = None
         self._duplicate_connection_count = 0
+        self._event_handlers = []
+        self._event_tasks: set[asyncio.Task] = set()
+        self._connection_generation = 0
+
+    def add_event_handler(self, handler):
+        self._event_handlers.append(handler)
 
     @property
     def is_connected(self) -> bool:
@@ -63,6 +69,10 @@ class WSManager:
     @property
     def startup_error(self) -> str | None:
         return self._startup_error
+
+    @property
+    def connection_generation(self) -> int:
+        return self._connection_generation
 
     async def start(self):
         """启动 WebSocket 服务器（非阻塞，在后台运行）"""
@@ -260,6 +270,7 @@ class WSManager:
             return
 
         self._connection = websocket
+        self._connection_generation += 1
         self._connected_event.set()
         self._duplicate_connection_count = 0
         client_addr = websocket.remote_address
@@ -286,7 +297,15 @@ class WSManager:
                     if not future.done():
                         future.set_result(message)
                 else:
-                    logger.debug(f"收到未匹配的消息: {str(message)[:200]}")
+                    if message.get("type", "").startswith("session_"):
+                        # Do not block the response reader while an event waits
+                        # for its Session lane. A popup can be emitted before
+                        # the command response that currently owns that lane.
+                        task = asyncio.create_task(self._dispatch_session_event(message))
+                        self._event_tasks.add(task)
+                        task.add_done_callback(self._event_tasks.discard)
+                    else:
+                        logger.debug(f"收到未匹配的消息: {str(message)[:200]}")
 
         except websockets.exceptions.ConnectionClosed as e:
             logger.info(f"Extension 连接已关闭: {e}")
@@ -309,3 +328,12 @@ class WSManager:
                 logger.info(f"Extension 连接已清理，取消了 {pending_count} 个待处理请求")
                 if pending_count > 0:
                     op_logger.log_connection_event("CLEANUP", f"取消 {pending_count} 个待处理请求")
+
+    async def _dispatch_session_event(self, message: dict) -> None:
+        for handler in list(self._event_handlers):
+            try:
+                result = handler(message)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as exc:
+                logger.error(f"处理 Extension Session 事件失败: {exc}")

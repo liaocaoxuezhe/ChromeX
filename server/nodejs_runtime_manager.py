@@ -229,6 +229,7 @@ class NodeJSRuntimeManager:
         lease_token: str | None = None,
         session: str | None = None,
         scope: dict[str, Any] | None = None,
+        session_handle: dict[str, Any] | None = None,
         restart_on_closed_stdout: bool = True,
     ) -> dict[str, Any]:
         """向 Node.js 子进程发送 Playwright 代码并等待执行结果。
@@ -270,6 +271,8 @@ class NodeJSRuntimeManager:
             message["session"] = session
         if scope:
             message["scope"] = scope
+        if session_handle:
+            message["sessionHandle"] = session_handle
 
         try:
             data = json.dumps(message, ensure_ascii=False) + "\n"
@@ -309,6 +312,7 @@ class NodeJSRuntimeManager:
                     lease_token=lease_token,
                     session=session,
                     scope=scope,
+                    session_handle=session_handle,
                     restart_on_closed_stdout=False,
                 )
             return {
@@ -440,3 +444,129 @@ class NodeJSRuntimeManager:
             raise
         except Exception as exc:
             logger.exception(f"Node.js stderr 读取循环异常: {exc}")
+
+
+class NodeRuntimeSupervisor:
+    """每个 Session 一个 Runtime 子进程；Session 内串行，Session 间并行。"""
+
+    def __init__(self, project_root: str, worker_factory=NodeJSRuntimeManager) -> None:
+        self.project_root = project_root
+        self.worker_factory = worker_factory
+        self._workers: dict[str, NodeJSRuntimeManager] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._creation_lock: asyncio.Lock | None = None
+        self.startup_error: str | None = None
+        self._started = False
+
+    @property
+    def is_ready(self) -> bool:
+        return self._started
+
+    async def start(self) -> bool:
+        node_path = shutil.which("node")
+        runtime_entry = os.path.join(
+            self.project_root, "runtime", "nodejs-playwright-runtime.mjs"
+        )
+        if not node_path:
+            self.startup_error = "未检测到 Node.js 运行时，请安装 Node.js (>=18)。"
+            return False
+        if not os.path.isfile(runtime_entry) and self.worker_factory is NodeJSRuntimeManager:
+            self.startup_error = f"Node.js Runtime 入口文件不存在: {runtime_entry}"
+            return False
+        self._started = True
+        self.startup_error = None
+        return True
+
+    async def execute(
+        self,
+        session_handle: dict[str, Any],
+        code: str,
+        timeout: int = 30000,
+        *,
+        lease_token: str | None = None,
+    ) -> dict[str, Any]:
+        if not self._started and not await self.start():
+            return {"ok": False, "error": self.startup_error or "Runtime Supervisor 未就绪"}
+        session_id = session_handle.get("sessionId")
+        alias = session_handle.get("session")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("session_handle requires sessionId")
+        if not isinstance(alias, str) or not alias:
+            raise ValueError("session_handle requires session alias")
+
+        lock = await self._lock_for(session_id)
+        scope = {
+            "mode": "session-v2",
+            "session": alias,
+            "sessionId": session_id,
+            "groupId": session_handle.get("groupId"),
+            "windowId": session_handle.get("windowId"),
+            "targetTabId": session_handle.get("targetTabId"),
+            "allowedTabIds": list(session_handle.get("tabIds") or []),
+            "revision": session_handle.get("revision"),
+        }
+        async with lock:
+            worker = await self._worker_for(session_id)
+            result = await worker.execute(
+                code,
+                timeout,
+                lease_token=lease_token,
+                session=alias,
+                scope=scope,
+                session_handle=dict(session_handle),
+            )
+            if not result.get("ok") and "timeout" in str(result.get("error", "")).lower():
+                await worker.stop()
+                if self._workers.get(session_id) is worker:
+                    self._workers.pop(session_id, None)
+            return result
+
+    async def close_session(self, session_id: str) -> bool:
+        lock = await self._lock_for(session_id)
+        async with lock:
+            worker = self._workers.pop(session_id, None)
+            if worker is None:
+                return False
+            await worker.stop()
+            return True
+
+    async def shutdown(self) -> None:
+        workers = list(self._workers.values())
+        self._workers.clear()
+        self._locks.clear()
+        await asyncio.gather(*(worker.stop() for worker in workers), return_exceptions=True)
+        self._started = False
+
+    async def stop(self) -> None:
+        await self.shutdown()
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "ready": self.is_ready,
+            "workers": {
+                session_id: {
+                    "pid": getattr(getattr(worker, "_proc", None), "pid", None),
+                    "ready": worker.is_ready,
+                    "locked": self._locks.get(session_id).locked() if session_id in self._locks else False,
+                }
+                for session_id, worker in self._workers.items()
+            },
+        }
+
+    async def _lock_for(self, session_id: str) -> asyncio.Lock:
+        if self._creation_lock is None:
+            self._creation_lock = asyncio.Lock()
+        async with self._creation_lock:
+            return self._locks.setdefault(session_id, asyncio.Lock())
+
+    async def _worker_for(self, session_id: str):
+        if self._creation_lock is None:
+            self._creation_lock = asyncio.Lock()
+        async with self._creation_lock:
+            worker = self._workers.get(session_id)
+            if worker is None:
+                worker = self.worker_factory(self.project_root)
+                if not await worker.start():
+                    raise RuntimeError(worker.startup_error or "Node.js Runtime 启动失败")
+                self._workers[session_id] = worker
+            return worker

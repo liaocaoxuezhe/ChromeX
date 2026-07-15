@@ -1,5 +1,10 @@
 importScripts("connection-policy.js");
 importScripts("focus-policy.js");
+importScripts("session-context.js");
+importScripts("session-transactions.js");
+importScripts("debugger-context.js");
+importScripts("popup-ownership.js");
+importScripts("claim-manager.js");
 
 /**
  * Link2Chrome - Background Service Worker
@@ -35,26 +40,59 @@ const {
   buildBackgroundTabCreateProperties,
   canReuseDebuggerAttachment,
 } = globalThis.Link2ChromeFocusPolicy;
-const networkCaptureState = {
-  enabled: false,
-  includeResponseBody: false,
-  maxEntries: 500,
-  entries: [],
-  byRequestId: new Map()
-};
-const consoleCaptureState = {
-  enabled: false,
-  maxEntries: 300,
-  entries: []
-};
-let currentDialog = null;
-let networkSequence = 0;
-let consoleSequence = 0;
-const downloadState = {
-  pending: new Map(),
-  completed: new Map(),
-};
+const {
+  SessionContextStore,
+} = globalThis.Link2ChromeSessionContext;
+const sessionContextStore = new SessionContextStore();
+const {
+  SessionTransactionManager,
+} = globalThis.Link2ChromeSessionTransactions;
+const sessionTransactionManager = new SessionTransactionManager({
+  chromeApi: chrome,
+  contextStore: sessionContextStore,
+  createBackgroundTab: (options) => createBackgroundTab(options, false),
+});
+const {
+  MultiTargetDebuggerManager,
+} = globalThis.Link2ChromeDebuggerContext;
+const multiTargetDebuggerManager = new MultiTargetDebuggerManager({
+  chromeApi: chrome,
+  sessionContextStore,
+});
+const { PopupOwnershipManager } = globalThis.Link2ChromePopupOwnership;
+const popupOwnershipManager = new PopupOwnershipManager({
+  chromeApi: chrome,
+  contextStore: sessionContextStore,
+  emitEvent: (event) => {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(event));
+    }
+  },
+});
+const { SessionClaimManager } = globalThis.Link2ChromeClaimManager;
+const sessionClaimManager = new SessionClaimManager({ chromeApi: chrome, contextStore: sessionContextStore });
 let downloadsFallbackRegistered = false;
+const suppressedTabRemovalEvents = new Set();
+const browserEpochPromise = (async () => {
+  const key = "link2chromeBrowserEpoch";
+  const sessionStorage = chrome.storage.session;
+  if (!sessionStorage) return crypto.randomUUID();
+  const stored = await sessionStorage.get([key]).catch(() => ({}));
+  if (stored[key]) return stored[key];
+  const epoch = crypto.randomUUID();
+  await sessionStorage.set({ [key]: epoch }).catch(() => {});
+  return epoch;
+})();
+
+function getTabAutomationState(tabId) {
+  if (!Number.isInteger(tabId)) {
+    const error = new Error("browser operation requires an explicit integer tabId");
+    error.code = "TAB_ID_REQUIRED";
+    error.details = { tabId };
+    throw error;
+  }
+  return multiTargetDebuggerManager.getOrCreateContext(tabId);
+}
 
 // 不可调试的 URL 前缀
 const UNDEBUGABLE_PREFIXES = [
@@ -78,9 +116,9 @@ function isDebugableUrl(url) {
   return isDebugable;
 }
 
-async function createBackgroundTab(options = {}) {
+async function createBackgroundTab(options = {}, useTargetAnchor = true) {
   let anchorTab = null;
-  if (targetTabId != null) {
+  if (useTargetAnchor && targetTabId != null) {
     anchorTab = await chrome.tabs.get(targetTabId).catch(() => null);
   }
   return chrome.tabs.create(buildBackgroundTabCreateProperties(options, anchorTab));
@@ -175,6 +213,25 @@ const EXPLICIT_TAB_COMMANDS = new Set([
 
 async function applySessionScopeGuard(command, params = {}) {
   if (!SCOPE_REQUIRED_COMMANDS.has(command)) return params;
+  if (params.sessionContext?.mode === "session-v2") {
+    if (command === "agent_browser_tab_new" || (command === "tab_manage" && params.action === "new")) {
+      const error = new Error(`${command} must use session_create_tab in Session V2`);
+      error.code = "SESSION_TRANSACTION_REQUIRED";
+      throw error;
+    }
+    const tabId = params.tabId ?? params.sessionContext.tabId;
+    if (tabId === undefined || tabId === null) {
+      const error = new Error("V2 browser control requires an explicit tabId");
+      error.code = "TAB_ID_REQUIRED";
+      throw error;
+    }
+    const actualTab = await chrome.tabs.get(tabId);
+    sessionContextStore.assertSessionTab(
+      { ...params.sessionContext, tabId },
+      actualTab,
+    );
+    return { ...params, tabId };
+  }
   if (command === "agent_browser_tab_new" || (command === "tab_manage" && params.action === "new")) {
     if (!isScopeProvided(params.scope)) {
       throw new Error("session scope is required for browser control");
@@ -508,7 +565,10 @@ function isDebuggerAlreadyAttachedError(err) {
 
 async function detachDebuggerTab(tabId) {
   try {
-    await chrome.debugger.detach({ tabId });
+    const managed = await multiTargetDebuggerManager.detach(tabId);
+    if (!managed) {
+      await chrome.debugger.detach({ tabId });
+    }
     await new Promise(r => setTimeout(r, 100));
     return true;
   } catch (err) {
@@ -518,14 +578,15 @@ async function detachDebuggerTab(tabId) {
 }
 
 async function enableCaptureDomainsForAttachedTab(tabId) {
-  if (networkCaptureState.enabled) {
+  const tabState = getTabAutomationState(tabId);
+  if (tabState.networkCapture.enabled) {
     await chrome.debugger.sendCommand(
       { tabId },
       "Network.enable",
       { maxPostDataSize: 200000 }
     ).catch((err) => console.warn(`[Link2Chrome] Network.enable 失败: ${err.message}`));
   }
-  if (consoleCaptureState.enabled) {
+  if (tabState.consoleCapture.enabled) {
     await chrome.debugger.sendCommand({ tabId }, "Runtime.enable")
       .catch((err) => console.warn(`[Link2Chrome] Runtime.enable 失败: ${err.message}`));
     await chrome.debugger.sendCommand({ tabId }, "Log.enable")
@@ -534,28 +595,12 @@ async function enableCaptureDomainsForAttachedTab(tabId) {
 }
 
 /** 确保 debugger 只附加到当前命令明确指定的目标标签。 */
-async function ensureDebuggerAttached(expectedTabId = targetTabId) {
+async function ensureDebuggerAttached(expectedTabId) {
   if (expectedTabId == null) {
     throw new Error("没有选择自动化目标标签页");
   }
 
-  if (canReuseDebuggerAttachment(attachedTabId, expectedTabId)) {
-    try {
-      const attachedTab = await chrome.tabs.get(expectedTabId);
-      if (isDebugableUrl(attachedTab.url)) {
-        await enableCaptureDomainsForAttachedTab(expectedTabId);
-        return expectedTabId;
-      }
-    } catch (err) {
-      console.warn(`[Link2Chrome] 已附加的目标 tab ${expectedTabId} 不可用: ${err.message}`);
-    }
-    await detachDebuggerTab(expectedTabId);
-    attachedTabId = null;
-  } else if (attachedTabId !== null) {
-    const previousTabId = attachedTabId;
-    await detachDebuggerTab(previousTabId);
-    attachedTabId = null;
-  }
+  const diagnosticReuse = canReuseDebuggerAttachment(attachedTabId, expectedTabId);
 
   let tab;
   try {
@@ -567,14 +612,19 @@ async function ensureDebuggerAttached(expectedTabId = targetTabId) {
     throw new Error(`目标标签 ${expectedTabId} 不可调试: ${tab.url}`);
   }
 
-  const attach = async () => chrome.debugger.attach({ tabId: expectedTabId }, "1.3");
   try {
-    await attach();
+    await multiTargetDebuggerManager.ensureAttached(
+      expectedTabId,
+      sessionContextStore.ownerOfTab(expectedTabId),
+    );
   } catch (err) {
     if (!isDebuggerAlreadyAttachedError(err) || !await detachDebuggerTab(expectedTabId)) {
       throw new Error(`Debugger attach 失败 (tab=${expectedTabId}, url=${tab.url}): ${err.message}`);
     }
-    await attach();
+    await multiTargetDebuggerManager.ensureAttached(
+      expectedTabId,
+      sessionContextStore.ownerOfTab(expectedTabId),
+    );
   }
 
   attachedTabId = expectedTabId;
@@ -590,11 +640,17 @@ async function ensureDebuggerAttached(expectedTabId = targetTabId) {
     console.warn(`[Link2Chrome] Browser.setDownloadBehavior failed, falling back to chrome.downloads: ${err.message}`);
     setupDownloadsFallback();
   }
-  console.log(`[Link2Chrome] Debugger 已附加到目标 tab ${expectedTabId} (${tab.url})`);
+  console.log(`[Link2Chrome] Debugger 已附加到目标 tab ${expectedTabId} (${tab.url}), reused=${diagnosticReuse}`);
   return expectedTabId;
 }
 
-async function sendCDP(method, params = {}, expectedTabId = targetTabId) {
+async function sendCDP(method, params = {}, expectedTabId) {
+  if (!Number.isInteger(expectedTabId)) {
+    const error = new Error(`CDP command ${method} requires an explicit tabId`);
+    error.code = "TAB_ID_REQUIRED";
+    error.details = { method, tabId: expectedTabId };
+    throw error;
+  }
   const timeout = params.timeout || CDP_COMMAND_TIMEOUT;
   const tabId = await withTimeout(ensureDebuggerAttached(expectedTabId), timeout, `Debugger attach timeout: ${method}`);
   return withTimeout(
@@ -623,6 +679,8 @@ function setupDownloadsFallback() {
   if (downloadsFallbackRegistered) return;
   downloadsFallbackRegistered = true;
   chrome.downloads.onCreated.addListener((item) => {
+    if (!Number.isInteger(item.tabId) || item.tabId < 0) return;
+    const downloadState = getTabAutomationState(item.tabId).downloads;
     downloadState.pending.set(String(item.id), {
       guid: String(item.id),
       url: item.url,
@@ -632,10 +690,13 @@ function setupDownloadsFallback() {
   });
   chrome.downloads.onChanged.addListener((delta) => {
     if (delta.state?.current === "complete") {
-      const pending = downloadState.pending.get(String(delta.id));
-      if (pending) {
-        downloadState.completed.set(pending.guid, pending);
-        downloadState.pending.delete(String(delta.id));
+      for (const tabState of multiTargetDebuggerManager.allContexts()) {
+        const pending = tabState.downloads.pending.get(String(delta.id));
+        if (pending) {
+          tabState.downloads.completed.set(pending.guid, pending);
+          tabState.downloads.pending.delete(String(delta.id));
+          break;
+        }
       }
     }
   });
@@ -643,6 +704,7 @@ function setupDownloadsFallback() {
 
 // 监听 debugger detach 事件
 chrome.debugger.onDetach.addListener((source, reason) => {
+  multiTargetDebuggerManager.handleDetach(source);
   if (source.tabId === attachedTabId) {
     console.log(`[Link2Chrome] Debugger 已分离: ${reason}`);
     attachedTabId = null;
@@ -651,8 +713,34 @@ chrome.debugger.onDetach.addListener((source, reason) => {
 
 chrome.debugger.onEvent.addListener(handleDebuggerEvent);
 
+chrome.tabs.onCreated.addListener((tab) => {
+  popupOwnershipManager.handleCreated(tab).catch((error) => {
+    console.warn(`[Link2Chrome] popup ownership failed: ${error.message}`);
+  });
+});
+
 // 监听 tab 关闭，清理 targetTabId
 chrome.tabs.onRemoved.addListener((tabId) => {
+  popupOwnershipManager.close(tabId);
+  multiTargetDebuggerManager.remove(tabId);
+  if (suppressedTabRemovalEvents.delete(tabId)) return;
+  const ownerSessionId = sessionContextStore.ownerOfTab(tabId);
+  if (ownerSessionId) {
+    const session = sessionContextStore.getSession(ownerSessionId);
+    const tabContext = sessionContextStore.getTab(tabId);
+    if (tabContext?.state !== "ACTIVE") return;
+    sessionContextStore.removeTab(ownerSessionId, tabId);
+    const revised = sessionContextStore.bumpRevision(ownerSessionId);
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "session_tab_closed",
+        operationId: `tab-closed-${tabId}-${Date.now()}`,
+        sessionId: ownerSessionId,
+        tabId,
+        revision: revised.revision,
+      }));
+    }
+  }
   if (tabId === targetTabId) {
     targetTabId = null;
   }
@@ -705,18 +793,19 @@ function compactNetworkEntry(entry, includeBody = false) {
 }
 
 function handleDebuggerEvent(source, method, params) {
-  if (source.tabId !== attachedTabId && source.tabId !== targetTabId) return;
+  if (!multiTargetDebuggerManager.routeEvent(source, method, params)) return;
+  const tabState = getTabAutomationState(source.tabId);
 
-  if (networkCaptureState.enabled) {
-    handleNetworkEvent(method, params);
+  if (tabState.networkCapture.enabled) {
+    handleNetworkEvent(method, params, tabState, source.tabId);
   }
 
-  if (consoleCaptureState.enabled) {
-    handleConsoleEvent(method, params);
+  if (tabState.consoleCapture.enabled) {
+    handleConsoleEvent(method, params, tabState);
   }
 
   if (method === "Page.javascriptDialogOpening") {
-    currentDialog = {
+    tabState.dialog = {
       tabId: source.tabId,
       type: params.type,
       message: params.message,
@@ -725,11 +814,11 @@ function handleDebuggerEvent(source, method, params) {
       openedAt: Date.now()
     };
   } else if (method === "Page.javascriptDialogClosed") {
-    currentDialog = null;
+    tabState.dialog = null;
   }
 
   if (method === "Page.downloadWillBegin") {
-    downloadState.pending.set(params.guid, {
+    tabState.downloads.pending.set(params.guid, {
       guid: params.guid,
       url: params.url,
       suggestedFilename: params.suggestedFilename || "",
@@ -737,20 +826,21 @@ function handleDebuggerEvent(source, method, params) {
     });
   } else if (method === "Page.downloadProgress") {
     if (params.state === "completed") {
-      const pending = downloadState.pending.get(params.guid);
+      const pending = tabState.downloads.pending.get(params.guid);
       if (pending) {
-        downloadState.completed.set(params.guid, pending);
-        downloadState.pending.delete(params.guid);
+        tabState.downloads.completed.set(params.guid, pending);
+        tabState.downloads.pending.delete(params.guid);
       }
     }
   }
 }
 
-function handleNetworkEvent(method, params) {
+function handleNetworkEvent(method, params, tabState, sourceTabId) {
+  const networkState = tabState.networkCapture;
   if (method === "Network.requestWillBeSent") {
     const request = params.request || {};
     const entry = {
-      id: `net-${++networkSequence}`,
+      id: `net-${++networkState.sequence}`,
       requestId: params.requestId,
       loaderId: params.loaderId,
       frameId: params.frameId,
@@ -763,11 +853,11 @@ function handleNetworkEvent(method, params) {
       startedAt: Date.now(),
       timestamp: params.timestamp
     };
-    networkCaptureState.byRequestId.set(params.requestId, entry);
-    networkCaptureState.entries.push(entry);
-    trimCaptureEntries(networkCaptureState);
+    networkState.byRequestId.set(params.requestId, entry);
+    networkState.entries.push(entry);
+    trimCaptureEntries(networkState);
   } else if (method === "Network.responseReceived") {
-    const entry = networkCaptureState.byRequestId.get(params.requestId);
+    const entry = networkState.byRequestId.get(params.requestId);
     if (!entry) return;
     const response = params.response || {};
     entry.status = response.status;
@@ -779,12 +869,12 @@ function handleNetworkEvent(method, params) {
     entry.fromDiskCache = !!response.fromDiskCache;
     entry.resourceType = params.type || entry.resourceType;
   } else if (method === "Network.loadingFinished") {
-    const entry = networkCaptureState.byRequestId.get(params.requestId);
+    const entry = networkState.byRequestId.get(params.requestId);
     if (!entry) return;
     entry.finishedAt = Date.now();
     entry.encodedDataLength = params.encodedDataLength;
-    if (networkCaptureState.includeResponseBody) {
-      sendCDP("Network.getResponseBody", { requestId: params.requestId })
+    if (networkState.includeResponseBody) {
+      sendCDP("Network.getResponseBody", { requestId: params.requestId }, sourceTabId)
         .then((body) => {
           entry.responseBody = String(body.body || "").slice(0, 200000);
           entry.responseBodyBase64Encoded = !!body.base64Encoded;
@@ -794,7 +884,7 @@ function handleNetworkEvent(method, params) {
         });
     }
   } else if (method === "Network.loadingFailed") {
-    const entry = networkCaptureState.byRequestId.get(params.requestId);
+    const entry = networkState.byRequestId.get(params.requestId);
     if (!entry) return;
     entry.finishedAt = Date.now();
     entry.errorText = params.errorText;
@@ -810,11 +900,12 @@ function remoteObjectPreview(arg) {
   return arg.type || null;
 }
 
-function handleConsoleEvent(method, params) {
+function handleConsoleEvent(method, params, tabState) {
+  const consoleState = tabState.consoleCapture;
   let entry = null;
   if (method === "Runtime.consoleAPICalled") {
     entry = {
-      id: `console-${++consoleSequence}`,
+      id: `console-${++consoleState.sequence}`,
       source: "runtime",
       type: params.type,
       text: (params.args || []).map(remoteObjectPreview).map(v => String(v)).join(" "),
@@ -825,7 +916,7 @@ function handleConsoleEvent(method, params) {
   } else if (method === "Log.entryAdded") {
     const logEntry = params.entry || {};
     entry = {
-      id: `console-${++consoleSequence}`,
+      id: `console-${++consoleState.sequence}`,
       source: logEntry.source || "log",
       type: logEntry.level || "log",
       text: logEntry.text || "",
@@ -836,8 +927,8 @@ function handleConsoleEvent(method, params) {
     };
   }
   if (!entry) return;
-  consoleCaptureState.entries.push(entry);
-  trimCaptureEntries(consoleCaptureState);
+  consoleState.entries.push(entry);
+  trimCaptureEntries(consoleState);
 }
 
 // ==================== 指令处理 ====================
@@ -868,19 +959,19 @@ async function handleCommand(message) {
         response.data = await cmdGetDom(guardedParams);
         break;
       case "get_info":
-        response.data = await cmdGetInfo();
+        response.data = await cmdGetInfo(guardedParams);
         break;
       case "tab_manage":
         response.data = await cmdTabManage(guardedParams);
         break;
       case "go_back":
-        response.data = await cmdGoBack();
+        response.data = await cmdGoBack(guardedParams);
         break;
       case "go_forward":
-        response.data = await cmdGoForward();
+        response.data = await cmdGoForward(guardedParams);
         break;
       case "reload":
-        response.data = await cmdReload();
+        response.data = await cmdReload(guardedParams);
         break;
       case "drag":
         response.data = await cmdDrag(guardedParams);
@@ -990,6 +1081,7 @@ async function handleCommand(message) {
       case "ping_version":
         response.data = {
           version: BUILD_VERSION,
+          browserEpoch: await browserEpochPromise,
           targetTabId,
           attachedTabId,
           wsConnected
@@ -1000,6 +1092,177 @@ async function handleCommand(message) {
         break;
       case "tab_group_create":
         response.data = await cmdTabGroupCreate(guardedParams);
+        break;
+      case "session_create_group":
+        response.data = {
+          ...await sessionTransactionManager.createGroup(guardedParams),
+          browserEpoch: await browserEpochPromise,
+        };
+        break;
+      case "session_create_tab":
+        response.data = await sessionTransactionManager.createTab(guardedParams);
+        break;
+      case "session_rollback_group": {
+        const session = sessionContextStore.getSession(guardedParams.sessionId);
+        const tabIds = [...session.tabIds];
+        for (const tabId of tabIds) suppressedTabRemovalEvents.add(tabId);
+        if (tabIds.length) await chrome.tabs.remove(tabIds).catch(() => {});
+        sessionContextStore.closeSession(session.sessionId);
+        response.data = { ok: true, sessionId: session.sessionId, removedTabIds: tabIds };
+        break;
+      }
+      case "session_rollback_tab": {
+        const session = sessionContextStore.getSession(guardedParams.sessionId);
+        const tabId = guardedParams.tabId;
+        if (sessionContextStore.ownerOfTab(tabId) === session.sessionId) {
+          suppressedTabRemovalEvents.add(tabId);
+          sessionContextStore.restoreRevision(
+            session.sessionId,
+            guardedParams.expectedRevision,
+            guardedParams.revision,
+          );
+          sessionContextStore.removeTab(session.sessionId, tabId);
+          await chrome.tabs.remove(tabId).catch(() => {});
+        }
+        response.data = { ok: true, sessionId: session.sessionId, tabId };
+        break;
+      }
+      case "session_claim_tab":
+        response.data = await sessionClaimManager.claim(guardedParams);
+        break;
+      case "session_release_tab":
+        response.data = await sessionClaimManager.release(guardedParams);
+        break;
+      case "session_abort_claim":
+        response.data = await sessionClaimManager.abortClaim(guardedParams);
+        break;
+      case "session_abort_release":
+        response.data = await sessionClaimManager.abortRelease(guardedParams);
+        break;
+      case "session_close": {
+        const session = sessionContextStore.getSession(guardedParams.sessionId);
+        const closedTabIds = [];
+        const releasedTabIds = [];
+        for (const tabId of [...session.tabIds]) {
+          const tabContext = sessionContextStore.getTab(tabId);
+          if (tabContext?.ownershipType === "claimed") {
+            await sessionClaimManager.release({ sessionId: session.sessionId, tabId });
+            releasedTabIds.push(tabId);
+            continue;
+          }
+          suppressedTabRemovalEvents.add(tabId);
+          await chrome.tabs.remove(tabId);
+          multiTargetDebuggerManager.remove(tabId);
+          sessionContextStore.removeTab(session.sessionId, tabId);
+          closedTabIds.push(tabId);
+        }
+        sessionContextStore.closeSession(guardedParams.sessionId);
+        response.data = { ok: true, sessionId: guardedParams.sessionId, closedTabIds, releasedTabIds };
+        break;
+      }
+      case "session_finalize": {
+        const session = sessionContextStore.getSession(guardedParams.sessionId);
+        const keep = new Set(guardedParams.keepTabIds || []);
+        const closedTabIds = [];
+        const releasedTabIds = [];
+        for (const tabId of [...session.tabIds]) {
+          const tabContext = sessionContextStore.getTab(tabId);
+          if (tabContext?.ownershipType === "claimed") {
+            await sessionClaimManager.release({ sessionId: session.sessionId, tabId });
+            releasedTabIds.push(tabId);
+          } else if (keep.has(tabId)) {
+            await chrome.tabs.ungroup([tabId]).catch(() => {});
+            sessionContextStore.removeTab(session.sessionId, tabId);
+            releasedTabIds.push(tabId);
+          } else {
+            suppressedTabRemovalEvents.add(tabId);
+            await chrome.tabs.remove(tabId);
+            multiTargetDebuggerManager.remove(tabId);
+            sessionContextStore.removeTab(session.sessionId, tabId);
+            closedTabIds.push(tabId);
+          }
+        }
+        sessionContextStore.closeSession(session.sessionId);
+        response.data = { ok: true, sessionId: session.sessionId, closedTabIds, releasedTabIds };
+        break;
+      }
+      case "session_snapshot": {
+        const snapshot = sessionContextStore.snapshot();
+        response.data = {
+          browserEpoch: await browserEpochPromise,
+          sessions: snapshot.sessions,
+          tabs: snapshot.tabs,
+          debugger: multiTargetDebuggerManager.snapshot(),
+          popups: popupOwnershipManager.snapshot(),
+        };
+        break;
+      }
+      case "session_restore_snapshot": {
+        if (sessionContextStore.snapshot().sessions.length) {
+          throw new Error("cannot restore Session snapshot into a live Extension registry");
+        }
+        const restored = [];
+        for (const raw of guardedParams.sessions || []) {
+          if (raw.state !== "ACTIVE") continue;
+          const group = await chrome.tabGroups.get(raw.groupId);
+          if (group.windowId !== raw.windowId) throw new Error(`group ${raw.groupId} window mismatch`);
+          const tabs = await Promise.all((raw.tabIds || []).map((tabId) => chrome.tabs.get(tabId)));
+          if (tabs.some((tab) => tab.groupId !== raw.groupId || tab.windowId !== raw.windowId)) {
+            throw new Error(`Session ${raw.sessionId} tab ownership mismatch`);
+          }
+          sessionContextStore.registerSession({
+            sessionId: raw.sessionId,
+            ownerId: raw.ownerId,
+            alias: raw.session,
+            groupId: raw.groupId,
+            windowId: raw.windowId,
+            targetTabId: raw.targetTabId,
+            revision: raw.revision,
+            state: "ACTIVE",
+          });
+          for (const tab of tabs) {
+            sessionContextStore.registerTab(raw.sessionId, tab.id, {
+              state: "ACTIVE",
+              ownershipType: (raw.claimedTabIds || []).includes(tab.id) ? "claimed" : "agent",
+              claimRestore: raw.claimRestore?.[String(tab.id)] || null,
+            });
+          }
+          restored.push(raw.sessionId);
+        }
+        response.data = { ok: true, browserEpoch: await browserEpochPromise, restored };
+        break;
+      }
+      case "session_register_snapshot": {
+        const raw = guardedParams;
+        const group = await chrome.tabGroups.get(raw.groupId);
+        if (group.windowId !== raw.windowId) throw new Error(`group ${raw.groupId} window mismatch`);
+        const tabs = await Promise.all((raw.tabIds || []).map((tabId) => chrome.tabs.get(tabId)));
+        if (tabs.some((tab) => tab.groupId !== raw.groupId || tab.windowId !== raw.windowId)) {
+          throw new Error(`Session ${raw.sessionId} tab ownership mismatch`);
+        }
+        sessionContextStore.registerSession({
+          sessionId: raw.sessionId,
+          ownerId: raw.ownerId,
+          alias: raw.alias,
+          groupId: raw.groupId,
+          windowId: raw.windowId,
+          targetTabId: raw.targetTabId,
+          revision: raw.revision,
+          state: "ACTIVE",
+        });
+        for (const tab of tabs) {
+          sessionContextStore.registerTab(raw.sessionId, tab.id, {
+            state: "ACTIVE",
+            ownershipType: (raw.claimedTabIds || []).includes(tab.id) ? "claimed" : "agent",
+            claimRestore: raw.claimRestore?.[String(tab.id)] || null,
+          });
+        }
+        response.data = { ok: true, sessionId: raw.sessionId };
+        break;
+      }
+      case "session_forget_snapshot":
+        sessionContextStore.closeSession(guardedParams.sessionId);
+        response.data = { ok: true, sessionId: guardedParams.sessionId };
         break;
       case "tab_group_add":
         response.data = await cmdTabGroupAdd(guardedParams);
@@ -1032,6 +1295,8 @@ async function handleCommand(message) {
   } catch (err) {
     response.success = false;
     response.error = err.message;
+    if (err.code) response.code = err.code;
+    if (err.details) response.details = err.details;
   }
 
   return response;
@@ -1048,7 +1313,7 @@ async function cmdScreenshot(params) {
   if (format === "jpeg" || format === "webp") {
     captureParams.quality = quality;
   }
-  const result = await sendCDP("Page.captureScreenshot", captureParams);
+  const result = await sendCDP("Page.captureScreenshot", captureParams, params.tabId);
   return { image: result.data, format };
 }
 
@@ -1073,7 +1338,7 @@ async function cmdClick(params) {
     `;
     const locResult = await sendCDP("Runtime.evaluate", {
       expression: locScript, returnByValue: true
-    });
+    }, params.tabId);
     const loc = JSON.parse(locResult.result.value);
     if (loc.error) throw new Error("选择器未找到元素: " + selector);
     x = loc.x;
@@ -1085,13 +1350,13 @@ async function cmdClick(params) {
     x, y,
     button: cdpButton,
     clickCount
-  });
+  }, params.tabId);
   await sendCDP("Input.dispatchMouseEvent", {
     type: "mouseReleased",
     x, y,
     button: cdpButton,
     clickCount
-  });
+  }, params.tabId);
   return { clicked: true, x, y, selector: selector || null };
 }
 
@@ -1111,7 +1376,11 @@ async function detectActionTabChange(before, options = {}) {
   while (Date.now() <= deadline) {
     const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const allTabs = await chrome.tabs.query({});
-    const openedTab = allTabs.find((tab) => tab.id != null && !before.tabIds.has(tab.id));
+    const openedTab = allTabs.find((tab) =>
+      tab.id != null &&
+      !before.tabIds.has(tab.id) &&
+      (!Number.isInteger(options.sourceTabId) || tab.openerTabId === options.sourceTabId)
+    );
     const activeTabId = activeTab?.id ?? null;
     const openedTabId = openedTab?.id ?? null;
     const activeChanged = activeTabId != null && activeTabId !== before.activeTabId;
@@ -1121,7 +1390,7 @@ async function detectActionTabChange(before, options = {}) {
       return { openedTabId };
     }
 
-    if (activeChanged) {
+    if (activeChanged && !Number.isInteger(options.sourceTabId)) {
       targetTabId = activeTabId;
       return { activeTabId };
     }
@@ -1138,12 +1407,12 @@ async function cmdType(params) {
 
   // 如果提供了选择器，先点击选择器定位
   if (selector) {
-    await cmdClick({ selector });
+    await cmdClick({ selector, tabId: params.tabId });
     await new Promise(r => setTimeout(r, 150));
   }
   // 如果提供了坐标，先点击坐标定位
   else if (x !== undefined && y !== undefined) {
-    await cmdClick({ x, y });
+    await cmdClick({ x, y, tabId: params.tabId });
     await new Promise(r => setTimeout(r, 150));
   }
 
@@ -1153,35 +1422,35 @@ async function cmdType(params) {
       type: "keyDown", key: "a", code: "KeyA",
       windowsVirtualKeyCode: 65,
       modifiers: 4
-    });
+    }, params.tabId);
     await sendCDP("Input.dispatchKeyEvent", {
       type: "keyUp", key: "a", code: "KeyA",
       windowsVirtualKeyCode: 65,
       modifiers: 4
-    });
+    }, params.tabId);
     await sendCDP("Input.dispatchKeyEvent", {
       type: "keyDown", key: "Backspace", code: "Backspace",
       windowsVirtualKeyCode: 8
-    });
+    }, params.tabId);
     await sendCDP("Input.dispatchKeyEvent", {
       type: "keyUp", key: "Backspace", code: "Backspace",
       windowsVirtualKeyCode: 8
-    });
+    }, params.tabId);
   }
 
   if (text) {
-    await sendCDP("Input.insertText", { text });
+    await sendCDP("Input.insertText", { text }, params.tabId);
   }
 
   if (pressEnter) {
     await sendCDP("Input.dispatchKeyEvent", {
       type: "keyDown", key: "Enter", code: "Enter",
       windowsVirtualKeyCode: 13
-    });
+    }, params.tabId);
     await sendCDP("Input.dispatchKeyEvent", {
       type: "keyUp", key: "Enter", code: "Enter",
       windowsVirtualKeyCode: 13
-    });
+    }, params.tabId);
   }
 
   return { typed: true, text, pressEnter };
@@ -1195,7 +1464,7 @@ async function cmdScroll(params) {
     x, y,
     deltaX,
     deltaY
-  });
+  }, params.tabId);
   return { scrolled: true, deltaX, deltaY };
 }
 
@@ -1218,7 +1487,7 @@ async function waitForNavigationReady(tabId, timeoutMs) {
       const result = await sendCDP("Runtime.evaluate", {
         expression: "document.readyState",
         returnByValue: true
-      });
+      }, tabId);
       lastReadyState = result.result?.value || lastReadyState;
       if (lastReadyState === "interactive" || lastReadyState === "complete") {
         const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -1281,13 +1550,13 @@ async function waitForTabsNavigation(tabId, url, timeoutMs) {
     }, 100);
 
     chrome.tabs.onUpdated.addListener(listener);
-  });
+  }, params.tabId);
 }
 
-async function navigateWithTabs(url, timeoutMs) {
-  let tabId = null;
+async function navigateWithTabs(url, timeoutMs, requestedTabId = null) {
+  let tabId = requestedTabId;
 
-  if (targetTabId) {
+  if (!tabId && targetTabId) {
     try {
       const tab = await chrome.tabs.get(targetTabId);
       tabId = tab.id;
@@ -1325,13 +1594,13 @@ async function cmdNavigate(params) {
 
   if (method !== "cdp" || !usesStandardWebProtocol) {
     console.log(`[Link2Chrome] tabs 导航: ${url}`);
-    return navigateWithTabs(url, timeout);
+    return navigateWithTabs(url, timeout, params.tabId);
   }
 
   try {
-    const tabId = await ensureDebuggerAttached();
-    await sendCDP("Page.enable").catch(() => {});
-    const navResult = await sendCDP("Page.navigate", { url });
+    const tabId = await ensureDebuggerAttached(params.tabId);
+    await sendCDP("Page.enable", {}, tabId).catch(() => {});
+    const navResult = await sendCDP("Page.navigate", { url }, tabId);
     targetTabId = tabId;
     console.log(`[Link2Chrome] CDP Page.navigate 已发送: tab=${tabId}, url=${url}`);
 
@@ -1365,7 +1634,7 @@ async function cmdNavigate(params) {
     };
   } catch (err) {
     console.warn(`[Link2Chrome] CDP 导航失败，回退 tabs 导航: ${err.message}`);
-    return navigateWithTabs(url, timeout);
+    return navigateWithTabs(url, timeout, params.tabId);
   }
 }
 
@@ -1431,7 +1700,7 @@ async function cmdGetDom(params) {
   const result = await sendCDP("Runtime.evaluate", {
     expression: script,
     returnByValue: true
-  });
+  }, params.tabId);
 
   if (result.exceptionDetails) {
     throw new Error("DOM 提取失败: " + JSON.stringify(result.exceptionDetails));
@@ -1441,11 +1710,11 @@ async function cmdGetDom(params) {
 }
 
 // -- get_info --
-async function cmdGetInfo() {
+async function cmdGetInfo(params = {}) {
   // 尝试找到可调试的 tab
   let tabId;
   try {
-    tabId = await findUsableTabId();
+    tabId = params.tabId ?? await findUsableTabId();
   } catch (err) {
     // 如果没有可调试的标签页，尝试获取当前活动的标签页（即使可能不可调试）
     console.warn(`[Link2Chrome] cmdGetInfo 未找到可调试标签页，尝试获取活动标签页`);
@@ -1476,7 +1745,7 @@ async function cmdGetInfo() {
       documentHeight: document.documentElement.scrollHeight
     })`,
     returnByValue: true
-  });
+  }, tabId);
 
   const viewport = JSON.parse(result.result.value);
   return {
@@ -1577,8 +1846,8 @@ async function cmdTabManage(params) {
 }
 
 // -- go_back --
-async function cmdGoBack() {
-  const tabId = await findUsableTabId();
+async function cmdGoBack(params = {}) {
+  const tabId = params.tabId ?? await findUsableTabId();
   await chrome.tabs.goBack(tabId);
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
@@ -1599,8 +1868,8 @@ async function cmdGoBack() {
 }
 
 // -- go_forward --
-async function cmdGoForward() {
-  const tabId = await findUsableTabId();
+async function cmdGoForward(params = {}) {
+  const tabId = params.tabId ?? await findUsableTabId();
   await chrome.tabs.goForward(tabId);
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
@@ -1621,8 +1890,8 @@ async function cmdGoForward() {
 }
 
 // -- reload --
-async function cmdReload() {
-  const tabId = await findUsableTabId();
+async function cmdReload(params = {}) {
+  const tabId = params.tabId ?? await findUsableTabId();
   await chrome.tabs.reload(tabId);
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
@@ -1651,7 +1920,7 @@ async function cmdDrag(params) {
     type: "mousePressed",
     x: startX, y: startY,
     button: "left", clickCount: 1
-  });
+  }, params.tabId);
 
   for (let i = 1; i <= steps; i++) {
     const ratio = i / steps;
@@ -1661,14 +1930,14 @@ async function cmdDrag(params) {
       type: "mouseMoved",
       x: Math.round(cx), y: Math.round(cy),
       button: "left"
-    });
+    }, params.tabId);
   }
 
   await sendCDP("Input.dispatchMouseEvent", {
     type: "mouseReleased",
     x: endX, y: endY,
     button: "left", clickCount: 1
-  });
+  }, params.tabId);
 
   return { dragged: true, startX, startY, endX, endY };
 }
@@ -1728,7 +1997,7 @@ async function cmdExtractContent(params) {
   const result = await sendCDP("Runtime.evaluate", {
     expression: extractScript,
     returnByValue: true
-  });
+  }, params.tabId);
 
   if (result.exceptionDetails) {
     throw new Error("内容提取失败: " + JSON.stringify(result.exceptionDetails));
@@ -1851,7 +2120,7 @@ async function cmdExecuteScript(params) {
       awaitPromise: awaitPromise,
       returnByValue: true,
       timeout: timeout
-    });
+    }, params.tabId);
 
     if (result.exceptionDetails) {
       return {
@@ -1882,7 +2151,7 @@ async function cmdSendKeys(params) {
 
   // 如果指定了 selector，先点击聚焦
   if (selector) {
-    const clickResult = await cmdClick({ selector });
+    const clickResult = await cmdClick({ selector, tabId: params.tabId });
     if (!clickResult.clicked) {
       throw new Error(`无法点击选择器: ${selector}`);
     }
@@ -1968,7 +2237,7 @@ async function cmdSendKeys(params) {
     code: code,
     windowsVirtualKeyCode: keyCode,
     modifiers: modifiers
-  });
+  }, params.tabId);
 
   // 发送 keyUp
   await sendCDP("Input.dispatchKeyEvent", {
@@ -1977,7 +2246,7 @@ async function cmdSendKeys(params) {
     code: code,
     windowsVirtualKeyCode: keyCode,
     modifiers: modifiers
-  });
+  }, params.tabId);
 
   return {
     sent: true,
@@ -2038,7 +2307,7 @@ async function cmdFindText(params) {
   const result = await sendCDP("Runtime.evaluate", {
     expression: findScript,
     returnByValue: true
-  });
+  }, params.tabId);
 
   const elements = result.result.value || [];
 
@@ -2060,14 +2329,14 @@ async function cmdFindText(params) {
         y: firstVisible.y,
         button: "left",
         clickCount: 1
-      });
+      }, params.tabId);
       await sendCDP("Input.dispatchMouseEvent", {
         type: "mouseReleased",
         x: firstVisible.x,
         y: firstVisible.y,
         button: "left",
         clickCount: 1
-      });
+      }, params.tabId);
 
       return {
         found: true,
@@ -2104,7 +2373,7 @@ async function cmdScrapeWithScroll(params) {
   let lastHeight = await sendCDP("Runtime.evaluate", {
     expression: "document.body.scrollHeight",
     returnByValue: true
-  }).then(r => r.result.value);
+  }, params.tabId).then(r => r.result.value);
 
   const getItemCount = () => dedupe_by ? allItems.size : allItems.length;
 
@@ -2114,7 +2383,7 @@ async function cmdScrapeWithScroll(params) {
       type: "mouseWheel",
       x: 100, y: 100,
       deltaX: 0, deltaY: 500
-    });
+    }, params.tabId);
 
     await new Promise(r => setTimeout(r, scroll_delay));
 
@@ -2122,7 +2391,7 @@ async function cmdScrapeWithScroll(params) {
     const batchResult = await sendCDP("Runtime.evaluate", {
       expression: `(${extract_script})`,
       returnByValue: true
-    });
+    }, params.tabId);
 
     if (batchResult.exceptionDetails) {
       throw new Error(`脚本执行失败: ${JSON.stringify(batchResult.exceptionDetails)}`);
@@ -2155,7 +2424,7 @@ async function cmdScrapeWithScroll(params) {
     const newHeight = await sendCDP("Runtime.evaluate", {
       expression: "document.body.scrollHeight",
       returnByValue: true
-    }).then(r => r.result.value);
+    }, params.tabId).then(r => r.result.value);
 
     if (newHeight === lastHeight) {
       noChangeCount++;
@@ -2198,7 +2467,7 @@ async function cmdAgentBrowserTabInfo(params) {
           canGoBack: history.length > 1
         })`,
         returnByValue: true
-      });
+      }, tabId);
       pageState = JSON.parse(result.result.value || "{}");
     } catch (err) {
       pageStateError = err.message || String(err);
@@ -2224,6 +2493,14 @@ async function cmdAgentBrowserTabSwitch(params) {
   const tabId = params.tabId;
   if (!tabId) throw new Error("tabId is required");
   const tab = await chrome.tabs.get(tabId);
+  if (params.sessionContext?.mode === "session-v2") {
+    sessionContextStore.advanceRevision(
+      params.sessionContext.sessionId,
+      params.sessionContext.revision,
+      params.sessionContext.revision + 1,
+    );
+    sessionContextStore.setTarget(params.sessionContext.sessionId, tabId);
+  }
   targetTabId = tabId;
   return { ok: true, tabId, url: tab.url };
 }
@@ -2244,6 +2521,15 @@ async function cmdAgentBrowserTabClose(params) {
     try { await chrome.debugger.detach({ tabId }); } catch (_) {}
     attachedTabId = null;
   }
+  if (params.sessionContext?.mode === "session-v2") {
+    sessionContextStore.advanceRevision(
+      params.sessionContext.sessionId,
+      params.sessionContext.revision,
+      params.sessionContext.revision + 1,
+    );
+    suppressedTabRemovalEvents.add(tabId);
+    sessionContextStore.removeTab(params.sessionContext.sessionId, tabId);
+  }
   await chrome.tabs.remove(tabId);
   return { ok: true, tabId };
 }
@@ -2259,7 +2545,7 @@ async function evaluatePageFunction(fn, params = {}) {
     expression,
     awaitPromise: true,
     returnByValue: true
-  });
+  }, params.tabId);
   if (result.exceptionDetails) {
     throw new Error(result.exceptionDetails.exception?.description || "page evaluation failed");
   }
@@ -2446,39 +2732,40 @@ async function cmdActionClick(params) {
       x: target.x,
       y: target.y,
       button: params.button || "left",
-      clickCount: params.clickCount || 1
+      clickCount: params.clickCount || 1,
+      tabId: params.tabId,
     });
-    const tabChange = await detectActionTabChange(beforeTabs);
-    if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000 });
+    const tabChange = await detectActionTabChange(beforeTabs, { sourceTabId: params.tabId });
+    if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000, tabId: params.tabId });
     return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result, ...tabChange };
   }
   let selector = target.selector;
   if (!selector && target.text) {
-    const found = await cmdFindText({ text: target.text, click: false });
+    const found = await cmdFindText({ text: target.text, click: false, tabId: params.tabId });
     const el = found.elements?.find(e => e.visible);
     if (!el) throw new Error(`No visible element found by text: ${target.text}`);
     const started = Date.now();
     const beforeTabs = await snapshotActiveTabForAction();
-    await cmdClick({ x: el.x, y: el.y, button: params.button || "left", clickCount: params.clickCount || 1 });
-    const tabChange = await detectActionTabChange(beforeTabs);
+    await cmdClick({ x: el.x, y: el.y, button: params.button || "left", clickCount: params.clickCount || 1, tabId: params.tabId });
+    const tabChange = await detectActionTabChange(beforeTabs, { sourceTabId: params.tabId });
     return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...tabChange };
   }
   if (!selector && target.ariaLabel) selector = `[aria-label*="${cssEscape(target.ariaLabel)}"]`;
   const started = Date.now();
   const beforeTabs = await snapshotActiveTabForAction();
-  const result = await cmdClick({ selector, button: params.button || "left", clickCount: params.clickCount || 1 });
-  const tabChange = await detectActionTabChange(beforeTabs);
-  if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000 });
+  const result = await cmdClick({ selector, button: params.button || "left", clickCount: params.clickCount || 1, tabId: params.tabId });
+  const tabChange = await detectActionTabChange(beforeTabs, { sourceTabId: params.tabId });
+  if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000, tabId: params.tabId });
   return { ok: true, target: { ...target, selector }, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result, ...tabChange };
 }
 
-async function resolveActionPoint(target) {
+async function resolveActionPoint(target, tabId) {
   if (typeof target?.x === "number" && typeof target?.y === "number") {
     return { x: target.x, y: target.y, source: "coordinate" };
   }
 
   if (target?.text) {
-    const found = await cmdFindText({ text: target.text, click: false });
+    const found = await cmdFindText({ text: target.text, click: false, tabId });
     const el = found.elements?.find(e => e.visible);
     if (!el) throw new Error(`No visible element found by text: ${target.text}`);
     return { x: el.x, y: el.y, source: "text" };
@@ -2488,7 +2775,7 @@ async function resolveActionPoint(target) {
   if (!selector && target?.ariaLabel) selector = `[aria-label*="${cssEscape(target.ariaLabel)}"]`;
   if (!selector) throw new Error("target must include selector, text, ariaLabel, or x/y coordinates");
 
-  const detail = await cmdDomElementDetail({ selector, include: ["position"] });
+  const detail = await cmdDomElementDetail({ selector, include: ["position"], tabId });
   if (!detail.ok) throw new Error(detail.error || `No element found for selector: ${selector}`);
   return {
     x: Math.round(detail.position.x + detail.position.width / 2),
@@ -2500,11 +2787,11 @@ async function resolveActionPoint(target) {
 
 async function cmdActionDrag(params) {
   const started = Date.now();
-  const start = await resolveActionPoint(params.target || {});
+  const start = await resolveActionPoint(params.target || {}, params.tabId);
   let end;
 
   if (params.to) {
-    end = await resolveActionPoint(params.to);
+    end = await resolveActionPoint(params.to, params.tabId);
   } else if (params.by && (typeof params.by.x === "number" || typeof params.by.y === "number")) {
     end = {
       x: start.x + (params.by.x || 0),
@@ -2520,7 +2807,8 @@ async function cmdActionDrag(params) {
     startY: start.y,
     endX: end.x,
     endY: end.y,
-    duration: params.duration || 500
+    duration: params.duration || 500,
+    tabId: params.tabId,
   });
 
   return {
@@ -2552,24 +2840,24 @@ async function cmdActionScroll(params) {
   } else {
     const direction = params.direction || "down";
     const amount = params.amount || 500;
-    await cmdScroll({ x: 100, y: 100, deltaX: 0, deltaY: direction === "up" ? -amount : amount });
+    await cmdScroll({ x: 100, y: 100, deltaX: 0, deltaY: direction === "up" ? -amount : amount, tabId: params.tabId });
   }
   await new Promise(r => setTimeout(r, params.waitAfter ?? 500));
-  const info = await cmdAgentBrowserTabInfo({});
+  const info = await cmdAgentBrowserTabInfo({ tabId: params.tabId });
   return { ok: true, scrollY: info.scrollY, scrollHeight: info.scrollHeight, atBottom: Math.ceil((info.scrollY || 0) + (info.viewportHeight || 0)) >= (info.scrollHeight || 0), elapsed: Date.now() - started };
 }
 
 
 async function cmdActionHover(params) {
   const target = params.target || {};
-  const point = await resolveActionPoint(target);
-  await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  const point = await resolveActionPoint(target, params.tabId);
+  await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y }, params.tabId);
   return { ok: true, target: { ...target, selector: point.selector || target.selector }, point, effects: { hoverDispatched: true } };
 }
 
 async function cmdActionPressKey(params) {
-  if (params.target?.selector) await cmdClick({ selector: params.target.selector });
-  await cmdSendKeys({ keys: params.key });
+  if (params.target?.selector) await cmdClick({ selector: params.target.selector, tabId: params.tabId });
+  await cmdSendKeys({ keys: params.key, tabId: params.tabId });
   return { ok: true, key: params.key };
 }
 
@@ -2580,12 +2868,12 @@ async function cmdUploadFile(params) {
   if (!selector) throw new Error("upload_file requires selector");
   if (!paths.length) throw new Error("upload_file requires at least one path");
 
-  await sendCDP("DOM.enable").catch(() => {});
-  const documentResult = await sendCDP("DOM.getDocument", { depth: 1, pierce: true });
+  await sendCDP("DOM.enable", {}, params.tabId).catch(() => {});
+  const documentResult = await sendCDP("DOM.getDocument", { depth: 1, pierce: true }, params.tabId);
   const rootNodeId = documentResult.root?.nodeId;
-  const queryResult = await sendCDP("DOM.querySelector", { nodeId: rootNodeId, selector });
+  const queryResult = await sendCDP("DOM.querySelector", { nodeId: rootNodeId, selector }, params.tabId);
   if (!queryResult.nodeId) throw new Error(`file input not found: ${selector}`);
-  const describeResult = await sendCDP("DOM.describeNode", { nodeId: queryResult.nodeId });
+  const describeResult = await sendCDP("DOM.describeNode", { nodeId: queryResult.nodeId }, params.tabId);
   const node = describeResult.node || {};
   const attrs = node.attributes || [];
   const attrMap = {};
@@ -2593,29 +2881,30 @@ async function cmdUploadFile(params) {
   if (String(node.nodeName || "").toLowerCase() !== "input" || attrMap.type !== "file") {
     throw new Error(`selector is not an input[type=file]: ${selector}`);
   }
-  await sendCDP("DOM.setFileInputFiles", { nodeId: queryResult.nodeId, files: paths });
+  await sendCDP("DOM.setFileInputFiles", { nodeId: queryResult.nodeId, files: paths }, params.tabId);
   return { ok: true, selector, files: paths, count: paths.length };
 }
 
 async function cmdHandleDialog(params) {
   const action = params.action || "accept";
   const timeout = params.timeout ?? 5000;
-  await sendCDP("Page.enable").catch(() => {});
+  const tabState = getTabAutomationState(params.tabId);
+  await sendCDP("Page.enable", {}, params.tabId).catch(() => {});
 
   const deadline = Date.now() + timeout;
-  while (!currentDialog && Date.now() < deadline) {
+  while (!tabState.dialog && Date.now() < deadline) {
     await sleep(100);
   }
-  if (!currentDialog) {
+  if (!tabState.dialog) {
     return { ok: false, error: "no dialog observed", waited: timeout };
   }
 
-  const dialog = currentDialog;
+  const dialog = tabState.dialog;
   await sendCDP("Page.handleJavaScriptDialog", {
     accept: action === "accept",
     promptText: params.promptText || ""
-  });
-  currentDialog = null;
+  }, params.tabId);
+  tabState.dialog = null;
   return { ok: true, action, dialog };
 }
 
@@ -2623,6 +2912,7 @@ async function cmdWaitForDownload(params) {
   const timeout = params.timeout || 30000;
   const deadline = Date.now() + timeout;
   const pollInterval = 100;
+  const downloadState = getTabAutomationState(params.tabId).downloads;
 
   while (Date.now() < deadline) {
     const firstKey = downloadState.completed.keys().next().value;
@@ -2639,33 +2929,34 @@ async function cmdWaitForDownload(params) {
 
 async function cmdNetworkCapture(params) {
   const action = params.action || "status";
+  const networkState = getTabAutomationState(params.tabId).networkCapture;
   if (action === "start") {
-    networkCaptureState.enabled = true;
-    networkCaptureState.includeResponseBody = !!params.includeResponseBody;
-    networkCaptureState.maxEntries = Math.max(1, params.maxEntries || 500);
-    await sendCDP("Network.enable", { maxPostDataSize: 200000 }).catch(() => {});
+    networkState.enabled = true;
+    networkState.includeResponseBody = !!params.includeResponseBody;
+    networkState.maxEntries = Math.max(1, params.maxEntries || 500);
+    await sendCDP("Network.enable", { maxPostDataSize: 200000 }, params.tabId).catch(() => {});
   } else if (action === "stop") {
-    networkCaptureState.enabled = false;
-    await sendCDP("Network.disable").catch(() => {});
+    networkState.enabled = false;
+    await sendCDP("Network.disable", {}, params.tabId).catch(() => {});
   } else if (action === "clear") {
-    networkCaptureState.entries = [];
-    networkCaptureState.byRequestId.clear();
+    networkState.entries = [];
+    networkState.byRequestId.clear();
   } else if (action !== "status") {
     throw new Error(`unknown network_capture action: ${action}`);
   }
   return {
     ok: true,
     action,
-    enabled: networkCaptureState.enabled,
-    includeResponseBody: networkCaptureState.includeResponseBody,
-    count: networkCaptureState.entries.length,
-    maxEntries: networkCaptureState.maxEntries
+    enabled: networkState.enabled,
+    includeResponseBody: networkState.includeResponseBody,
+    count: networkState.entries.length,
+    maxEntries: networkState.maxEntries
   };
 }
 
-function filterNetworkEntries(params = {}) {
+function filterNetworkEntries(params = {}, networkState) {
   const limit = Math.max(1, params.limit || 50);
-  let entries = [...networkCaptureState.entries];
+  let entries = [...networkState.entries];
   if (params.urlContains) entries = entries.filter(e => (e.url || "").includes(params.urlContains));
   if (params.method) entries = entries.filter(e => String(e.method || "").toUpperCase() === String(params.method).toUpperCase());
   if (params.status != null) entries = entries.filter(e => e.status === params.status);
@@ -2675,13 +2966,15 @@ function filterNetworkEntries(params = {}) {
 }
 
 async function cmdNetworkList(params) {
-  const entries = filterNetworkEntries(params).map(e => compactNetworkEntry(e, false));
-  return { ok: true, enabled: networkCaptureState.enabled, count: entries.length, requests: entries };
+  const networkState = getTabAutomationState(params.tabId).networkCapture;
+  const entries = filterNetworkEntries(params, networkState).map(e => compactNetworkEntry(e, false));
+  return { ok: true, enabled: networkState.enabled, count: entries.length, requests: entries };
 }
 
 async function cmdNetworkQuery(params) {
-  const entries = filterNetworkEntries(params).map(e => compactNetworkEntry(e, !!params.includeBody));
-  return { ok: true, enabled: networkCaptureState.enabled, count: entries.length, requests: entries };
+  const networkState = getTabAutomationState(params.tabId).networkCapture;
+  const entries = filterNetworkEntries(params, networkState).map(e => compactNetworkEntry(e, !!params.includeBody));
+  return { ok: true, enabled: networkState.enabled, count: entries.length, requests: entries };
 }
 
 function arrayBufferToBase64(buffer) {
@@ -2730,7 +3023,8 @@ async function cmdNetworkFetch(params) {
 }
 
 async function cmdNetworkReplay(params) {
-  const entry = networkCaptureState.entries.find(e =>
+  const networkState = getTabAutomationState(params.tabId).networkCapture;
+  const entry = networkState.entries.find(e =>
     (params.id && e.id === params.id) || (params.requestId && e.requestId === params.requestId)
   );
   if (!entry) return { ok: false, error: "captured request not found" };
@@ -2746,31 +3040,32 @@ async function cmdNetworkReplay(params) {
 
 async function cmdConsoleCapture(params) {
   const action = params.action || "status";
+  const consoleState = getTabAutomationState(params.tabId).consoleCapture;
   if (action === "start") {
-    consoleCaptureState.enabled = true;
-    consoleCaptureState.maxEntries = Math.max(1, params.maxEntries || 300);
-    await sendCDP("Runtime.enable").catch(() => {});
-    await sendCDP("Log.enable").catch(() => {});
+    consoleState.enabled = true;
+    consoleState.maxEntries = Math.max(1, params.maxEntries || 300);
+    await sendCDP("Runtime.enable", {}, params.tabId).catch(() => {});
+    await sendCDP("Log.enable", {}, params.tabId).catch(() => {});
   } else if (action === "stop") {
-    consoleCaptureState.enabled = false;
-    await sendCDP("Log.disable").catch(() => {});
+    consoleState.enabled = false;
+    await sendCDP("Log.disable", {}, params.tabId).catch(() => {});
   } else if (action === "clear") {
-    consoleCaptureState.entries = [];
+    consoleState.entries = [];
   } else if (action !== "status") {
     throw new Error(`unknown console_capture action: ${action}`);
   }
   return {
     ok: true,
     action,
-    enabled: consoleCaptureState.enabled,
-    count: consoleCaptureState.entries.length,
-    maxEntries: consoleCaptureState.maxEntries
+    enabled: consoleState.enabled,
+    count: consoleState.entries.length,
+    maxEntries: consoleState.maxEntries
   };
 }
 
-function filterConsoleEntries(params = {}) {
+function filterConsoleEntries(params = {}, consoleState) {
   const limit = Math.max(1, params.limit || 50);
-  let entries = [...consoleCaptureState.entries];
+  let entries = [...consoleState.entries];
   if (Array.isArray(params.types) && params.types.length) {
     const allowed = new Set(params.types.map(t => String(t).toLowerCase()));
     entries = entries.filter(e => allowed.has(String(e.type || "").toLowerCase()));
@@ -2779,21 +3074,23 @@ function filterConsoleEntries(params = {}) {
 }
 
 async function cmdConsoleList(params) {
-  const messages = filterConsoleEntries(params).map(({ stackTrace, args, ...entry }) => ({
+  const consoleState = getTabAutomationState(params.tabId).consoleCapture;
+  const messages = filterConsoleEntries(params, consoleState).map(({ stackTrace, args, ...entry }) => ({
     ...entry,
     text: String(entry.text || "").slice(0, 1000)
   }));
-  return { ok: true, enabled: consoleCaptureState.enabled, count: messages.length, messages };
+  return { ok: true, enabled: consoleState.enabled, count: messages.length, messages };
 }
 
 async function cmdConsoleGet(params) {
-  const entry = consoleCaptureState.entries.find(e => e.id === params.id);
+  const consoleState = getTabAutomationState(params.tabId).consoleCapture;
+  const entry = consoleState.entries.find(e => e.id === params.id);
   if (!entry) return { ok: false, error: "console message not found", id: params.id };
   return { ok: true, message: entry };
 }
 
 async function cmdConsoleClear(params) {
-  consoleCaptureState.entries = [];
+  getTabAutomationState(params.tabId).consoleCapture.entries = [];
   return { ok: true, cleared: true };
 }
 
@@ -2802,7 +3099,8 @@ async function cmdScriptEvaluate(params) {
   const result = await cmdExecuteScript({
     script: params.expression,
     awaitPromise: params.awaitPromise !== false,
-    timeout: params.timeout || 5000
+    timeout: params.timeout || 5000,
+    tabId: params.tabId,
   });
   return {
     ok: !!result.success,
@@ -2847,6 +3145,7 @@ async function cmdFrameEvaluate(params) {
     script: drillScript,
     awaitPromise: params.awaitPromise !== false,
     timeout: params.timeout || 30000,
+    tabId: params.tabId,
   });
 
   if (!result.success) {
@@ -2889,7 +3188,7 @@ async function cmdDomGetText(params) {
   const result = await sendCDP("Runtime.evaluate", {
     expression: script,
     returnByValue: true
-  });
+  }, params.tabId);
 
   if (result.exceptionDetails) {
     throw new Error("dom_get_text failed: " + JSON.stringify(result.exceptionDetails));
@@ -2943,7 +3242,10 @@ async function cmdTabGroupClose(params) {
 // ==================== Playwright Batch Helpers ====================
 
 async function evalInPage(expression, tabId) {
-  const targetId = tabId || await ensureDebuggerAttached();
+  if (!Number.isInteger(tabId)) {
+    throw new Error("page evaluation requires an explicit tabId");
+  }
+  const targetId = await ensureDebuggerAttached(tabId);
   const result = await chrome.debugger.sendCommand(
     { tabId: targetId },
     "Runtime.evaluate",
@@ -2978,7 +3280,7 @@ async function waitForSelectorCdp(selector, opts = {}, tabId) {
 }
 
 async function captureScreenshot(tabId) {
-  return cmdScreenshot({ format: "png", quality: 80 });
+  return cmdScreenshot({ format: "png", quality: 80, tabId });
 }
 
 function escapeJsString(str) {
@@ -3003,7 +3305,7 @@ function createLocatorByText(text, opts = {}, tabId) {
     click: async (opts) => {
       const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByText(${JSON.stringify(text)}): element not found`);
-      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1, tabId });
     },
     fill: async (value) => {
       await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
@@ -3013,7 +3315,7 @@ function createLocatorByText(text, opts = {}, tabId) {
       await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
       return { typed: true };
     },
-    press: async (key) => cmdSendKeys({ keys: key }),
+    press: async (key) => cmdSendKeys({ keys: key, tabId }),
     textContent: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.textContent : null; })()`, tabId),
     allTextContents: async () => evalInPage(`(() => { const arr = ${makeAll}; return arr.map(el => el?.textContent || ''); })()`, tabId),
     innerText: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.innerText : null; })()`, tabId),
@@ -3052,13 +3354,13 @@ function createLocatorByText(text, opts = {}, tabId) {
     hover: async () => {
       const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByText(${JSON.stringify(text)}): element not found`);
-      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y }, tabId);
       return { hovered: true };
     },
     dblclick: async () => {
       const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByText(${JSON.stringify(text)}): element not found`);
-      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2, tabId });
     },
     locator: (childSel) => createLocator(`${childSel}`, tabId)
   };
@@ -3077,7 +3379,7 @@ function createLocatorByRole(role, opts = {}, tabId) {
     click: async (opts) => {
       const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByRole(${JSON.stringify(role)}): element not found`);
-      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1, tabId });
     },
     fill: async (value) => {
       await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
@@ -3087,7 +3389,7 @@ function createLocatorByRole(role, opts = {}, tabId) {
       await evalInPage(`(() => { const el = ${scriptBase}; if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
       return { typed: true };
     },
-    press: async (key) => cmdSendKeys({ keys: key }),
+    press: async (key) => cmdSendKeys({ keys: key, tabId }),
     textContent: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.textContent : null; })()`, tabId),
     allTextContents: async () => evalInPage(`(() => { const arr = ${makeAll}; return arr.map(el => el?.textContent || ''); })()`, tabId),
     innerText: async () => evalInPage(`(() => { const el = ${scriptBase}; return el ? el.innerText : null; })()`, tabId),
@@ -3126,13 +3428,13 @@ function createLocatorByRole(role, opts = {}, tabId) {
     hover: async () => {
       const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByRole(${JSON.stringify(role)}): element not found`);
-      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y }, tabId);
       return { hovered: true };
     },
     dblclick: async () => {
       const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByRole(${JSON.stringify(role)}): element not found`);
-      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2, tabId });
     },
     locator: (childSel) => createLocator(`${childSel}`, tabId)
   };
@@ -3147,7 +3449,7 @@ function createLocatorByLabel(text, tabId) {
     click: async (opts) => {
       const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByLabel(${JSON.stringify(text)}): element not found`);
-      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1, tabId });
     },
     fill: async (value) => {
       await evalInPage(`(() => { const el = (${targetScript}); if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
@@ -3157,7 +3459,7 @@ function createLocatorByLabel(text, tabId) {
       await evalInPage(`(() => { const el = (${targetScript}); if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
       return { typed: true };
     },
-    press: async (key) => cmdSendKeys({ keys: key }),
+    press: async (key) => cmdSendKeys({ keys: key, tabId }),
     textContent: async () => evalInPage(`(() => { const el = (${targetScript}); return el ? el.textContent : null; })()`, tabId),
     allTextContents: async () => evalInPage(`(() => { const arr = ${makeAll}; return arr.map(el => el?.textContent || ''); })()`, tabId),
     innerText: async () => evalInPage(`(() => { const el = (${targetScript}); return el ? el.innerText : null; })()`, tabId),
@@ -3196,13 +3498,13 @@ function createLocatorByLabel(text, tabId) {
     hover: async () => {
       const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByLabel(${JSON.stringify(text)}): element not found`);
-      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y }, tabId);
       return { hovered: true };
     },
     dblclick: async () => {
       const info = await evalInPage(makePoint, tabId);
       if (!info) throw new Error(`getByLabel(${JSON.stringify(text)}): element not found`);
-      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2, tabId });
     },
     locator: (childSel) => createLocator(`${childSel}`, tabId)
   };
@@ -3226,13 +3528,13 @@ function createLocator(selector, tabId) {
     click: async (opts) => {
       const info = await evalInPage(resolveScript, tabId);
       if (!info) throw new Error(`locator.click: element not found for ${selector}`);
-      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1 });
+      return cmdClick({ x: info.x, y: info.y, button: opts?.button || "left", clickCount: opts?.clickCount || 1, tabId });
     },
     fill: async (value) => {
       if (isExpression) {
         await evalInPage(`(() => { const el = (${selector}); if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); } })()`, tabId);
       } else {
-        await cmdType({ selector, text: value, clearFirst: true });
+        await cmdType({ selector, text: value, clearFirst: true, tabId });
       }
       return { filled: true };
     },
@@ -3240,11 +3542,11 @@ function createLocator(selector, tabId) {
       if (isExpression) {
         await evalInPage(`(() => { const el = (${selector}); if (el) { el.focus(); el.value = (el.value || '') + ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', {bubbles: true})); } })()`, tabId);
       } else {
-        await cmdType({ selector, text: value, clearFirst: false });
+        await cmdType({ selector, text: value, clearFirst: false, tabId });
       }
       return { typed: true };
     },
-    press: async (key) => cmdSendKeys({ keys: key }),
+    press: async (key) => cmdSendKeys({ keys: key, tabId }),
     textContent: async () => evalInPage(isExpression
       ? `(() => { const el = (${selector}); return el ? el.textContent : null; })()`
       : `document.querySelector(${JSON.stringify(selector)})?.textContent`, tabId),
@@ -3327,13 +3629,13 @@ function createLocator(selector, tabId) {
     hover: async () => {
       const info = await evalInPage(resolveScript, tabId);
       if (!info) throw new Error(`locator.hover: element not found for ${selector}`);
-      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y });
+      await sendCDP("Input.dispatchMouseEvent", { type: "mouseMoved", x: info.x, y: info.y }, tabId);
       return { hovered: true };
     },
     dblclick: async () => {
       const info = await evalInPage(resolveScript, tabId);
       if (!info) throw new Error(`locator.dblclick: element not found for ${selector}`);
-      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2 });
+      return cmdClick({ x: info.x, y: info.y, button: "left", clickCount: 2, tabId });
     },
     locator: (childSel) => createLocator(isExpression ? `${selector} ${childSel}` : `${selector} ${childSel}`, tabId)
   };
@@ -3342,7 +3644,7 @@ function createLocator(selector, tabId) {
 
 function createPageShim(targetTabId) {
   return {
-    goto: async (url) => cmdNavigate({ url, timeout: 10000, waitUntil: "dom-ready" }),
+    goto: async (url) => cmdNavigate({ url, timeout: 10000, waitUntil: "dom-ready", tabId: targetTabId }),
     title: async () => evalInPage("document.title", targetTabId),
     url: async () => evalInPage("window.location.href", targetTabId),
     locator: (selector) => createLocator(selector, targetTabId),
@@ -3410,7 +3712,7 @@ function createPageShim(targetTabId) {
 
 async function cmdPlaywrightBatch(params) {
   const { code, timeout = 30000 } = params;
-  const tabId = await ensureDebuggerAttached();
+  const tabId = await ensureDebuggerAttached(params.tabId);
   targetTabId = tabId;
   const page = createPageShim(tabId);
   const fn = new Function("page", `return (async (page) => { ${code} })(page)`);
@@ -3428,7 +3730,7 @@ async function cmdSaveAsPdf(params) {
     scale = 1.0,
     printBackground = true
   } = params;
-  const tabId = await ensureDebuggerAttached();
+  const tabId = await ensureDebuggerAttached(params.tabId);
   await chrome.debugger.sendCommand({ tabId }, "Page.enable").catch(() => {});
   const formatSizes = {
     a4: { paperWidth: 8.27, paperHeight: 11.69 },
@@ -3464,7 +3766,7 @@ async function cmdSaveAsPdf(params) {
 }
 
 // -- clipboard --
-async function cmdClipboardRead() {
+async function cmdClipboardRead(params) {
   const script = `
     (async () => {
       if (!window.isSecureContext && location.protocol !== "https:" && location.hostname !== "localhost") {
@@ -3494,7 +3796,7 @@ async function cmdClipboardRead() {
       return result;
     })()
   `;
-  const result = await cmdExecuteScript({ script, awaitPromise: true, timeout: 10000 });
+  const result = await cmdExecuteScript({ script, awaitPromise: true, timeout: 10000, tabId: params.tabId });
   if (!result.success) {
     const errMsg = result.error || "剪贴板读取失败";
     if (errMsg.includes("NotAllowedError") || errMsg.includes("Permission denied") || errMsg.includes("剪贴板访问被拒绝")) {
@@ -3537,7 +3839,7 @@ async function cmdClipboardWrite(params) {
       return { ok: true };
     })()
   `;
-  const result = await cmdExecuteScript({ script, awaitPromise: true, timeout: 10000 });
+  const result = await cmdExecuteScript({ script, awaitPromise: true, timeout: 10000, tabId: params.tabId });
   if (!result.success) {
     const errMsg = result.error || "剪贴板写入失败";
     if (errMsg.includes("NotAllowedError") || errMsg.includes("Permission denied") || errMsg.includes("剪贴板访问被拒绝")) {
@@ -3562,7 +3864,7 @@ async function cmdPageAssetsList(params) {
       });
     })()
   `;
-  const result = await cmdExecuteScript({ script, awaitPromise: false, timeout: 10000 });
+  const result = await cmdExecuteScript({ script, awaitPromise: false, timeout: 10000, tabId: params.tabId });
   if (!result.success) {
     throw new Error(result.error || "page_assets_list failed");
   }

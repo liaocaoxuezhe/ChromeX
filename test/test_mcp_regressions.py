@@ -219,7 +219,7 @@ def test_extension_navigation_prefers_tracked_target_over_user_active_tab():
     end = source.index("async function cmdNavigate", start)
     body = source[start:end]
 
-    target_lookup = body.find("if (targetTabId)")
+    target_lookup = body.find("if (!tabId && targetTabId)")
     active_lookup = body.find("chrome.tabs.query({ active: true, lastFocusedWindow: true })")
     assert target_lookup != -1
     assert active_lookup != -1
@@ -329,7 +329,7 @@ def test_extension_reenables_console_domains_after_attach():
     source = Path("extension/background.js").read_text(encoding="utf-8")
 
     assert "async function enableCaptureDomainsForAttachedTab" in source
-    assert "consoleCaptureState.enabled" in source
+    assert "tabState.consoleCapture.enabled" in source
     assert "await enableCaptureDomainsForAttachedTab(expectedTabId)" in source
 
 
@@ -341,7 +341,7 @@ def test_extension_recovers_from_stale_debugger_attachment():
 
     assert "isDebuggerAlreadyAttachedError" in ensure_block
     assert "await detachDebuggerTab(expectedTabId)" in ensure_block
-    assert ensure_block.count("await attach();") == 2
+    assert ensure_block.count("await multiTargetDebuggerManager.ensureAttached(") == 2
     assert "failedIds" not in ensure_block
 
 

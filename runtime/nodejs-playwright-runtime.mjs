@@ -59,6 +59,7 @@ let browser = null;
 let agent = null;
 let transport = null;
 let hubConnected = false;
+let immutableSessionId = null;
 
 const LOCATOR_CHAIN_METHODS = new Set([
   "locator",
@@ -289,6 +290,27 @@ async function bindRuntimeSession(session, scope) {
   if (shouldResetBoundTab(previousSession, session, previousTab, scope)) {
     globalThis.tab = null;
   }
+}
+
+async function bindImmutableSessionHandle(handle) {
+  if (!handle?.sessionId || !handle?.session) {
+    throw new Error("sessionHandle requires sessionId and session");
+  }
+  if (immutableSessionId && immutableSessionId !== handle.sessionId) {
+    throw new Error(`Runtime is already bound to Session ${immutableSessionId}`);
+  }
+  immutableSessionId = handle.sessionId;
+  transport?.setSessionHandle?.(handle);
+  await bindRuntimeSession(handle.session, {
+    mode: "session-v2",
+    session: handle.session,
+    sessionId: handle.sessionId,
+    groupId: handle.groupId,
+    windowId: handle.windowId,
+    targetTabId: handle.targetTabId,
+    allowedTabIds: handle.tabIds || [],
+    revision: handle.revision,
+  });
 }
 
 function tabIdFromObject(tab) {
@@ -643,7 +665,9 @@ async function main() {
       if (message.lease_token && transport && transport.setLeaseToken) {
         transport.setLeaseToken(message.lease_token);
       }
-      if (message.session) {
+      if (message.sessionHandle) {
+        await bindImmutableSessionHandle(message.sessionHandle);
+      } else if (message.session) {
         await bindRuntimeSession(message.session, message.scope);
       }
       await executeCode({

@@ -37,13 +37,15 @@ from server.dom_snapshot_cache import DomSnapshotCache
 from server.logger import setup_logging, get_logger, get_operation_logger
 from server.debugger_manager import DebuggerManager
 from server.session_manager import SessionManager
+from server.session_scheduler import SessionScheduler
 from server.tool_descriptions import TOOL_DEFINITIONS
 from server.playwright_runtime import PlaywrightRuntime
 
 try:
-    from server.nodejs_runtime_manager import NodeJSRuntimeManager
+    from server.nodejs_runtime_manager import NodeJSRuntimeManager, NodeRuntimeSupervisor
 except ImportError:
     NodeJSRuntimeManager = None  # type: ignore
+    NodeRuntimeSupervisor = None  # type: ignore
 
 # 加载环境变量
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -64,9 +66,13 @@ session_manager = SessionManager()
 dom_cache = DomSnapshotCache()
 playwright_runtime = PlaywrightRuntime()
 _claim_tokens: dict[str, int] = {}
+_tool_session_scheduler = SessionScheduler(max_concurrent_sessions=64)
 
 if NodeJSRuntimeManager is not None:
-    nodejs_runtime: Optional[NodeJSRuntimeManager] = NodeJSRuntimeManager(project_root=_project_root)
+    if getattr(ws_manager, "protocol_mode", "v1") == "v2" and NodeRuntimeSupervisor is not None:
+        nodejs_runtime = NodeRuntimeSupervisor(project_root=_project_root)
+    else:
+        nodejs_runtime = NodeJSRuntimeManager(project_root=_project_root)
 else:
     nodejs_runtime = None
 
@@ -103,42 +109,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
             op_logger.log_operation(name, arguments, result_summary=result_summary)
             return result
 
-        if hasattr(ws_manager, "set_session_scope"):
-            ws_manager.set_session_scope(arguments.get("session"))
-        async with ws_manager.operation(name):
-            # New unified 27-tool routing
-            if name in {
-                "browser_navigate",
-                "browser_tab",
-                "browser_session",
-                "browser_tabs_list",
-                "browser_dom_overview",
-                "browser_dom_query",
-                "browser_dom_search",
-                "browser_dom_get_text",
-                "browser_dom_diff",
-                "browser_screenshot",
-                "action_click",
-                "action_double_click",
-                "action_hover",
-                "action_scroll",
-                "action_drag",
-                "action_fill",
-                "action_press_key",
-                "upload_file",
-                "handle_dialog",
-                "script_evaluate",
-                "console_check",
-                "network_check",
-                "browser_scrape_with_scroll",
-            }:
-                result = await tool_agent_first(name, arguments)
-            elif name == "browser_code_run":
-                result = await tool_browser_code_run(arguments)
-            elif name == "save_as_pdf":
-                result = await tool_save_as_pdf(arguments)
+        if getattr(ws_manager, "protocol_mode", "v1") == "v2":
+            session_alias = arguments.get("session")
+            if isinstance(session_alias, str) and session_alias.strip():
+                owner_id = getattr(ws_manager, "owner_id", "adapter-local")
+                lane_id = f"{owner_id}:{session_alias.strip()}"
+                async with _tool_session_scheduler.session_operation(lane_id, str(uuid.uuid4())):
+                    result = await _route_tool_call(name, arguments)
             else:
-                result = _json_content({"ok": False, "error": f"未知工具: {name}"})
+                result = await _route_tool_call(name, arguments)
+        else:
+            if hasattr(ws_manager, "set_session_scope"):
+                ws_manager.set_session_scope(arguments.get("session"))
+            async with ws_manager.operation(name):
+                result = await _route_tool_call(name, arguments)
 
         # 记录成功操作
         result_summary = _extract_result_summary(result)
@@ -160,6 +144,40 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
         logger.exception(f"Tool {name} 执行异常")
         op_logger.log_operation(name, arguments, error=error_msg)
         return _json_content({"ok": False, "error": error_msg})
+
+
+async def _route_tool_call(name: str, arguments: dict):
+    if name in {
+        "browser_navigate",
+        "browser_tab",
+        "browser_session",
+        "browser_tabs_list",
+        "browser_dom_overview",
+        "browser_dom_query",
+        "browser_dom_search",
+        "browser_dom_get_text",
+        "browser_dom_diff",
+        "browser_screenshot",
+        "action_click",
+        "action_double_click",
+        "action_hover",
+        "action_scroll",
+        "action_drag",
+        "action_fill",
+        "action_press_key",
+        "upload_file",
+        "handle_dialog",
+        "script_evaluate",
+        "console_check",
+        "network_check",
+        "browser_scrape_with_scroll",
+    }:
+        return await tool_agent_first(name, arguments)
+    if name == "browser_code_run":
+        return await tool_browser_code_run(arguments)
+    if name == "save_as_pdf":
+        return await tool_save_as_pdf(arguments)
+    return _json_content({"ok": False, "error": f"未知工具: {name}"})
 
 
 def _extract_result_summary(result: list) -> str:
@@ -203,6 +221,23 @@ def _params_with_scope(params: dict, session: str) -> dict:
 
 
 async def _scoped_send(command: str, params: dict, session: str, tab_id: int | None = None) -> dict:
+    if getattr(ws_manager, "protocol_mode", "v1") == "v2":
+        handle = await ws_manager.get_session(session)
+        v2_params = {
+            key: value
+            for key, value in (params or {}).items()
+            if key not in {"active", "focusWindow", "scope"}
+        }
+        resolved_tab_id = tab_id
+        if resolved_tab_id is None:
+            resolved_tab_id = handle.get("targetTabId")
+        return await ws_manager.send_session_command(
+            handle,
+            command,
+            v2_params,
+            operation_id=str(uuid.uuid4()),
+            tab_id=resolved_tab_id,
+        )
     if tab_id is not None and not session_manager.is_tab_allowed(session, tab_id):
         return {"ok": False, "error": f"tab {tab_id} is outside session {session}"}
     return await ws_manager.send_command(command, _params_with_scope(params, session))
@@ -220,6 +255,9 @@ def _tab_ids_from_action_result(result: dict) -> list[int]:
 
 
 async def _add_action_result_tabs_to_session(session: str, result: dict) -> None:
+    if getattr(ws_manager, "protocol_mode", "v1") == "v2":
+        # V2 popup ownership is discovered and committed by Extension -> Hub.
+        return
     for tab_id in _tab_ids_from_action_result(result):
         if not session_manager.is_tab_allowed(session, tab_id):
             await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=True)
@@ -240,6 +278,7 @@ def _flatten_tabs(raw: dict) -> list[dict]:
                     "favicon": tab.get("favIconUrl"),
                     "groupId": tab.get("groupId"),
                     "tabGroup": tab.get("groupId"),
+                    "claimToken": tab.get("claimToken"),
                 }
             )
     return tabs
@@ -286,6 +325,17 @@ async def tool_diagnose(args: dict) -> list[TextContent | ImageContent]:
         lines.append(f"Hub ID: {hub_status.get('hub_id', '未知')}")
         lines.append(f"Adapter 连接数: {hub_status.get('adapter_connections', '未知')}")
         lines.append(f"操作队列: {'忙碌' if hub_status.get('queue_locked') else '空闲'}")
+        lines.append(f"Session 协议: {hub_status.get('session_protocol_mode', '未知')}")
+        registry = hub_status.get("registry") or {}
+        scheduler = hub_status.get("scheduler") or {}
+        lines.append(
+            f"Session Registry: sessions={registry.get('sessions', 0)}, "
+            f"groups={registry.get('groupOwners', 0)}, tabs={registry.get('tabOwners', 0)}"
+        )
+        lines.append(
+            f"Session 调度: active={scheduler.get('inFlightSessions', 0)}, "
+            f"waiting={sum(item.get('waiters', 0) for item in (scheduler.get('sessionLanes') or {}).values())}"
+        )
         if hub_status.get("lease_name"):
             lines.append(f"当前 lease: {hub_status.get('lease_name')}")
         if hub_status.get("lease_age_seconds") is not None:
@@ -386,8 +436,12 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
 
     if name == "browser_tabs_list":
         if args.get("open") or args.get("user") or args.get("allUserTabs"):
-            raw = await ws_manager.send_command("get_all_tabs")
-            tabs = _with_claim_tokens(_flatten_tabs(raw))
+            if getattr(ws_manager, "protocol_mode", "v1") == "v2":
+                raw = await ws_manager.list_user_tabs()
+                tabs = _flatten_tabs(raw)
+            else:
+                raw = await ws_manager.send_command("get_all_tabs")
+                tabs = _with_claim_tokens(_flatten_tabs(raw))
             return _json_content({"ok": True, "tabs": tabs, "totalCount": len(tabs), "claimRequired": True})
 
         if not args.get("session"):
@@ -397,7 +451,11 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             })
         session = _require_session_arg(args)
         raw = await _scoped_send("get_all_tabs", {}, session)
-        allowed = set(session_manager.scope_payload(session)["allowedTabIds"])
+        if getattr(ws_manager, "protocol_mode", "v1") == "v2":
+            handle = await ws_manager.get_session(session)
+            allowed = set(handle.get("tabIds") or [])
+        else:
+            allowed = set(session_manager.scope_payload(session)["allowedTabIds"])
         tabs = [tab for tab in _flatten_tabs(raw) if tab.get("id") in allowed]
         return _json_content({"tabs": tabs, "totalCount": len(tabs)})
 
@@ -420,7 +478,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             final_url = result.get("url", url)
 
             joined_session = None
-            if session:
+            if session and getattr(ws_manager, "protocol_mode", "v1") != "v2":
                 try:
                     tab_info = await ws_manager.send_command("get_info")
                     tab_id = tab_info.get("tabId")
@@ -476,12 +534,19 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         session = _require_session_arg(args)
         action = args.get("action")
         if action == "new":
-            result = await _scoped_send("agent_browser_tab_new", {
-                "url": args.get("url")
-            }, session)
+            if getattr(ws_manager, "protocol_mode", "v1") == "v2":
+                handle = await ws_manager.get_session(session)
+                result = await ws_manager.create_session_tab(
+                    handle,
+                    args.get("url") or "about:blank",
+                )
+            else:
+                result = await _scoped_send("agent_browser_tab_new", {
+                    "url": args.get("url")
+                }, session)
             tab_id = result.get("tabId")
             joined_session = None
-            if tab_id is not None:
+            if tab_id is not None and getattr(ws_manager, "protocol_mode", "v1") != "v2":
                 try:
                     await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=True)
                     joined_session = session
@@ -520,6 +585,88 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
 
     if name == "browser_session":
         action = args.get("action", "list")
+        if getattr(ws_manager, "protocol_mode", "v1") == "v2":
+            if action == "create":
+                session = args.get("session")
+                if not session:
+                    return _json_content({"ok": False, "error": "session is required for 'create'"})
+                handle = await ws_manager.open_session(
+                    session,
+                    args.get("group_title"),
+                )
+                return _json_content({
+                    "ok": True,
+                    "action": "create",
+                    "session": session,
+                    "sessionId": handle.get("sessionId"),
+                    "groupId": handle.get("groupId"),
+                    "groupTitle": handle.get("groupTitle"),
+                    "protocolVersion": handle.get("protocolVersion", 2),
+                    "focusSuppressed": True,
+                    "hint": "Session is Hub-owned; all browser operations are confined to this group.",
+                })
+            if action == "new_tab":
+                session = args.get("session")
+                url = args.get("url")
+                if not session:
+                    return _json_content({"ok": False, "error": "session is required for 'new_tab'"})
+                if not url:
+                    return _json_content({"ok": False, "error": "url is required for 'new_tab'"})
+                url = _normalize_url(url)
+                handle = await ws_manager.get_session(session)
+                updated = await ws_manager.create_session_tab(handle, url)
+                return _json_content({
+                    "ok": True,
+                    "action": "new_tab",
+                    "session": session,
+                    "sessionId": updated.get("sessionId"),
+                    "tabId": updated.get("tabId") or updated.get("targetTabId"),
+                    "url": url,
+                    "groupId": updated.get("groupId"),
+                    "groupTitle": updated.get("groupTitle"),
+                    "protocolVersion": updated.get("protocolVersion", 2),
+                    "focusSuppressed": True,
+                })
+            if action == "list":
+                listed = await ws_manager.list_sessions()
+                return _json_content({
+                    "ok": True,
+                    "activeSession": None,
+                    "sessions": listed.get("sessions", []),
+                    "protocolVersion": 2,
+                })
+            if action in {"add", "claim"}:
+                session = _require_session_arg(args)
+                tab_id = args.get("tabId")
+                if tab_id is None:
+                    return _json_content({"ok": False, "error": "tabId is required for claim"})
+                claim_token = args.get("claimToken")
+                if not claim_token:
+                    return _json_content({"ok": False, "error": "claimToken is required for claiming user tabs"})
+                handle = await ws_manager.get_session(session)
+                claimed = await ws_manager.claim_session_tab(
+                    handle, int(tab_id), claim_token=claim_token
+                )
+                return _json_content({
+                    "ok": True, "action": "claim", "session": session,
+                    "sessionId": claimed.get("sessionId"), "tabId": tab_id,
+                    "groupId": claimed.get("groupId"), "protocolVersion": 2,
+                })
+            if action == "close":
+                session = _require_session_arg(args)
+                handle = await ws_manager.get_session(session)
+                closed = await ws_manager.close_session(handle)
+                if NodeRuntimeSupervisor is not None and isinstance(nodejs_runtime, NodeRuntimeSupervisor):
+                    await nodejs_runtime.close_session(handle["sessionId"])
+                return _json_content({"ok": True, "action": "close", **closed})
+            if action == "finalize":
+                session = _require_session_arg(args)
+                handle = await ws_manager.get_session(session)
+                keep_tab_ids = [item["tabId"] for item in (args.get("keep") or []) if item.get("tabId") is not None]
+                finalized = await ws_manager.finalize_session(handle, keep_tab_ids)
+                if NodeRuntimeSupervisor is not None and isinstance(nodejs_runtime, NodeRuntimeSupervisor):
+                    await nodejs_runtime.close_session(handle["sessionId"])
+                return _json_content({"ok": True, "action": "finalize", **finalized})
         if action == "create":
             session = args.get("session")
             if not session:
@@ -631,7 +778,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         session = _require_session_arg(args)
         raw = await _scoped_send("dom_overview", args, session)
         try:
-            info = await ws_manager.send_command("get_info")
+            info = await _scoped_send("get_info", {}, session)
             current_url = info.get("url", "")
             current_tab_id = info.get("tabId")
         except Exception:
@@ -769,7 +916,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
     if name == "browser_dom_diff":
         session = _require_session_arg(args)
         try:
-            info = await ws_manager.send_command("get_info")
+            info = await _scoped_send("get_info", {}, session)
             current_url = info.get("url", "")
             current_tab_id = info.get("tabId")
         except Exception:
@@ -835,7 +982,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
 
         title = "screenshot"
         try:
-            info = await ws_manager.send_command("get_info")
+            info = await _scoped_send("get_info", {}, session)
             title = re.sub(r"[^\w\-. ]+", "_", info.get("title", "screenshot")).strip("_") or "screenshot"
         except Exception:
             pass
@@ -1037,13 +1184,22 @@ async def tool_browser_code_run(args: dict) -> list[TextContent]:
                         ),
                     })
 
-            result = await nodejs_runtime.execute(
-                code,
-                timeout,
-                lease_token=getattr(ws_manager, "_lease_token", None),
-                session=session,
-                scope=session_manager.scope_payload(session),
-            )
+            if NodeRuntimeSupervisor is not None and isinstance(nodejs_runtime, NodeRuntimeSupervisor):
+                session_handle = await ws_manager.get_session(session)
+                result = await nodejs_runtime.execute(
+                    session_handle,
+                    code,
+                    timeout,
+                    lease_token=getattr(ws_manager, "_lease_token", None),
+                )
+            else:
+                result = await nodejs_runtime.execute(
+                    code,
+                    timeout,
+                    lease_token=getattr(ws_manager, "_lease_token", None),
+                    session=session,
+                    scope=session_manager.scope_payload(session),
+                )
             if result.get("ok"):
                 payload = _truncate_result(result["result"])
                 if result.get("meta") is not None:
@@ -1104,7 +1260,7 @@ async def tool_save_as_pdf(args: dict) -> list[TextContent]:
         # 使用临时目录，以页面标题作为文件名
         title = "page"
         try:
-            info = await ws_manager.send_command("get_info")
+            info = await _scoped_send("get_info", {}, session)
             title = re.sub(r"[^\w\-. ]+", "_", info.get("title", "page")).strip("_") or "page"
         except Exception:
             pass

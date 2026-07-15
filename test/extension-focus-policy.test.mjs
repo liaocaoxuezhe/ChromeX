@@ -90,7 +90,9 @@ test("background debugger 路径显式校验期望标签", () => {
   );
   const sendBody = between(source, "async function sendCDP", "async function sleep");
 
-  assert.match(source, /ensureDebuggerAttached\(expectedTabId = targetTabId\)/);
+  assert.match(source, /ensureDebuggerAttached\(expectedTabId\)/);
+  assert.doesNotMatch(source, /ensureDebuggerAttached\(expectedTabId = targetTabId\)/);
+  assert.match(ensureBody, /没有选择自动化目标标签页/);
   assert.match(ensureBody, /canReuseDebuggerAttachment\(attachedTabId, expectedTabId\)/);
   assert.doesNotMatch(ensureBody, /findUsableTabId/);
   assert.match(sendBody, /ensureDebuggerAttached\(expectedTabId\)/);

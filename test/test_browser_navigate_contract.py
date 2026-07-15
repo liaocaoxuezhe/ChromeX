@@ -35,16 +35,17 @@ def test_extension_navigate_defaults_to_tabs_api():
 
     assert 'method = "tabs"' in navigate_block
     assert 'if (method !== "cdp" || !usesStandardWebProtocol)' in navigate_block
-    assert "return navigateWithTabs(url, timeout)" in navigate_block
+    assert "return navigateWithTabs(url, timeout, params.tabId)" in navigate_block
 
 
 def test_extension_cdp_commands_have_timeout_guard():
     extension_source = Path("extension/background.js").read_text(encoding="utf-8")
     send_cdp_block = extension_source.split(
-        "async function sendCDP(method, params = {}, expectedTabId = targetTabId)", 1
+        "async function sendCDP(method, params = {}, expectedTabId)", 1
     )[1]
     send_cdp_block = send_cdp_block.split("async function sleep", 1)[0]
 
     assert "withTimeout(ensureDebuggerAttached(expectedTabId)" in send_cdp_block
     assert "withTimeout(" in send_cdp_block
     assert "chrome.debugger.sendCommand" in send_cdp_block
+    assert "requires an explicit tabId" in send_cdp_block

@@ -30,7 +30,7 @@ test("chromex plugin manifest has install surface metadata", async () => {
   const raw = await readFile(path.join(root, "plugins/chromex/.codex-plugin/plugin.json"), "utf8");
   const manifest = JSON.parse(raw);
   assert.equal(manifest.name, "chromex");
-  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
+  assert.match(manifest.version, /^\d+\.\d+\.\d+(?:\+codex\.[0-9A-Za-z.-]+)?$/);
   assert.equal(manifest.skills, "./skills/");
   assert.equal(manifest.mcpServers, "./.mcp.json");
   assert.equal(manifest.interface.displayName, "ChromeX");

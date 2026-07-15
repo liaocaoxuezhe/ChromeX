@@ -584,6 +584,7 @@ export function createNativeMessagingTransport({
 
 export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocketImpl = globalThis.WebSocket, commandTimeoutMs = 30000 } = {}) {
   let leaseToken = null;
+  let sessionHandle = null;
   const sessions = new Map();
   const claimTokens = new Map();
   const ensureLocalSession = async (send, session, groupTitle = session) => {
@@ -630,10 +631,41 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
     sessions.set(scope.session, record);
     return record;
   };
+  const applySessionHandle = (handle) => {
+    if (sessionHandle && sessionHandle.sessionId !== handle.sessionId) {
+      throw new Error(`transport is already bound to Session ${sessionHandle.sessionId}`);
+    }
+    sessionHandle = Object.freeze({ ...handle });
+    importScope({
+      ...handle,
+      allowedTabIds: handle.tabIds || [],
+      session: handle.session,
+      mode: "session-v2",
+    });
+    return sessionHandle;
+  };
+  const sendSessionControl = async (commandName, extra = {}) => {
+    const result = await sendHubCommand({
+      url,
+      WebSocketImpl,
+      commandName,
+      params: {
+        ownerId: sessionHandle.ownerId,
+        adapterId: sessionHandle.adapterId,
+        sessionId: sessionHandle.sessionId,
+        expectedRevision: sessionHandle.revision,
+        operationId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        ...extra,
+      },
+      timeoutMs: commandTimeoutMs,
+    });
+    if (result?.sessionId === sessionHandle.sessionId) applySessionHandle(result);
+    return result;
+  };
   const flattenTabs = (raw) => {
     const tabs = [];
     for (const windowTabs of Object.values(raw.windows || {})) {
-      for (const { id, windowId, active, url, title, status, favIconUrl, groupId, debugable, debuggable } of windowTabs) {
+      for (const { id, windowId, active, url, title, status, favIconUrl, groupId, debugable, debuggable, claimToken } of windowTabs) {
         tabs.push({
           id,
           windowId,
@@ -646,25 +678,60 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
           tabGroup: groupId,
           debugable,
           debuggable,
+          claimToken,
         });
       }
     }
     return tabs;
   };
-  const command = (commandName, params = {}, options = {}) => sendHubCommand({
-    url,
-    WebSocketImpl,
-    commandName,
-    params,
-    leaseToken,
-    timeoutMs: options.timeoutMs ?? commandTimeoutMs,
-  });
+  const command = (commandName, params = {}, options = {}) => {
+    if (sessionHandle && !commandName.startsWith("__")) {
+      const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      return sendHubMessage({
+        url,
+        WebSocketImpl,
+        timeoutMs: options.timeoutMs ?? commandTimeoutMs,
+        commandName,
+        message: {
+          protocolVersion: 2,
+          requestId,
+          operationId: `${requestId}-op`,
+          adapterId: sessionHandle.adapterId,
+          ownerId: sessionHandle.ownerId,
+          sessionId: sessionHandle.sessionId,
+          sessionAlias: sessionHandle.session,
+          sessionRevision: sessionHandle.revision,
+          groupId: sessionHandle.groupId,
+          tabId: params.tabId ?? sessionHandle.targetTabId,
+          command: commandName,
+          params: withoutFocusCompatibilityFields(params),
+        },
+      }).then((data) => {
+        if (Number.isInteger(data?.sessionRevision)) {
+          sessionHandle = Object.freeze({
+            ...sessionHandle,
+            revision: data.sessionRevision,
+            targetTabId: data.targetTabId ?? sessionHandle.targetTabId,
+            tabIds: data.tabIds || sessionHandle.tabIds,
+          });
+        }
+        return data;
+      });
+    }
+    return sendHubCommand({
+      url, WebSocketImpl, commandName, params, leaseToken,
+      timeoutMs: options.timeoutMs ?? commandTimeoutMs,
+    });
+  };
   return {
     setLeaseToken(token) {
       leaseToken = token;
     },
     setSessionScope(scope) {
       return importScope(scope);
+    },
+    setSessionHandle(handle) {
+      return applySessionHandle(handle);
     },
     async healthCheck({ timeoutMs = 750 } = {}) {
       if (!WebSocketImpl) return false;
@@ -718,6 +785,28 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       };
       if (name === "browser_session") {
         const action = args.action || "list";
+        if (sessionHandle) {
+          if (action === "create") {
+            return { ok: true, action, ...sessionHandle };
+          }
+          if (action === "new_tab") {
+            return sendSessionControl("__session_create_tab__", { url: args.url || "about:blank" });
+          }
+          if (action === "claim" || action === "add") {
+            return sendSessionControl("__session_claim_tab__", { tabId: args.tabId, claimToken: args.claimToken });
+          }
+          if (action === "close") {
+            return sendSessionControl("__session_close__");
+          }
+          if (action === "finalize") {
+            return sendSessionControl("__session_finalize__", {
+              keepTabIds: (args.keep || []).map((item) => item.tabId).filter(Number.isInteger),
+            });
+          }
+          if (action === "list") {
+            return { ok: true, sessions: [sessionHandle], protocolVersion: 2 };
+          }
+        }
         if (action === "create") {
           const record = await ensureLocalSession(send, args.session, args.group_title || args.groupTitle || args.session);
           return { ok: true, action, session: record.session, groupId: record.groupId, groupTitle: record.groupTitle };
@@ -801,8 +890,11 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       }
       if (name === "browser_tabs_list") {
         if (args.open || args.user || args.allUserTabs) {
-          const raw = await send("get_all_tabs", args);
+          const raw = sessionHandle
+            ? await sendSessionControl("__session_user_tabs__")
+            : await send("get_all_tabs", args);
           const tabs = flattenTabs(raw).map((tab) => {
+            if (tab.claimToken) return tab;
             const claimToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
             claimTokens.set(claimToken, tab.id);
             return { ...tab, claimToken };
@@ -956,9 +1048,32 @@ function unwrapScriptEvaluateResult(raw) {
 }
 
 function sendHubCommand({ url, WebSocketImpl, commandName, params, leaseToken, timeoutMs = 30000 }) {
+  const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return sendHubMessage({
+    url,
+    WebSocketImpl,
+    timeoutMs,
+    commandName,
+    message: {
+      request_id: requestId,
+      command: commandName,
+      params,
+      ...(leaseToken ? { lease_token: leaseToken } : {}),
+    },
+  });
+}
+
+function sendHubMessage({ url, WebSocketImpl, message, commandName, timeoutMs = 30000 }) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocketImpl(url);
-    const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const requestId = message.request_id || message.requestId;
+    const identity = {
+      ownerId: message.ownerId || message.params?.ownerId,
+      adapterId: message.adapterId || message.params?.adapterId,
+    };
+    const registrationId = `register-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const requiresRegistration = Boolean(identity.ownerId && identity.adapterId);
+    let commandSent = false;
     const timer = setTimeout(() => {
       try {
         ws.close();
@@ -967,16 +1082,31 @@ function sendHubCommand({ url, WebSocketImpl, commandName, params, leaseToken, t
     }, timeoutMs);
 
     ws.addEventListener("open", () => {
-      ws.send(JSON.stringify({
-        request_id: requestId,
-        command: commandName,
-        params,
-        ...(leaseToken ? { lease_token: leaseToken } : {}),
-      }));
+      if (requiresRegistration) {
+        ws.send(JSON.stringify({
+          request_id: registrationId,
+          command: "__hub_register_adapter__",
+          params: identity,
+        }));
+      } else {
+        commandSent = true;
+        ws.send(JSON.stringify(message));
+      }
     });
     ws.addEventListener("message", (event) => {
       const data = JSON.parse(event.data);
-      if (data.request_id && data.request_id !== requestId) return;
+      const responseId = data.request_id || data.requestId;
+      if (requiresRegistration && !commandSent && responseId === registrationId) {
+        if (data.success === false || data.error) {
+          clearTimeout(timer);
+          reject(new Error(data.error || "Link2Chrome adapter registration failed"));
+          return;
+        }
+        commandSent = true;
+        ws.send(JSON.stringify(message));
+        return;
+      }
+      if (responseId && responseId !== requestId) return;
       clearTimeout(timer);
       try {
         ws.close();
