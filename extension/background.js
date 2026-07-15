@@ -1,3 +1,6 @@
+importScripts("connection-policy.js");
+importScripts("focus-policy.js");
+
 /**
  * Link2Chrome - Background Service Worker
  * 负责 WebSocket 客户端连接、CDP 操作分发、debugger 管理
@@ -7,6 +10,7 @@
 const BUILD_VERSION = "2026-06-01-plan-c-keepalive";
 let ws = null;
 let wsConnected = false;
+let connectionConflict = false;
 let nativePort = null;
 let nativeConnected = false;
 let nativeStatus = null;
@@ -26,6 +30,11 @@ const KEEPALIVE_ALARM = "link2chrome.keepalive";
 const KEEPALIVE_PERIOD_MINUTES = 0.5;
 const CDP_COMMAND_TIMEOUT = 10000;
 let heartbeatTimer = null;
+const { isDuplicateConnectionClose } = globalThis.Link2ChromeConnectionPolicy;
+const {
+  buildBackgroundTabCreateProperties,
+  canReuseDebuggerAttachment,
+} = globalThis.Link2ChromeFocusPolicy;
 const networkCaptureState = {
   enabled: false,
   includeResponseBody: false,
@@ -67,6 +76,14 @@ function isDebugableUrl(url) {
     console.log(`[Link2Chrome] URL 不可调试: ${url}`);
   }
   return isDebugable;
+}
+
+async function createBackgroundTab(options = {}) {
+  let anchorTab = null;
+  if (targetTabId != null) {
+    anchorTab = await chrome.tabs.get(targetTabId).catch(() => null);
+  }
+  return chrome.tabs.create(buildBackgroundTabCreateProperties(options, anchorTab));
 }
 
 function isScopeProvided(scope) {
@@ -181,6 +198,8 @@ function isExpectedExtensionId() {
 function markExtensionIdMismatch() {
   nativeConnected = false;
   wsConnected = false;
+  connectionConflict = false;
+  chrome.storage.local.set({ connectionConflict: false });
   nativeStatus = {
     ok: false,
     error: "extension_id_mismatch",
@@ -266,6 +285,7 @@ function connectNativeBootstrap() {
 
 function connectWebSocket() {
   if (!connectionEnabled) return;
+  if (connectionConflict) return;
   if (!isExpectedExtensionId()) {
     markExtensionIdMismatch();
     return;
@@ -285,6 +305,8 @@ function connectWebSocket() {
       }
       console.log("[Link2Chrome] WebSocket 已连接");
       wsConnected = true;
+      connectionConflict = false;
+      chrome.storage.local.set({ connectionConflict: false });
       reconnectAttempts = 0;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
@@ -319,14 +341,22 @@ function connectWebSocket() {
       }
     };
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       // 忽略陈旧连接的关闭事件，防止误触发重连
       if (ws !== socket) return;
       console.log("[Link2Chrome] WebSocket 已断开");
       wsConnected = false;
       ws = null;
+      connectionConflict = isDuplicateConnectionClose(event);
+      if (connectionConflict) {
+        chrome.storage.local.set({ connectionConflict: true });
+      }
       broadcastStatus();
       stopHeartbeat();
+      if (connectionConflict) {
+        console.warn("[Link2Chrome] 其他 Chrome 实例正在使用 Browser Hub，当前实例进入待机");
+        return;
+      }
       scheduleReconnect();
     };
 
@@ -342,6 +372,7 @@ function connectWebSocket() {
 
 function scheduleReconnect() {
   if (!connectionEnabled) return;
+  if (connectionConflict) return;
   if (reconnectTimer) return;
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     console.log("[Link2Chrome] 已达最大重连次数，停止重连");
@@ -382,6 +413,8 @@ async function keepAliveTick() {
     wsConnected,
     buildVersion: BUILD_VERSION
   }).catch(() => {});
+
+  if (connectionConflict) return;
 
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
@@ -500,118 +533,70 @@ async function enableCaptureDomainsForAttachedTab(tabId) {
   }
 }
 
-/**
- * 确保 debugger 附加到一个可调试的 tab。
- * 带重试机制：如果 attach 失败（如 chrome-extension:// 错误），排除该 tab 并重试。
- */
-async function ensureDebuggerAttached() {
-  // 如果已经 attach 到一个有效 tab，直接返回
-  if (attachedTabId !== null) {
+/** 确保 debugger 只附加到当前命令明确指定的目标标签。 */
+async function ensureDebuggerAttached(expectedTabId = targetTabId) {
+  if (expectedTabId == null) {
+    throw new Error("没有选择自动化目标标签页");
+  }
+
+  if (canReuseDebuggerAttachment(attachedTabId, expectedTabId)) {
     try {
-      const tab = await chrome.tabs.get(attachedTabId);
-      if (isDebugableUrl(tab.url)) {
-        console.log(`[Link2Chrome] 已附加到有效 tab ${attachedTabId}`);
-        await enableCaptureDomainsForAttachedTab(attachedTabId);
-        return attachedTabId;
+      const attachedTab = await chrome.tabs.get(expectedTabId);
+      if (isDebugableUrl(attachedTab.url)) {
+        await enableCaptureDomainsForAttachedTab(expectedTabId);
+        return expectedTabId;
       }
-      // URL 变了（比如被其他扩展劫持），需要重新 attach
-      console.warn(`[Link2Chrome] 已附加的 tab ${attachedTabId} URL 变为: ${tab.url}，需重新 attach`);
     } catch (err) {
-      console.warn(`[Link2Chrome] 已附加的 tab ${attachedTabId} 已不存在: ${err.message}`);
+      console.warn(`[Link2Chrome] 已附加的目标 tab ${expectedTabId} 不可用: ${err.message}`);
     }
-    try { await chrome.debugger.detach({ tabId: attachedTabId }); } catch (_) {}
+    await detachDebuggerTab(expectedTabId);
+    attachedTabId = null;
+  } else if (attachedTabId !== null) {
+    const previousTabId = attachedTabId;
+    await detachDebuggerTab(previousTabId);
     attachedTabId = null;
   }
 
-  const failedIds = new Set();
-  const MAX_RETRIES = 5;
-
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    let tabId;
-    try {
-      tabId = await findUsableTabId(failedIds);
-    } catch (err) {
-      console.error(`[Link2Chrome] 第 ${attempt + 1} 次尝试未找到可用标签页: ${err.message}`);
-      // 如果没有找到可调试的标签页，等待一下再重试
-      if (attempt < MAX_RETRIES - 1) {
-        await new Promise(r => setTimeout(r, 500));
-        continue;
-      }
-      throw err;
-    }
-
-    // 在 attach 之前再次确认 URL
-    let tab;
-    try {
-      tab = await chrome.tabs.get(tabId);
-      console.log(`[Link2Chrome] 尝试 attach 到 tab ${tabId}, url=${tab.url}`);
-    } catch (err) {
-      console.warn(`[Link2Chrome] 获取 tab ${tabId} 信息失败: ${err.message}`);
-      failedIds.add(tabId);
-      if (tabId === targetTabId) targetTabId = null;
-      continue;
-    }
-
-    if (!isDebugableUrl(tab.url)) {
-      console.warn(`[Link2Chrome] attach 前 tab ${tabId} URL 不可调试: ${tab.url}`);
-      failedIds.add(tabId);
-      if (tabId === targetTabId) targetTabId = null;
-      continue;
-    }
-
-    // 先 detach 旧的
-    if (attachedTabId !== null && attachedTabId !== tabId) {
-      try { await chrome.debugger.detach({ tabId: attachedTabId }); } catch (_) {}
-      attachedTabId = null;
-    }
-
-    try {
-      await chrome.debugger.attach({ tabId }, "1.3");
-      attachedTabId = tabId;
-      targetTabId = tabId;
-      chrome.debugger.sendCommand({ tabId }, "Page.enable").catch(() => {});
-      await enableCaptureDomainsForAttachedTab(tabId);
-      try {
-        await chrome.debugger.sendCommand({ tabId }, "Browser.setDownloadBehavior", {
-          behavior: "allowAndName",
-          eventsEnabled: true,
-        });
-      } catch (err) {
-        console.warn(`[Link2Chrome] Browser.setDownloadBehavior failed, falling back to chrome.downloads: ${err.message}`);
-        setupDownloadsFallback();
-      }
-      console.log(`[Link2Chrome] Debugger 已附加到 tab ${tabId} (${tab.url})`);
-      return tabId;
-    } catch (err) {
-      console.error(`[Link2Chrome] attach tab ${tabId} (${tab.url}) 失败: ${err.message}`);
-      if (tabId === targetTabId) targetTabId = null;
-      attachedTabId = null;
-      if (isDebuggerAlreadyAttachedError(err)) {
-        if (await detachDebuggerTab(tabId)) {
-          failedIds.delete(tabId);
-        } else {
-          failedIds.add(tabId);
-        }
-        continue;
-      }
-      failedIds.add(tabId);
-      // 如果不是可跳过的受限页面错误，直接抛出
-      if (!err.message.includes("chrome-extension") && !err.message.includes("Cannot access")) {
-        throw new Error(`Debugger attach 失败 (tab=${tabId}, url=${tab.url}): ${err.message}`);
-      }
-      // 否则继续重试下一个 tab
-    }
+  let tab;
+  try {
+    tab = await chrome.tabs.get(expectedTabId);
+  } catch (err) {
+    throw new Error(`目标标签 ${expectedTabId} 已不存在: ${err.message}`);
+  }
+  if (!isDebugableUrl(tab.url)) {
+    throw new Error(`目标标签 ${expectedTabId} 不可调试: ${tab.url}`);
   }
 
-  throw new Error(
-    `调试器附加失败: 尝试了 ${failedIds.size} 个标签页均不可调试。` +
-    `失败 IDs: [${[...failedIds].join(", ")}]`
-  );
+  const attach = async () => chrome.debugger.attach({ tabId: expectedTabId }, "1.3");
+  try {
+    await attach();
+  } catch (err) {
+    if (!isDebuggerAlreadyAttachedError(err) || !await detachDebuggerTab(expectedTabId)) {
+      throw new Error(`Debugger attach 失败 (tab=${expectedTabId}, url=${tab.url}): ${err.message}`);
+    }
+    await attach();
+  }
+
+  attachedTabId = expectedTabId;
+  targetTabId = expectedTabId;
+  chrome.debugger.sendCommand({ tabId: expectedTabId }, "Page.enable").catch(() => {});
+  await enableCaptureDomainsForAttachedTab(expectedTabId);
+  try {
+    await chrome.debugger.sendCommand({ tabId: expectedTabId }, "Browser.setDownloadBehavior", {
+      behavior: "allowAndName",
+      eventsEnabled: true,
+    });
+  } catch (err) {
+    console.warn(`[Link2Chrome] Browser.setDownloadBehavior failed, falling back to chrome.downloads: ${err.message}`);
+    setupDownloadsFallback();
+  }
+  console.log(`[Link2Chrome] Debugger 已附加到目标 tab ${expectedTabId} (${tab.url})`);
+  return expectedTabId;
 }
 
-async function sendCDP(method, params = {}) {
+async function sendCDP(method, params = {}, expectedTabId = targetTabId) {
   const timeout = params.timeout || CDP_COMMAND_TIMEOUT;
-  const tabId = await withTimeout(ensureDebuggerAttached(), timeout, `Debugger attach timeout: ${method}`);
+  const tabId = await withTimeout(ensureDebuggerAttached(expectedTabId), timeout, `Debugger attach timeout: ${method}`);
   return withTimeout(
     chrome.debugger.sendCommand({ tabId }, method, params),
     timeout,
@@ -1121,7 +1106,6 @@ async function snapshotActiveTabForAction() {
 
 async function detectActionTabChange(before, options = {}) {
   const timeoutMs = options.timeoutMs ?? 700;
-  const focusWindow = options.focusWindow === true;
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() <= deadline) {
@@ -1133,20 +1117,12 @@ async function detectActionTabChange(before, options = {}) {
     const activeChanged = activeTabId != null && activeTabId !== before.activeTabId;
 
     if (openedTabId != null) {
-      try {
-        await chrome.tabs.update(openedTabId, { active: true });
-        if (focusWindow === true && openedTab.windowId != null) {
-          await chrome.windows.update(openedTab.windowId, { focused: true });
-        }
-      } catch (_) {}
       targetTabId = openedTabId;
-      attachedTabId = null;
-      return { activeTabId: openedTabId, openedTabId };
+      return { openedTabId };
     }
 
     if (activeChanged) {
       targetTabId = activeTabId;
-      attachedTabId = null;
       return { activeTabId };
     }
 
@@ -1327,7 +1303,7 @@ async function navigateWithTabs(url, timeoutMs) {
   }
 
   if (!tabId) {
-    const newTab = await chrome.tabs.create({ url });
+    const newTab = await createBackgroundTab({ url });
     tabId = newTab.id;
     targetTabId = tabId;
     attachedTabId = null;
@@ -1517,10 +1493,9 @@ async function cmdTabManage(params) {
 
   switch (action) {
     case "new": {
-      const newTab = await chrome.tabs.create({ url: url || "about:blank" });
+      const newTab = await createBackgroundTab({ url: url || "about:blank" });
       // 跟踪新 tab
       targetTabId = newTab.id;
-      attachedTabId = null;
 
       // 如果提供了 url，等待页面加载完成
       if (url && url !== "about:blank") {
@@ -1576,11 +1551,8 @@ async function cmdTabManage(params) {
       const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
       if (tab_index >= 0 && tab_index < tabs.length) {
         const switchTab = tabs[tab_index];
-        await chrome.tabs.update(switchTab.id, { active: true });
-        // 跟踪切换后的 tab
         targetTabId = switchTab.id;
-        attachedTabId = null;
-        console.log(`[Link2Chrome] 已切换到标签页 ${switchTab.id}, URL: ${switchTab.url}`);
+        console.log(`[Link2Chrome] 已选择自动化目标 ${switchTab.id}, URL: ${switchTab.url}`);
         return { switched: true, tabIndex: tab_index, tabId: switchTab.id, url: switchTab.url };
       }
       throw new Error(`标签索引 ${tab_index} 超出范围 (共 ${tabs.length} 个标签)`);
@@ -1777,6 +1749,7 @@ function getConnectionStatus() {
     type: "status",
     connected: wsConnected,
     wsConnected,
+    connectionConflict,
     nativeConnected,
     nativeReady,
     nativeStatus,
@@ -1793,6 +1766,8 @@ function disableConnection() {
     reconnectTimer = null;
   }
   reconnectAttempts = 0;
+  connectionConflict = false;
+  chrome.storage.local.set({ connectionConflict: false });
   // 关闭现有连接
   if (ws) {
     try { ws.close(1000, "user disabled"); } catch (_) {}
@@ -1815,6 +1790,8 @@ function disableConnection() {
 function enableConnection() {
   connectionEnabled = true;
   reconnectAttempts = 0;
+  connectionConflict = false;
+  chrome.storage.local.set({ connectionConflict: false });
   chrome.storage.local.set({ connectionEnabled: true });
   setupKeepaliveAlarm();
   connectNativeBootstrap().finally(() => connectWebSocket());
@@ -1844,6 +1821,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     reconnectAttempts = 0;
+    connectionConflict = false;
+    chrome.storage.local.set({ connectionConflict: false });
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -2245,22 +2224,13 @@ async function cmdAgentBrowserTabSwitch(params) {
   const tabId = params.tabId;
   if (!tabId) throw new Error("tabId is required");
   const tab = await chrome.tabs.get(tabId);
-  if (params.focusWindow === true) {
-    await chrome.windows.update(tab.windowId, { focused: true });
-  }
-  await chrome.tabs.update(tabId, { active: true });
   targetTabId = tabId;
-  attachedTabId = null;
   return { ok: true, tabId, url: tab.url };
 }
 
 async function cmdAgentBrowserTabNew(params) {
-  const tab = await chrome.tabs.create({ url: params.url || "about:blank", active: params.active !== false });
-  if (params.focusWindow === true && tab.windowId != null) {
-    await chrome.windows.update(tab.windowId, { focused: true });
-  }
+  const tab = await createBackgroundTab({ url: params.url || "about:blank" });
   targetTabId = tab.id;
-  attachedTabId = null;
   return { ok: true, tabId: tab.id, url: tab.url || params.url || "about:blank" };
 }
 
@@ -2478,7 +2448,7 @@ async function cmdActionClick(params) {
       button: params.button || "left",
       clickCount: params.clickCount || 1
     });
-    const tabChange = await detectActionTabChange(beforeTabs, { focusWindow: params.focusWindow === true });
+    const tabChange = await detectActionTabChange(beforeTabs);
     if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000 });
     return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result, ...tabChange };
   }
@@ -2490,14 +2460,14 @@ async function cmdActionClick(params) {
     const started = Date.now();
     const beforeTabs = await snapshotActiveTabForAction();
     await cmdClick({ x: el.x, y: el.y, button: params.button || "left", clickCount: params.clickCount || 1 });
-    const tabChange = await detectActionTabChange(beforeTabs, { focusWindow: params.focusWindow === true });
+    const tabChange = await detectActionTabChange(beforeTabs);
     return { ok: true, target, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...tabChange };
   }
   if (!selector && target.ariaLabel) selector = `[aria-label*="${cssEscape(target.ariaLabel)}"]`;
   const started = Date.now();
   const beforeTabs = await snapshotActiveTabForAction();
   const result = await cmdClick({ selector, button: params.button || "left", clickCount: params.clickCount || 1 });
-  const tabChange = await detectActionTabChange(beforeTabs, { focusWindow: params.focusWindow === true });
+  const tabChange = await detectActionTabChange(beforeTabs);
   if (params.waitForSelector) await cmdDomWaitFor({ selector: params.waitForSelector, state: "visible", timeout: params.timeout || 10000 });
   return { ok: true, target: { ...target, selector }, method: "cdp", effects: { domChanged: true }, elapsed: Date.now() - started, ...result, ...tabChange };
 }
@@ -2934,10 +2904,9 @@ async function cmdDomGetText(params) {
 
 async function cmdTabGroupCreate(params) {
   const title = params.title || "Link2Chrome Session";
-  const newTab = await chrome.tabs.create({ url: "about:blank", active: true });
+  const newTab = await createBackgroundTab({ url: "about:blank" });
   const tabId = newTab.id;
   targetTabId = tabId;
-  attachedTabId = null;
 
   const groupId = await chrome.tabs.group({ tabIds: [tabId] });
   await chrome.tabGroups.update(groupId, { title, color: "blue" });
@@ -3645,12 +3614,13 @@ async function cmdPageAssetsBundle(params) {
 }
 
 // ==================== 初始化 ====================
-chrome.storage.local.get("connectionEnabled", (result) => {
+chrome.storage.local.get(["connectionEnabled", "connectionConflict"], (result) => {
   // 未设置过时默认为 true
   connectionEnabled = result.connectionEnabled !== false;
-  if (connectionEnabled) {
+  connectionConflict = result.connectionConflict === true;
+  if (connectionEnabled && !connectionConflict) {
     setupKeepaliveAlarm();
     connectNativeBootstrap().finally(() => connectWebSocket());
   }
-  console.log(`[Link2Chrome] Service Worker 已启动, enabled=${connectionEnabled}`);
+  console.log(`[Link2Chrome] Service Worker 已启动, enabled=${connectionEnabled}, standby=${connectionConflict}`);
 });

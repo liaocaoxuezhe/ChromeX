@@ -89,7 +89,7 @@ const page = tab.playwright;
 return await page.evaluate(() => document.title);
 ```
 
-`page.evaluate(...)`、`page.locator(...)`、`page.getByRole(...)`、`page.getByText(...)`、`page.waitForLoadState(...)` 等常见写法会委托到当前 `tab.playwright`。多标签页、用户标签页接管、session/finalize 仍然使用 `browser.tabs` 和 `browser.user`。
+`page.evaluate(...)`、`page.locator(...)`、`page.getByRole(...)`、`page.getByText(...)`、`page.mouse.click(...)`、`page.keyboard.press(...)`、`page.waitForLoadState(...)` 等常见写法会委托到当前标签页能力。多标签页、用户标签页接管、session/finalize 仍然使用 `browser.tabs` 和 `browser.user`。
 
 复杂任务必须按这个顺序启动：
 

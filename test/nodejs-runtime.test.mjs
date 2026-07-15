@@ -419,6 +419,51 @@ describe("Playwright page facade", () => {
       assert.equal(res.result, ".item:2");
     });
   });
+
+  it("page.mouse.click 和 page.keyboard.press 委托给当前 tab.cua", async () => {
+    await withRuntime(async (rt) => {
+      const res = await execute(rt, `
+        const calls = [];
+        globalThis.tab = {
+          cua: {
+            async click(x, y, options) {
+              calls.push(["click", x, y, options]);
+              return "clicked";
+            },
+            async key(combo, options) {
+              calls.push(["key", combo, options]);
+              return "pressed";
+            }
+          }
+        };
+        const clickResult = await page.mouse.click(12, 34, { button: "right" });
+        const pressResult = await page.keyboard.press("Enter", { delay: 10 });
+        return {
+          mouseType: typeof page.mouse,
+          mouseClickType: typeof page.mouse.click,
+          keyboardType: typeof page.keyboard,
+          keyboardPressType: typeof page.keyboard.press,
+          clickResult,
+          pressResult,
+          calls
+        };
+      `);
+
+      assert.equal(res.ok, true);
+      assert.deepEqual(res.result, {
+        mouseType: "object",
+        mouseClickType: "function",
+        keyboardType: "object",
+        keyboardPressType: "function",
+        clickResult: "clicked",
+        pressResult: "pressed",
+        calls: [
+          ["click", 12, 34, { button: "right" }],
+          ["key", "Enter", { delay: 10 }],
+        ],
+      });
+    });
+  });
 });
 
 describe("console.log 转发", () => {

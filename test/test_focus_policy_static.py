@@ -7,46 +7,44 @@ def _background() -> str:
     return Path("extension/background.js").read_text(encoding="utf-8")
 
 
-def test_tab_switch_only_focuses_window_when_requested():
+def test_tab_switch_never_changes_browser_focus():
     background = _background()
     switch_body = background.split("async function cmdAgentBrowserTabSwitch", 1)[1].split(
         "async function cmdAgentBrowserTabNew", 1
     )[0]
 
-    assert "params.focusWindow === true" in switch_body
-    assert "await chrome.windows.update(tab.windowId, { focused: true });" in switch_body
-    assert switch_body.index("params.focusWindow === true") < switch_body.index(
-        "await chrome.windows.update(tab.windowId, { focused: true });"
-    )
+    assert "chrome.tabs.update(tabId, { active: true })" not in switch_body
+    assert "chrome.windows.update(tab.windowId, { focused: true })" not in switch_body
+    assert "targetTabId = tabId" in switch_body
 
 
-def test_action_click_tab_change_focus_is_opt_in():
+def test_action_click_tab_change_never_changes_browser_focus():
     background = _background()
     detector_body = background.split("async function detectActionTabChange", 1)[1].split(
         "// -- type --", 1
     )[0]
-    action_click_body = background.split("async function cmdActionClick", 1)[1].split(
-        "async function resolveActionPoint", 1
-    )[0]
-
-    assert "const focusWindow = options.focusWindow === true" in detector_body
-    assert "if (focusWindow === true && openedTab.windowId != null)" in detector_body
-    assert "detectActionTabChange(beforeTabs, { focusWindow: params.focusWindow === true })" in action_click_body
+    assert "chrome.tabs.update(openedTabId, { active: true })" not in detector_body
+    assert "chrome.windows.update(openedTab.windowId, { focused: true })" not in detector_body
+    assert "targetTabId = openedTabId" in detector_body
 
 
-def test_session_new_tab_and_runtime_tabs_new_preserve_focus_options():
+def test_focus_compatibility_fields_are_noops():
     server_main = Path("server/main.py").read_text(encoding="utf-8")
     runtime = Path("runtime/link2chrome-client.mjs").read_text(encoding="utf-8")
+    descriptions = Path("server/tool_descriptions.py").read_text(encoding="utf-8")
     background = _background()
 
-    session_new_tab = server_main.split('if action == "new_tab":', 1)[1].split('if action == "add":', 1)[0]
     tabs_new = runtime.split("async new(urlOrOptions, options = {})", 1)[1].split("async finalize", 1)[0]
     tab_new = background.split("async function cmdAgentBrowserTabNew", 1)[1].split(
         "async function cmdAgentBrowserTabClose", 1
     )[0]
 
-    assert '"active": args.get("active", False)' in session_new_tab
-    assert '"focusWindow": args.get("focusWindow", False)' in session_new_tab
-    assert "active: args.active === true" in tabs_new
-    assert "focusWindow: args.focusWindow === true" in tabs_new
-    assert "if (params.focusWindow === true && tab.windowId != null)" in tab_new
+    assert '"active": args.get(' not in server_main
+    assert '"focusWindow": args.get(' not in server_main
+    assert "active: args.active" not in runtime
+    assert "focusWindow: args.focusWindow" not in runtime
+    assert "active:" not in tabs_new
+    assert "focusWindow:" not in tabs_new
+    assert descriptions.count("compatibility no-op") >= 3
+    assert "params.focusWindow" not in tab_new
+    assert "focused: true" not in tab_new

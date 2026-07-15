@@ -40,9 +40,11 @@ def test_extension_navigate_defaults_to_tabs_api():
 
 def test_extension_cdp_commands_have_timeout_guard():
     extension_source = Path("extension/background.js").read_text(encoding="utf-8")
-    send_cdp_block = extension_source.split("async function sendCDP(method, params = {})", 1)[1]
+    send_cdp_block = extension_source.split(
+        "async function sendCDP(method, params = {}, expectedTabId = targetTabId)", 1
+    )[1]
     send_cdp_block = send_cdp_block.split("async function sleep", 1)[0]
 
-    assert "withTimeout(ensureDebuggerAttached()" in send_cdp_block
+    assert "withTimeout(ensureDebuggerAttached(expectedTabId)" in send_cdp_block
     assert "withTimeout(" in send_cdp_block
     assert "chrome.debugger.sendCommand" in send_cdp_block

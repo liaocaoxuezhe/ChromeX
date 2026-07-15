@@ -138,7 +138,80 @@ function createLocatorFacade(resolveLocator) {
   });
 }
 
+async function resolveCuaForPageFacade(surfaceName) {
+  const tab = await resolveCurrentTabForPageFacade();
+  const cua = tab?.cua;
+  if (!cua) {
+    throw new TypeError(`page.${surfaceName} facade 需要当前 tab 暴露 cua API。`);
+  }
+  return cua;
+}
+
+function createMouseFacade() {
+  return {
+    async click(x, y, options = {}) {
+      const cua = await resolveCuaForPageFacade("mouse");
+      if (typeof cua.click !== "function") {
+        throw new TypeError("page.mouse.click 需要 tab.cua.click()。");
+      }
+      return cua.click(x, y, options);
+    },
+    async dblclick(x, y, options = {}) {
+      const cua = await resolveCuaForPageFacade("mouse");
+      if (typeof cua.double_click === "function") {
+        return cua.double_click({ x, y, ...options });
+      }
+      if (typeof cua.doubleClick === "function") {
+        return cua.doubleClick(x, y, options);
+      }
+      throw new TypeError("page.mouse.dblclick 需要 tab.cua.double_click()。");
+    },
+    async move(x, y, options = {}) {
+      const cua = await resolveCuaForPageFacade("mouse");
+      if (typeof cua.move !== "function") {
+        throw new TypeError("page.mouse.move 需要 tab.cua.move()。");
+      }
+      return cua.move(x, y, options);
+    },
+    async wheel(deltaX = 0, deltaY = 0, options = {}) {
+      const cua = await resolveCuaForPageFacade("mouse");
+      if (typeof cua.scroll !== "function") {
+        throw new TypeError("page.mouse.wheel 需要 tab.cua.scroll()。");
+      }
+      return cua.scroll(deltaX, deltaY, options);
+    },
+  };
+}
+
+function createKeyboardFacade() {
+  return {
+    async press(key, options = {}) {
+      const cua = await resolveCuaForPageFacade("keyboard");
+      if (typeof cua.key !== "function") {
+        throw new TypeError("page.keyboard.press 需要 tab.cua.key()。");
+      }
+      return cua.key(key, options);
+    },
+    async type(text, options = {}) {
+      const cua = await resolveCuaForPageFacade("keyboard");
+      if (typeof cua.type !== "function") {
+        throw new TypeError("page.keyboard.type 需要 tab.cua.type()。");
+      }
+      return cua.type(text, options);
+    },
+    async insertText(text, options = {}) {
+      const cua = await resolveCuaForPageFacade("keyboard");
+      if (typeof cua.type !== "function") {
+        throw new TypeError("page.keyboard.insertText 需要 tab.cua.type()。");
+      }
+      return cua.type(text, options);
+    },
+  };
+}
+
 function createPageFacade() {
+  const mouse = createMouseFacade();
+  const keyboard = createKeyboardFacade();
   return new Proxy({}, {
     get(_target, prop) {
       if (prop === "then") return undefined;
@@ -146,6 +219,12 @@ function createPageFacade() {
 
       if (prop === "tab") {
         return resolveCurrentTabForPageFacade;
+      }
+      if (prop === "mouse") {
+        return mouse;
+      }
+      if (prop === "keyboard") {
+        return keyboard;
       }
 
       if (TAB_METHODS.has(prop)) {
@@ -298,19 +377,34 @@ async function collectStartupSummary() {
     return summary;
   }
 
+  let scopedTabs = [];
   try {
-    const scopedTabs = await browser.tabs.list();
+    scopedTabs = await browser.tabs.list();
     summary.tabs = await Promise.all(scopedTabs.map((tab) => summarizeTab(tab)));
-    const active = scopedTabs.find((tab) => tab.raw?.active) || scopedTabs[0];
-    if (active) {
-      globalThis.tab = active;
-      summary.boundTab = await summarizeTab(active);
+  } catch (error) {
+    summary.tabsError = error?.message || String(error);
+  }
+
+  try {
+    const selected = await browser.tabs.selected();
+    if (selected) {
+      globalThis.tab = selected;
+      summary.boundTab = await summarizeTab(selected);
       summary.group = summary.boundTab?.group ?? null;
-      summary.source = "browser.tabs.list";
+      summary.source = "browser.tabs.selected";
       return summary;
     }
   } catch (error) {
-    summary.tabsError = error?.message || String(error);
+    summary.selectedTabError = error?.message || String(error);
+  }
+
+  const fallback = scopedTabs[0];
+  if (fallback) {
+    globalThis.tab = fallback;
+    summary.boundTab = await summarizeTab(fallback);
+    summary.group = summary.boundTab?.group ?? null;
+    summary.source = "browser.tabs.list";
+    return summary;
   }
 
   if (!hubConnected) {

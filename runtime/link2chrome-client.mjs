@@ -53,8 +53,12 @@ export function createLink2ChromeClient({
   if (!transport || typeof transport.command !== "function") {
     throw new TypeError("createLink2ChromeClient requires a transport with command(name, args)");
   }
+  const focusSafeTransport = {
+    ...transport,
+    command: (name, args = {}) => transport.command(name, withoutFocusCompatibilityFields(args)),
+  };
   const safety = new SafetyManager({ confirmAction, policy: safetyPolicy });
-  const diagnosticsSurface = new DiagnosticsSurface({ transport, localEnvironment, checks: diagnosticsChecks });
+  const diagnosticsSurface = new DiagnosticsSurface({ transport: focusSafeTransport, localEnvironment, checks: diagnosticsChecks });
   const diagnostics = diagnosticsSurface.run.bind(diagnosticsSurface);
   diagnostics.readiness = diagnosticsSurface.readiness.bind(diagnosticsSurface);
   const client = {
@@ -64,7 +68,7 @@ export function createLink2ChromeClient({
       try {
         return {
           ok: true,
-          hub: await transport.command("__hub_status__", {}),
+          hub: await focusSafeTransport.command("__hub_status__", {}),
         };
       } catch (error) {
         return {
@@ -74,7 +78,7 @@ export function createLink2ChromeClient({
       }
     },
     diagnostics,
-    sessions: new SessionSurface({ transport, safety }),
+    sessions: new SessionSurface({ transport: focusSafeTransport, safety }),
     browsers: {
       async list() {
         return [{
@@ -88,7 +92,7 @@ export function createLink2ChromeClient({
         if (kind !== "extension") {
           throw new Error(`unsupported browser kind: ${kind}`);
         }
-        return new Browser({ kind, transport, safety });
+        return new Browser({ kind, transport: focusSafeTransport, safety });
       },
     },
   };
@@ -96,6 +100,11 @@ export function createLink2ChromeClient({
   client.scripts = new ScriptSurface({ client });
   client.tasks = new TaskSurface({ client });
   return client;
+}
+
+function withoutFocusCompatibilityFields(args = {}) {
+  const { active: _active, focusWindow: _focusWindow, ...focusSafeArgs } = args || {};
+  return focusSafeArgs;
 }
 
 class TaskSurface {
@@ -558,7 +567,7 @@ export function createNativeMessagingTransport({
     child,
     command(name, args = {}) {
       const id = nextId++;
-      const message = { id, name, args };
+      const message = { id, name, args: withoutFocusCompatibilityFields(args) };
       const encoded = encodeNativeMessage(message);
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
@@ -697,7 +706,10 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
       if (!WebSocketImpl) {
         throw new Error("createWebSocketTransport requires global WebSocket or WebSocketImpl");
       }
-      const send = (commandName, params = {}) => command(commandName, params);
+      const send = (commandName, params = {}) => command(
+        commandName,
+        withoutFocusCompatibilityFields(params),
+      );
       const addSessionScope = (params = {}) => {
         if (params.scope || !params.session) return params;
         const record = sessions.get(params.session);
@@ -717,7 +729,6 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
             record.agentCreatedTabIds.add(record.seedTabId);
             await send("agent_browser_tab_switch", {
               tabId: record.seedTabId,
-              focusWindow: args.focusWindow === true,
               scope: scopeFor(record),
             });
             const nav = await send("navigate", {
@@ -739,8 +750,6 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
           }
           const created = await send("agent_browser_tab_new", {
             url: args.url || "about:blank",
-            active: args.active === true,
-            focusWindow: args.focusWindow === true,
             scope: scopeFor(record),
           });
           if (created.tabId != null) {
@@ -815,7 +824,6 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
         if (args.action === "switch") {
           return send("agent_browser_tab_switch", {
             tabId: args.tabId,
-            focusWindow: args.focusWindow === true,
             scope: scopeFor(sessions.get(args.session)),
           });
         }
@@ -1176,8 +1184,6 @@ class Tabs {
       session,
       url: args.url || "about:blank",
       group_title: args.groupTitle || args.group_title,
-      active: args.active === true,
-      focusWindow: args.focusWindow === true,
     });
     return new Tab({ browser: this._browser, transport: this._transport, safety: this._safety, data: raw, raw });
   }

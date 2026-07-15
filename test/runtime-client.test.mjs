@@ -828,7 +828,7 @@ test("tab close maps to browser tab close command with tab id", async () => {
   });
 });
 
-test("tabs.new preserves creation options for model-authored code", async () => {
+test("tabs.new treats focus options as compatibility no-ops", async () => {
   const transport = fakeTransport();
   const browser = await createLink2ChromeClient({ transport }).browsers.get("extension");
   await browser.nameSession("runtime-tabs-new");
@@ -844,8 +844,6 @@ test("tabs.new preserves creation options for model-authored code", async () => 
         session: "runtime-tabs-new",
         url: "https://background.test",
         group_title: undefined,
-        active: false,
-        focusWindow: false,
       },
     },
     {
@@ -855,8 +853,6 @@ test("tabs.new preserves creation options for model-authored code", async () => 
         session: "runtime-tabs-new",
         url: "https://object.test",
         group_title: undefined,
-        active: true,
-        focusWindow: true,
       },
     },
   ]);
@@ -2063,7 +2059,11 @@ test("websocket transport maps runtime tab switch to extension switch command", 
   }
   const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
 
-  await transport.command("browser_tab_switch", { tabId: 12 });
+  await transport.command("browser_tab_switch", {
+    tabId: 12,
+    active: true,
+    focusWindow: true,
+  });
 
   assert.equal(sentMessages[0].command, "agent_browser_tab_switch");
   assert.deepEqual(sentMessages[0].params, { tabId: 12 });

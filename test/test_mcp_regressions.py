@@ -205,7 +205,8 @@ def test_extension_tab_group_create_uses_agent_seed_tab_not_user_active_tab():
     end = source.index("async function cmdTabGroupAdd", start)
     body = source[start:end]
 
-    assert "chrome.tabs.create" in body
+    assert "createBackgroundTab" in body
+    assert "chrome.tabs.create" not in body
     assert "chrome.tabs.query({ active: true, lastFocusedWindow: true })" not in body
     assert "let tabId = targetTabId" not in body
     assert "return { groupId, title, tabId }" in body
@@ -329,16 +330,19 @@ def test_extension_reenables_console_domains_after_attach():
 
     assert "async function enableCaptureDomainsForAttachedTab" in source
     assert "consoleCaptureState.enabled" in source
-    assert 'await enableCaptureDomainsForAttachedTab(tabId)' in source
+    assert "await enableCaptureDomainsForAttachedTab(expectedTabId)" in source
 
 
 def test_extension_recovers_from_stale_debugger_attachment():
     source = Path("extension/background.js").read_text(encoding="utf-8")
+    ensure_block = source.split("async function ensureDebuggerAttached", 1)[1].split(
+        "async function sendCDP", 1
+    )[0]
 
-    assert "isDebuggerAlreadyAttachedError" in source
-    assert "await detachDebuggerTab(tabId)" in source
-    assert "failedIds.delete(tabId)" in source
-    assert "continue" in source.split("isDebuggerAlreadyAttachedError", 1)[1]
+    assert "isDebuggerAlreadyAttachedError" in ensure_block
+    assert "await detachDebuggerTab(expectedTabId)" in ensure_block
+    assert ensure_block.count("await attach();") == 2
+    assert "failedIds" not in ensure_block
 
 
 def test_tabs_navigation_detaches_before_reusing_tab():

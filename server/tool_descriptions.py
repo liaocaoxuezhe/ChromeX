@@ -65,10 +65,10 @@ TOOL_DEFINITIONS = [
     {
         "name": "browser_tab",
         "description": (
-            "Manage browser tabs: create new tab, switch to a tab, or close a tab.\n\n"
+            "Manage browser tabs: create a background tab, select an automation target, or close a tab.\n\n"
             "**When to use:**\n"
             "- Open URL in new tab: action='new', url='https://...'\n"
-            "- Switch to tab: action='switch', tabId=123\n"
+            "- Select automation target: action='switch', tabId=123 (does not activate the visible tab)\n"
             "- Close tab: action='close', tabId=123\n\n"
             "**When NOT to use:**\n"
             "- To navigate current tab → use browser_navigate\n"
@@ -94,11 +94,11 @@ TOOL_DEFINITIONS = [
                 },
                 "active": {
                     "type": "boolean",
-                    "description": "Activate the new tab. Only used with action='new'. Defaults to true.",
+                    "description": "Deprecated compatibility no-op. Automation tabs always stay in the background.",
                 },
                 "focusWindow": {
                     "type": "boolean",
-                    "description": "Bring the Chrome window to the foreground. Defaults to false; use true only for handoff/manual interaction.",
+                    "description": "Deprecated compatibility no-op. Automation never focuses the Chrome window.",
                 },
             },
             ["action"],
@@ -147,7 +147,7 @@ TOOL_DEFINITIONS = [
                 },
                 "active": {
                     "type": "boolean",
-                    "description": "Activate the new tab. Only used with action='new_tab'. Defaults to false to avoid stealing focus.",
+                    "description": "Deprecated compatibility no-op. Session tabs always stay in the background.",
                 },
                 "tabId": {
                     "type": "integer",
@@ -159,7 +159,7 @@ TOOL_DEFINITIONS = [
                 },
                 "focusWindow": {
                     "type": "boolean",
-                    "description": "Bring the Chrome window to the foreground when opening or reusing a tab. Defaults to false.",
+                    "description": "Deprecated compatibility no-op. Opening or reusing a session tab never focuses Chrome.",
                 },
                 "keep": {
                     "type": "array",
@@ -384,7 +384,7 @@ TOOL_DEFINITIONS = [
                 },
                 "focusWindow": {
                     "type": "boolean",
-                    "description": "If the click opens a new tab, bring Chrome to the foreground. Defaults to false.",
+                    "description": "Deprecated compatibility no-op. A tab opened by clicking is tracked without focusing Chrome.",
                 },
             },
             ["target"],
@@ -540,12 +540,13 @@ TOOL_DEFINITIONS = [
             "**When to use:**\n"
             "- Submit form: action_press_key(key='Enter')\n"
             "- Close modal: action_press_key(key='Escape')\n"
-            "- Select all: action_press_key(key='Control+A')\n"
-            "- Copy: action_press_key(key='Control+C')\n"
-            "- Paste: action_press_key(key='Control+V')\n\n"
+            "- Windows/Linux shortcuts: undo='Control+Z', cut='Control+X', "
+            "copy='Control+C', paste='Control+V', select all='Control+A'\n"
+            "- macOS shortcuts: undo='Meta+Z' or 'Command+Z', cut='Meta+X', "
+            "copy='Meta+C', paste='Meta+V', select all='Meta+A'\n\n"
             "**Supported keys:** Enter, Escape, Tab, Backspace, Delete, ArrowUp/Down/Left/Right, "
             "Home, End, PageUp, PageDown, Space, F1-F12\n"
-            "**Modifiers:** Control (Ctrl), Alt, Shift, Meta (Command). Combine with '+': Control+A"
+            "**Modifiers:** Control (Ctrl), Alt, Shift, Meta (Command/Cmd). Combine with '+': Control+A"
         ),
         "inputSchema": _obj_schema(
             {
@@ -614,7 +615,7 @@ TOOL_DEFINITIONS = [
             "**Execution Environment:**\n"
             "- Runs in a Node.js subprocess via stdio IPC.\n"
             "- Pre-injected globals: `browser` (Browser instance), `page` (Link2Chrome Playwright Page facade), `link2chrome` (client API namespace), `console` (redirected to MCP logs).\n"
-            "- `page` is a compatibility facade for common Playwright habits such as `page.evaluate(...)`, `page.locator(...)`, `page.getByRole(...)`, and `page.waitForLoadState(...)`; it is not a full Playwright Page.\n"
+            "- `page` is a compatibility facade for common Playwright habits such as `page.evaluate(...)`, `page.locator(...)`, `page.getByRole(...)`, `page.mouse.click(...)`, `page.keyboard.press(...)`, and `page.waitForLoadState(...)`; it is not a full Playwright Page.\n"
             "- Under the hood, the Node.js process connects to the Browser Hub via WebSocket (ws://localhost:8766) and reuses the Chrome Extension + CDP transport.\n\n"
             "**Startup metadata:** each successful call returns `meta.startupSummary` with the currently bound tab id, URL, title, debuggable state, and session/group hints when available.\n\n"
             "**When to use:**\n"

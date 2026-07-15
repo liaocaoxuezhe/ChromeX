@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+import server.ws_manager as ws_manager_module
 from server.ws_manager import WSManager
 
 
@@ -74,6 +75,33 @@ def test_duplicate_extension_connection_does_not_replace_active_connection():
         assert not active.closed
         assert duplicate.closed
         assert duplicate.close_code == 1008
+
+    asyncio.run(run())
+
+
+def test_duplicate_extension_operation_log_is_rate_limited(monkeypatch):
+    class FakeOperationLogger:
+        def __init__(self):
+            self.events = []
+
+        def log_connection_event(self, event, details=None):
+            self.events.append((event, details))
+
+    async def run():
+        fake_logger = FakeOperationLogger()
+        monkeypatch.setattr(ws_manager_module, "op_logger", fake_logger)
+        manager = WSManager()
+        manager._connection = DuplicateConnection()
+
+        for _ in range(55):
+            await manager._handle_connection(DuplicateConnection())
+
+        assert [event for event, _ in fake_logger.events] == [
+            "CONNECTION_DUPLICATE",
+            "CONNECTION_DUPLICATE",
+            "CONNECTION_DUPLICATE",
+            "CONNECTION_DUPLICATE",
+        ]
 
     asyncio.run(run())
 

@@ -249,7 +249,10 @@ class WSManager:
                     f"当前连接: {self._connection.remote_address}; "
                     f"重复次数: {self._duplicate_connection_count}"
                 )
-            op_logger.log_connection_event("CONNECTION_DUPLICATE", f"重复连接: {websocket.remote_address}")
+                op_logger.log_connection_event(
+                    "CONNECTION_DUPLICATE",
+                    f"重复连接: {websocket.remote_address}; 次数: {self._duplicate_connection_count}",
+                )
             try:
                 await websocket.close(code=1008, reason="duplicate Link2Chrome extension connection")
             except Exception:

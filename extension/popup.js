@@ -5,6 +5,7 @@ const statusCard = document.getElementById("statusCard");
 const reconnectBtn = document.getElementById("reconnectBtn");
 const enableToggle = document.getElementById("enableToggle");
 const toggleHint = document.getElementById("toggleHint");
+const { standbyDisplay } = globalThis.Link2ChromeConnectionPolicy;
 
 function updateUI(statusOrConnected, enabled) {
   const status = typeof statusOrConnected === "object"
@@ -32,6 +33,16 @@ function updateUI(statusOrConnected, enabled) {
     statusText.textContent = "扩展 ID 不匹配";
     statusDetail.textContent = `请移除后重载 ${status.nativeStatus.expectedId}`;
     reconnectBtn.disabled = true;
+    return;
+  }
+
+  if (status.connectionConflict) {
+    const display = standbyDisplay();
+    dot.className = display.dotClass;
+    statusText.textContent = display.statusText;
+    statusDetail.textContent = display.statusDetail;
+    reconnectBtn.disabled = display.reconnectDisabled;
+    toggleHint.textContent = display.toggleHint;
     return;
   }
 

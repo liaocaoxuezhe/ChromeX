@@ -193,7 +193,11 @@ def _require_session_arg(args: dict) -> str:
 
 
 def _params_with_scope(params: dict, session: str) -> dict:
-    scoped = dict(params or {})
+    scoped = {
+        key: value
+        for key, value in (params or {}).items()
+        if key not in {"active", "focusWindow"}
+    }
     scoped["scope"] = session_manager.scope_payload(session)
     return scoped
 
@@ -473,8 +477,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         action = args.get("action")
         if action == "new":
             result = await _scoped_send("agent_browser_tab_new", {
-                "url": args.get("url"),
-                "active": args.get("active", True)
+                "url": args.get("url")
             }, session)
             tab_id = result.get("tabId")
             joined_session = None
@@ -494,7 +497,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 return _json_content({"ok": False, "error": "tabId is required for switch"})
             result = await _scoped_send(
                 "agent_browser_tab_switch",
-                {"tabId": tab_id, "focusWindow": args.get("focusWindow", False)},
+                {"tabId": tab_id},
                 session,
                 tab_id=tab_id,
             )
@@ -542,7 +545,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             if seed_tab_id is not None:
                 await _scoped_send(
                     "agent_browser_tab_switch",
-                    {"tabId": seed_tab_id, "focusWindow": args.get("focusWindow", False)},
+                    {"tabId": seed_tab_id},
                     session,
                     tab_id=seed_tab_id,
                 )
@@ -559,11 +562,7 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 )
                 tab_id = seed_tab_id
             else:
-                tab_result = await ws_manager.send_command("agent_browser_tab_new", {
-                    "url": url,
-                    "active": args.get("active", False),
-                    "focusWindow": args.get("focusWindow", False),
-                })
+                tab_result = await ws_manager.send_command("agent_browser_tab_new", {"url": url})
                 tab_id = tab_result.get("tabId")
                 if tab_id is not None:
                     await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=True)

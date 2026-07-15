@@ -15,7 +15,14 @@ test("runtime keeps the bound tab when the same session still allows it", () => 
   );
 });
 
-test("startup summary restores globalThis.tab from session-scoped tabs", () => {
-  assert.match(runtimeSource, /globalThis\.tab = active;/);
-  assert.doesNotMatch(runtimeSource, /if \(!hubConnected\) \{\n\s*summary\.source = "hub-unavailable";\n\s*return summary;\n\s*\}/);
+test("startup summary binds the extension target without reading browser active state", () => {
+  const startupSource = runtimeSource
+    .split("async function collectStartupSummary()", 2)[1]
+    .split("// ─── 结果序列化器", 1)[0];
+
+  assert.doesNotMatch(startupSource, /raw\?\.active/);
+  assert.match(startupSource, /await browser\.tabs\.selected\(\)/);
+  assert.match(startupSource, /globalThis\.tab = selected;/);
+  assert.match(startupSource, /summary\.source = "browser\.tabs\.selected";/);
+  assert.doesNotMatch(startupSource, /if \(!hubConnected\) \{\n\s*summary\.source = "hub-unavailable";\n\s*return summary;\n\s*\}/);
 });

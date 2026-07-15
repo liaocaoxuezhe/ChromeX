@@ -233,7 +233,6 @@ async def test_browser_session_new_tab_reuses_seed_blank_tab(monkeypatch):
         "agent_browser_tab_switch",
         {
             "tabId": 100,
-            "focusWindow": False,
             "scope": main.session_manager.scope_payload("复用空白页"),
         },
     ) in ws.commands
