@@ -212,6 +212,69 @@ async def test_claim_requires_matching_claim_token(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_browser_session_create_accepts_initial_url_in_legacy_mode(monkeypatch):
+    install_mcp_stubs()
+    import server.main as main
+
+    ws = FakeWS()
+    monkeypatch.setattr(main, "ws_manager", ws)
+    monkeypatch.setattr(main, "session_manager", SessionManager())
+
+    result = await main.tool_agent_first(
+        "browser_session",
+        {
+            "action": "create",
+            "session": "直接搜索",
+            "group_title": "豆瓣搜索",
+            "url": "https://search.douban.com/movie/subject_search?search_text=沙丘",
+        },
+    )
+
+    payload = json.loads(result[0].text)
+    assert payload["tabId"] == 100
+    assert payload["url"] == "https://search.douban.com/movie/subject_search?search_text=沙丘"
+    assert (
+        "tab_group_create",
+        {
+            "title": "豆瓣搜索",
+            "url": "https://search.douban.com/movie/subject_search?search_text=沙丘",
+        },
+    ) in ws.commands
+
+
+@pytest.mark.asyncio
+async def test_browser_session_new_tab_without_session_creates_group_with_url(monkeypatch):
+    install_mcp_stubs()
+    import server.main as main
+
+    ws = FakeWS()
+    monkeypatch.setattr(main, "ws_manager", ws)
+    monkeypatch.setattr(main, "session_manager", SessionManager())
+
+    result = await main.tool_agent_first(
+        "browser_session",
+        {
+            "action": "new_tab",
+            "session": "直接搜索",
+            "group_title": "Google 搜索",
+            "url": "https://google.com/search?q=Link2Chrome",
+        },
+    )
+
+    payload = json.loads(result[0].text)
+    assert payload["tabId"] == 100
+    assert (
+        "tab_group_create",
+        {
+            "title": "Google 搜索",
+            "url": "https://google.com/search?q=Link2Chrome",
+        },
+    ) in ws.commands
+    assert not any(command == "navigate" for command, _ in ws.commands)
+    assert not any(command == "agent_browser_tab_new" for command, _ in ws.commands)
+
+
+@pytest.mark.asyncio
 async def test_browser_session_new_tab_reuses_seed_blank_tab(monkeypatch):
     install_mcp_stubs()
     import server.main as main

@@ -11,24 +11,28 @@ description: 当需要通过 Link2Chrome MCP 网关控制 Chrome、检查实时�
 
 使用 Link2Chrome local-browser MCP 接口时，浏览器是用户真实的 Chrome，并带有真实登录状态。最开始的动作应视为会话设置，而不是页面交互。
 
-必须按以下顺序启动：
+有明确任务 URL 时，必须按以下顺序启动：
 
 ```
 1. browser_diagnose()                    # 检查 Hub 与 Extension 连接
-2. browser_session(action='create',      # 创建一个任务会话 / Chrome 标签组
+2. browser_session(action='new_tab',     # 用任务页直接创建会话 / 标签组
      session='task-name',
-     group_title='任务名')
-3. browser_session(action='new_tab',     # 在 session 内打开任务页
-     session='task-name',
+     group_title='任务名',
      url='https://...')
-4. 后续所有浏览器工具都传 session='task-name'
+3. 后续所有浏览器工具都传 session='task-name'
 ```
+
+只有暂时没有目标 URL，或准备接管用户已有标签页时，才先调用
+`browser_session(action='create', session='task-name', group_title='任务名')`。
 
 规则：
 
 - 一个任务 = 一个 `session` = 一个 Chrome 标签组。会话名称按任务命名，不按网站命名。
 - `group_title` 使用用户的语言；中文对话就使用中文标签组标题。
-- 导航、创建标签页或交互之前，必须先创建或复用任务会话。不要在未分组标签页中开始浏览器工作。
+- `new_tab` 在 session 不存在时会用目标 URL 创建首个分组标签页；session 已存在时才追加标签页。不要为了打开首个任务页先创建空白 session。
+- 导航、创建标签页或交互必须通过创建或复用任务会话开始。不要在未分组标签页中开始浏览器工作。
+- 能从任务条件可靠构造搜索、筛选、详情或报告 URL 时，优先直接打开该参数化结果页，不要先打开网站首页再输入条件。例如 Google 使用带 `q` 的搜索结果 URL，豆瓣使用带搜索词的结果 URL；携程等站点优先使用已知或已观察验证的城市、日期、关键词结果 URL。所有用户输入参数都要 URL 编码。
+- 如果参数格式不确定，或直接 URL 无法在可见页面验证，改用网站可见导航和搜索 UI；不要循环猜测多个 URL 变体。
 - 选择或切换 session 内标签页前必须使用 `browser_tabs_list(session='task-name')`。接管用户已有标签页必须使用 `browser.user.openTabs()` 返回对象，不要猜测标签页 ID。
 - 同一任务需要的所有页面都应保留在该任务标签组内，即使流程跨越多个网站。
 - 只有真正无关的并行任务才创建多个会话。
@@ -41,8 +45,8 @@ description: 当需要通过 Link2Chrome MCP 网关控制 Chrome、检查实时�
 |
 |- 设置
 |  |- 连接状态 -> browser_diagnose()
-|  |- 启动任务组 -> browser_session(action='create')
-|  |- 直接在组内打开 URL -> browser_session(action='new_tab')
+|  |- 有目标 URL：一步启动任务组并打开 -> browser_session(action='new_tab')
+|  |- 无目标 URL / 准备接管用户标签：browser_session(action='create')
 |
 |- 观察
 |  |- 页面结构 -> browser_dom_overview
@@ -161,8 +165,8 @@ node scripts/diagnostics/check-extension-installed.mjs
 
 标准流程：
 
-1. `browser_session(action='create', session='task-name', group_title='任务名')`
-2. 用 `browser_session(action='new_tab', session='task-name', url='https://...')` 打开任务页
+1. 有目标 URL：`browser_session(action='new_tab', session='task-name', group_title='任务名', url='https://...')`
+2. 无目标 URL 或准备接管用户标签页：`browser_session(action='create', session='task-name', group_title='任务名')`
 3. 后续所有浏览器工具都传同一个 `session`
 4. 如需接管用户已有标签页，先用 `browser.user.openTabs()` 或专用 open-tabs 工具选择候选，再 `claimTab`
 5. 结束前调用 `browser_session(action='finalize', session='task-name', keep=[...])`
@@ -178,12 +182,11 @@ node scripts/diagnostics/check-extension-installed.mjs
 
 ```
 1. browser_diagnose()
-2. browser_session(action='create', session='task-name', group_title='任务名')
-3. browser_session(action='new_tab', session='task-name', url='...')
-4. 观察：browser_dom_overview(session='task-name')、DOM 快照或截图
-5. 行动：一个小动作，或用 browser_code_run 执行多步骤逻辑
-6. 验证：DOM 差异、快照、截图、URL，或页面特定成功信号
-7. browser_session(action='finalize', session='task-name', keep=[...])
+2. browser_session(action='new_tab', session='task-name', group_title='任务名', url='...')
+3. 观察：browser_dom_overview(session='task-name')、DOM 快照或截图
+4. 行动：一个小动作，或用 browser_code_run 执行多步骤逻辑
+5. 验证：DOM 差异、快照、截图、URL，或页面特定成功信号
+6. browser_session(action='finalize', session='task-name', keep=[...])
 ```
 
 核心原则：观察 -> 行动 -> 验证。不要在不检查变化的情况下连续盲点。
@@ -222,7 +225,7 @@ node scripts/diagnostics/check-extension-installed.mjs
 - 等待 DOM 可用时使用 `await tab.playwright.waitForLoadState("domcontentloaded")`；不要使用旧式 DOM ready 状态别名。
 - 如果浏览器使用因为扩展或用户接管而中断，不要引用原始运行时错误。用自然语言向用户概括，例如：“浏览器使用已在扩展中停止。”除非用户要求细节，否则避免提到 turn_id、runtime、retry 或插件错误原文等内部术语。
 - 测试用户的本地应用（`localhost`、`127.0.0.1`、`::1` 或其他本地开发 URL）时，如果框架不支持热重载或热重载关闭，代码或构建变更后先调用 `tab.reload()` 再验证 UI。重载后先获取新的 DOM 快照或截图再继续。
-- 对只读查询任务，可以从请求过滤条件推导出一个明显的详情 URL 或参数化搜索 URL，并进行一次聚焦的直接导航，然后在可见页面验证结果。这样能避免冗长的筛选交互。
+- 对只读查询任务，如果能从请求条件推导出明显的详情 URL 或参数化搜索 URL，必须优先用该 URL 创建首个任务标签页或进行一次聚焦的直接导航，然后在可见页面验证结果。常见场景包括 Google 的 `q` 搜索、豆瓣的关键词结果页，以及携程中已知并验证过的城市、日期结果页。不要先打开首页再填写相同条件。
 - 不要遍历猜测的 URL 变体、查询网格或候选 URL 数组。如果一次聚焦的直接尝试失败或无法验证，改用可见页面导航、网站自带搜索 UI，或给出当前最佳答案并说明不确定性。
 - 如果使用搜索引擎兜底，只运行一个聚焦查询，检查最强结果，并打开最佳候选。不要反复改写查询循环搜索。
 - 一旦有一个强候选页面，直接验证它，不要继续收集更多候选。

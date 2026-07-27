@@ -584,7 +584,12 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
             return _json_content({"ok": False, "error": f"unknown tab action: {action}"})
 
     if name == "browser_session":
-        action = args.get("action", "list")
+        requested_action = args.get("action", "list")
+        action = (
+            "new_tab"
+            if requested_action == "create" and args.get("url")
+            else requested_action
+        )
         if getattr(ws_manager, "protocol_mode", "v1") == "v2":
             if action == "create":
                 session = args.get("session")
@@ -613,11 +618,14 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 if not url:
                     return _json_content({"ok": False, "error": "url is required for 'new_tab'"})
                 url = _normalize_url(url)
-                handle = await ws_manager.get_session(session)
-                updated = await ws_manager.create_session_tab(handle, url)
+                updated = await ws_manager.open_session(
+                    session,
+                    args.get("group_title"),
+                    initial_url=url,
+                )
                 return _json_content({
                     "ok": True,
-                    "action": "new_tab",
+                    "action": requested_action,
                     "session": session,
                     "sessionId": updated.get("sessionId"),
                     "tabId": updated.get("tabId") or updated.get("targetTabId"),
@@ -687,34 +695,55 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 return _json_content({"ok": False, "error": "url is required for 'new_tab'"})
             url = _normalize_url(url)
             group_title = args.get("group_title")
-            info = await session_manager.ensure_session(session, group_title, ws_manager)
-            seed_tab_id = session_manager.claim_seed_tab_for_navigation(session)
-            if seed_tab_id is not None:
-                await _scoped_send(
-                    "agent_browser_tab_switch",
-                    {"tabId": seed_tab_id},
-                    session,
-                    tab_id=seed_tab_id,
-                )
-                tab_result = await _scoped_send(
-                    "navigate",
-                    {
-                        "tabId": seed_tab_id,
-                        "url": url,
-                        "waitUntil": args.get("waitUntil", "dom-ready"),
-                        "timeout": args.get("timeout", 10000),
-                    },
-                    session,
-                    tab_id=seed_tab_id,
-                )
-                tab_id = seed_tab_id
+            existing = session_manager.get_session_info(session)
+            info = await session_manager.ensure_session(
+                session,
+                group_title,
+                ws_manager,
+                initial_url=url if existing is None else None,
+            )
+            opened_initial_tab = (
+                existing is None and info.get("seed_tab_id") is not None
+            )
+            if opened_initial_tab:
+                tab_result = {"ok": True, "url": url}
+                tab_id = info["seed_tab_id"]
             else:
-                tab_result = await ws_manager.send_command("agent_browser_tab_new", {"url": url})
-                tab_id = tab_result.get("tabId")
-                if tab_id is not None:
-                    await session_manager.add_tab_to_session(session, tab_id, ws_manager, agent_created=True)
+                seed_tab_id = session_manager.claim_seed_tab_for_navigation(session)
+                if seed_tab_id is not None:
+                    await _scoped_send(
+                        "agent_browser_tab_switch",
+                        {"tabId": seed_tab_id},
+                        session,
+                        tab_id=seed_tab_id,
+                    )
+                    tab_result = await _scoped_send(
+                        "navigate",
+                        {
+                            "tabId": seed_tab_id,
+                            "url": url,
+                            "waitUntil": args.get("waitUntil", "dom-ready"),
+                            "timeout": args.get("timeout", 10000),
+                        },
+                        session,
+                        tab_id=seed_tab_id,
+                    )
+                    tab_id = seed_tab_id
+                else:
+                    tab_result = await ws_manager.send_command(
+                        "agent_browser_tab_new",
+                        {"url": url},
+                    )
+                    tab_id = tab_result.get("tabId")
+                    if tab_id is not None:
+                        await session_manager.add_tab_to_session(
+                            session,
+                            tab_id,
+                            ws_manager,
+                            agent_created=True,
+                        )
             return _json_content({
-                "ok": True, "action": "new_tab", "session": session,
+                "ok": True, "action": requested_action, "session": session,
                 "tabId": tab_id, "url": url,
                 "groupId": info.get("group_id"), "groupTitle": info.get("group_title"),
             })

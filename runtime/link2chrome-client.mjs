@@ -587,19 +587,22 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
   let sessionHandle = null;
   const sessions = new Map();
   const claimTokens = new Map();
-  const ensureLocalSession = async (send, session, groupTitle = session) => {
+  const ensureLocalSession = async (send, session, groupTitle = session, initialUrl = null) => {
     if (!session) throw new Error("session is required");
     if (sessions.has(session)) return sessions.get(session);
-    const result = await send("tab_group_create", { title: groupTitle || session });
+    const result = await send("tab_group_create", {
+      title: groupTitle || session,
+      ...(initialUrl ? { url: initialUrl } : {}),
+    });
     const record = {
       session,
       groupId: result.groupId ?? null,
       groupTitle: groupTitle || session,
       tabIds: new Set(result.tabId != null ? [result.tabId] : []),
-      agentCreatedTabIds: new Set(),
+      agentCreatedTabIds: new Set(initialUrl && result.tabId != null ? [result.tabId] : []),
       claimedTabIds: new Set(),
       seedTabId: result.tabId ?? null,
-      seedConsumed: result.tabId == null,
+      seedConsumed: Boolean(initialUrl) || result.tabId == null,
       closed: false,
     };
     sessions.set(session, record);
@@ -812,7 +815,24 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
           return { ok: true, action, session: record.session, groupId: record.groupId, groupTitle: record.groupTitle };
         }
         if (action === "new_tab") {
-          const record = await ensureLocalSession(send, args.session, args.group_title || args.groupTitle || args.session);
+          const existingRecord = sessions.get(args.session);
+          const record = await ensureLocalSession(
+            send,
+            args.session,
+            args.group_title || args.groupTitle || args.session,
+            existingRecord ? null : (args.url || "about:blank"),
+          );
+          if (!existingRecord && record.seedTabId != null) {
+            return {
+              ok: true,
+              action,
+              session: record.session,
+              tabId: record.seedTabId,
+              url: args.url || "about:blank",
+              groupId: record.groupId,
+              groupTitle: record.groupTitle,
+            };
+          }
           if (record.seedTabId != null && !record.seedConsumed) {
             record.seedConsumed = true;
             record.agentCreatedTabIds.add(record.seedTabId);

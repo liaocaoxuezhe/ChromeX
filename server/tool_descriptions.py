@@ -110,19 +110,26 @@ TOOL_DEFINITIONS = [
             "Manage tab groups (sessions). Groups all tabs for one task "
             "into a Chrome tab group.\n\n"
             "**Actions:**\n"
-            "- `create`: Create a new tab group and set it as the active session. "
-            "Subsequent browser_navigate / browser_tab calls auto-join this group.\n"
-            "- `new_tab`: Open a URL in a new tab AND add it to the session's group in one step.\n"
+            "- `create`: Create a tab group without an initial page. Use this only when no target "
+            "URL is known yet or when preparing to claim a user tab. If `url` is supplied, it is "
+            "treated as the one-step initial page open.\n"
+            "- `new_tab`: Create the session if needed and open the URL as its first grouped tab; "
+            "otherwise add a new tab to the existing session.\n"
             "- `add`: Add an existing tab to a session's tab group.\n"
             "- `close`: Close all tabs in a session's tab group.\n"
             "- `list`: List all active sessions and their tab counts.\n\n"
             "**Typical workflow:**\n"
-            "1. browser_session(action='create', session='research', group_title='调研')\n"
-            "2. browser_navigate / browser_tab → tabs auto-join the active session\n"
-            "3. browser_session(action='close', session='research')\n\n"
-            "**Without active session:**\n"
+            "1. Open the first task URL and create its group in one call:\n"
             "  browser_session(action='new_tab', session='research', "
             "url='https://example.com', group_title='调研')\n\n"
+            "2. Continue with session-scoped browser tools.\n"
+            "3. browser_session(action='finalize', session='research', keep=[])\n\n"
+            "**Direct URL priority:**\n"
+            "When a search, filter, detail, or report URL can be derived safely from the task, "
+            "open that parameterized result URL directly. For example, open a Google `?q=` result "
+            "URL or a site's search-results URL instead of opening its homepage and typing into "
+            "the search form. URL-encode user-supplied query values. If the URL format is uncertain "
+            "or fails validation, fall back to visible site navigation rather than guessing variants.\n\n"
             "**When NOT to use:**\n"
             "- Close a single tab → use browser_tab(action='close')"
         ),
@@ -143,7 +150,11 @@ TOOL_DEFINITIONS = [
                 },
                 "url": {
                     "type": "string",
-                    "description": "URL to open. Required for 'new_tab'.",
+                    "description": (
+                        "URL to open. Required for 'new_tab'; optional for 'create', where it makes "
+                        "create behave as the one-step initial page open. Prefer a direct parameterized "
+                        "result URL for search/filter tasks."
+                    ),
                 },
                 "active": {
                     "type": "boolean",

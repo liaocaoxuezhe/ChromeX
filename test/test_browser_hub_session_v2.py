@@ -358,6 +358,7 @@ class BrowserHubSessionV2Tests(unittest.IsolatedAsyncioTestCase):
                         "ownerId": "owner-c",
                         "adapterId": "adapter-c",
                         "sessionId": create["data"]["sessionId"],
+                        "url": "https://example.com/search?q=Link2Chrome",
                         "expectedRevision": 0,
                         "operationId": "materialize-c",
                     },
@@ -394,6 +395,10 @@ class BrowserHubSessionV2Tests(unittest.IsolatedAsyncioTestCase):
         create_group_call = next(call for call in self.extension.calls if call[0] == "session_create_group")
         create_tab_call = next(call for call in self.extension.calls if call[0] == "session_create_tab")
         self.assertEqual(create_group_call[1]["revision"], 1)
+        self.assertEqual(
+            create_group_call[1]["url"],
+            "https://example.com/search?q=Link2Chrome",
+        )
         self.assertEqual(create_tab_call[1]["revision"], 2)
         self.assertNotIn("active", create_group_call[1])
         self.assertNotIn("focusWindow", create_tab_call[1])
