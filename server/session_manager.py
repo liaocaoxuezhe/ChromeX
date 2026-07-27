@@ -38,6 +38,7 @@ class SessionManager:
         group_title: str,
         seed_tab_id=None,
         seed_agent_created: bool = True,
+        seed_consumed: Optional[bool] = None,
     ) -> dict[str, Any]:
         tab_ids = {seed_tab_id} if seed_tab_id is not None else set()
         return {
@@ -50,7 +51,9 @@ class SessionManager:
             "handoff_tab_ids": set(),
             "deliverable_tab_ids": set(),
             "seed_tab_id": seed_tab_id,
-            "seed_consumed": seed_tab_id is None,
+            "seed_consumed": (
+                seed_tab_id is None if seed_consumed is None else seed_consumed
+            ),
             "closed": False,
         }
 
@@ -65,6 +68,7 @@ class SessionManager:
         session: str,
         group_title: Optional[str],
         ws_manager,
+        initial_url: Optional[str] = None,
     ) -> dict[str, Any]:
         """确保 session 存在，如不存在则创建标签组。"""
         if session in self._sessions:
@@ -72,9 +76,10 @@ class SessionManager:
 
         title = group_title or session
         try:
-            result = await ws_manager.send_command(
-                "tab_group_create", {"title": title}
-            )
+            params = {"title": title}
+            if initial_url:
+                params["url"] = initial_url
+            result = await ws_manager.send_command("tab_group_create", params)
             group_id = result.get("groupId")
             if group_id is None:
                 logger.warning(f"创建标签组失败，Extension 未返回 groupId: {result}")
@@ -88,7 +93,8 @@ class SessionManager:
                 group_id,
                 title,
                 seed_tab_id,
-                seed_agent_created=False,
+                seed_agent_created=bool(initial_url),
+                seed_consumed=bool(initial_url) or seed_tab_id is None,
             )
             logger.info(f"创建 session '{session}' → group {group_id} (title='{title}')")
             self.set_active(session)

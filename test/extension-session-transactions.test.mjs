@@ -101,7 +101,7 @@ function createManager(options = {}) {
   return { ...mock, contextStore, manager };
 }
 
-test("createGroup creates inactive seed, groups, verifies, and commits context", async () => {
+test("createGroup opens the initial URL in the tab used to create the group", async () => {
   const { manager, contextStore, calls } = createManager();
 
   const result = await manager.createGroup({
@@ -109,6 +109,7 @@ test("createGroup creates inactive seed, groups, verifies, and commits context",
     ownerId: "owner-a",
     alias: "research",
     title: "Research",
+    url: "https://example.com/search?q=Link2Chrome",
     expectedRevision: 0,
     revision: 1,
   });
@@ -120,11 +121,34 @@ test("createGroup creates inactive seed, groups, verifies, and commits context",
     tabId: 100,
     focusPreserved: true,
   });
-  assert.deepEqual(calls[2], ["tabs.create", { url: "about:blank", windowId: 1, active: false }]);
+  assert.deepEqual(calls[2], [
+    "tabs.create",
+    { url: "https://example.com/search?q=Link2Chrome", windowId: 1, active: false },
+  ]);
   assert.deepEqual(calls[3], ["tabs.group", { tabIds: [100], createProperties: { windowId: 1 } }]);
   assert.equal(contextStore.ownerOfGroup(10), "session-a");
   assert.equal(contextStore.ownerOfTab(100), "session-a");
   assert.equal(contextStore.getTab(100).state, "ACTIVE");
+  assert.equal(contextStore.getTab(100).ownershipType, "agent");
+});
+
+test("createGroup keeps a blank seed when no initial URL is provided", async () => {
+  const { manager, contextStore, calls } = createManager();
+
+  await manager.createGroup({
+    sessionId: "session-a",
+    ownerId: "owner-a",
+    alias: "research",
+    title: "Research",
+    expectedRevision: 0,
+    revision: 1,
+  });
+
+  assert.deepEqual(calls[2], [
+    "tabs.create",
+    { url: "about:blank", windowId: 1, active: false },
+  ]);
+  assert.equal(contextStore.getTab(100).ownershipType, "seed");
 });
 
 test("createGroup rolls back seed and context when grouping fails", async () => {

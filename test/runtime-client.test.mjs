@@ -1957,6 +1957,56 @@ test("createWebSocketTransport exports a command transport", () => {
   assert.equal(typeof transport.command, "function");
 });
 
+test("websocket transport creates a local session group with the first URL", async () => {
+  const sentMessages = [];
+  class FakeWebSocket {
+    constructor() {
+      this.listeners = {};
+      queueMicrotask(() => this.listeners.open?.({}));
+    }
+
+    addEventListener(name, handler) {
+      this.listeners[name] = handler;
+    }
+
+    send(message) {
+      const parsed = JSON.parse(message);
+      sentMessages.push(parsed);
+      this.listeners.message?.({
+        data: JSON.stringify({
+          request_id: parsed.request_id,
+          success: true,
+          data: {
+            ok: true,
+            groupId: 7,
+            tabId: 100,
+            url: parsed.params.url,
+          },
+        }),
+      });
+    }
+
+    close() {}
+  }
+  const transport = createWebSocketTransport({ WebSocketImpl: FakeWebSocket });
+
+  const opened = await transport.command("browser_session", {
+    action: "new_tab",
+    session: "direct-search",
+    group_title: "Google 搜索",
+    url: "https://google.com/search?q=Link2Chrome",
+  });
+
+  assert.equal(opened.tabId, 100);
+  assert.equal(opened.url, "https://google.com/search?q=Link2Chrome");
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].command, "tab_group_create");
+  assert.deepEqual(sentMessages[0].params, {
+    title: "Google 搜索",
+    url: "https://google.com/search?q=Link2Chrome",
+  });
+});
+
 test("websocket transport speaks Browser Hub request_id protocol", async () => {
   const sentMessages = [];
   class FakeWebSocket {

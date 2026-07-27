@@ -74,7 +74,7 @@ class FakeWsManager:
         if command == "navigate":
             return {"url": args["url"], "status": "complete", "method": "tabs"}
         if command == "tab_group_create":
-            return {"groupId": 55}
+            return {"groupId": 55, "tabId": self._tab_id}
         if command == "tab_group_add":
             return {"ok": True}
         if command == "agent_browser_tab_new":
@@ -300,9 +300,15 @@ def test_browser_code_run_smoke_sequence_covers_session_reuse_persistence_and_fi
     )
     assert _payload(finalized)["result"] == {"finalized": True}
 
-    assert ("tab_group_create", {"title": "冒烟测试"}) in fake_ws.commands
-    assert any(command == "agent_browser_tab_new" for command, _ in fake_ws.commands)
-    assert any(command == "tab_group_add" for command, _ in fake_ws.commands)
+    assert (
+        "tab_group_create",
+        {
+            "title": "冒烟测试",
+            "url": "https://example.com/form",
+        },
+    ) in fake_ws.commands
+    assert not any(command == "agent_browser_tab_new" for command, _ in fake_ws.commands)
+    assert not any(command == "tab_group_add" for command, _ in fake_ws.commands)
     assert len(calls) == 3
 
 

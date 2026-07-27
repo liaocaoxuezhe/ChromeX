@@ -237,7 +237,7 @@ async def test_get_and_list_session_controls_preserve_public_alias():
 
 
 @pytest.mark.asyncio
-async def test_open_session_materializes_group_and_create_tab_uses_latest_revision():
+async def test_open_session_materializes_group_with_initial_url():
     class WorkflowClient(RecordingHubClient):
         async def _round_trip(self, message, request_id, timeout):
             self.messages.append(copy.deepcopy(message))
@@ -265,18 +265,168 @@ async def test_open_session_materializes_group_and_create_tab_uses_latest_revisi
 
     client = WorkflowClient()
 
-    active = await client.open_session("research", "调研")
-    created = await client.create_session_tab(active, "https://example.com")
+    active = await client.open_session(
+        "research",
+        "调研",
+        initial_url="https://example.com/search?q=Link2Chrome",
+    )
 
     assert active["state"] == "ACTIVE"
     assert active["groupId"] == 11
-    assert created["tabId"] == 102
     materialize = client.messages[1]
-    create_tab = client.messages[2]
     assert materialize["params"]["expectedRevision"] == 0
     assert materialize["params"]["ownerId"] == "owner-default"
-    assert create_tab["params"]["expectedRevision"] == 1
-    assert create_tab["params"]["url"] == "https://example.com"
+    assert materialize["params"]["url"] == "https://example.com/search?q=Link2Chrome"
+
+
+@pytest.mark.asyncio
+async def test_open_session_with_url_adds_tab_when_session_already_exists():
+    class ActiveWorkflowClient(RecordingHubClient):
+        async def _round_trip(self, message, request_id, timeout):
+            self.messages.append(copy.deepcopy(message))
+            command = message["command"]
+            if command == "__session_create__":
+                data = handle(
+                    "session-a", "owner-default", "adapter-default",
+                    "research", 11, 101,
+                ).to_payload()
+            elif command == "__session_create_tab__":
+                data = handle(
+                    "session-a", "owner-default", "adapter-default",
+                    "research", 11, 102,
+                ).to_payload()
+                data.update({"revision": 2, "tabId": 102})
+            else:
+                raise AssertionError(command)
+            return {"request_id": request_id, "success": True, "data": data}
+
+    client = ActiveWorkflowClient()
+
+    opened = await client.open_session(
+        "research",
+        "调研",
+        initial_url="https://example.com/second",
+    )
+
+    assert opened["tabId"] == 102
+    assert [message["command"] for message in client.messages] == [
+        "__session_create__",
+        "__session_create_tab__",
+    ]
+    assert client.messages[1]["params"]["url"] == "https://example.com/second"
+
+
+@pytest.mark.asyncio
+async def test_open_session_retries_initial_url_as_new_tab_after_materialize_race():
+    class RacingWorkflowClient(RecordingHubClient):
+        async def _round_trip(self, message, request_id, timeout):
+            self.messages.append(copy.deepcopy(message))
+            command = message["command"]
+            if command == "__session_create__":
+                data = handle(
+                    "session-a", "owner-default", "adapter-default",
+                    "research", None, None,
+                ).to_payload()
+                data.update({"state": "CREATING", "revision": 0})
+                return {"request_id": request_id, "success": True, "data": data}
+            if command == "__session_materialize__":
+                return {
+                    "request_id": request_id,
+                    "success": False,
+                    "error": "Session research revision changed",
+                    "code": "STALE_SESSION_REVISION",
+                    "details": {"sessionId": "session-a"},
+                }
+            if command == "__session_get__":
+                data = handle(
+                    "session-a", "owner-default", "adapter-default",
+                    "research", 11, 101,
+                ).to_payload()
+                return {"request_id": request_id, "success": True, "data": data}
+            if command == "__session_create_tab__":
+                data = handle(
+                    "session-a", "owner-default", "adapter-default",
+                    "research", 11, 102,
+                ).to_payload()
+                data.update({"revision": 2, "tabId": 102})
+                return {"request_id": request_id, "success": True, "data": data}
+            raise AssertionError(command)
+
+    client = RacingWorkflowClient()
+
+    opened = await client.open_session(
+        "research",
+        "调研",
+        initial_url="https://example.com/race",
+    )
+
+    assert opened["tabId"] == 102
+    assert [message["command"] for message in client.messages] == [
+        "__session_create__",
+        "__session_materialize__",
+        "__session_get__",
+        "__session_create_tab__",
+    ]
+    assert client.messages[-1]["params"]["url"] == "https://example.com/race"
+
+
+@pytest.mark.asyncio
+async def test_open_session_retries_active_tab_creation_with_latest_revision():
+    class ActiveRacingClient(RecordingHubClient):
+        def __init__(self):
+            super().__init__()
+            self.create_tab_attempts = 0
+
+        async def _round_trip(self, message, request_id, timeout):
+            self.messages.append(copy.deepcopy(message))
+            command = message["command"]
+            if command == "__session_create__":
+                data = handle(
+                    "session-a", "owner-default", "adapter-default",
+                    "research", 11, 101,
+                ).to_payload()
+                return {"request_id": request_id, "success": True, "data": data}
+            if command == "__session_create_tab__":
+                self.create_tab_attempts += 1
+                if self.create_tab_attempts == 1:
+                    return {
+                        "request_id": request_id,
+                        "success": False,
+                        "error": "Session research revision changed",
+                        "code": "STALE_SESSION_REVISION",
+                        "details": {"sessionId": "session-a"},
+                    }
+                data = handle(
+                    "session-a", "owner-default", "adapter-default",
+                    "research", 11, 103,
+                ).to_payload()
+                data.update({"revision": 3, "tabId": 103})
+                return {"request_id": request_id, "success": True, "data": data}
+            if command == "__session_get__":
+                data = handle(
+                    "session-a", "owner-default", "adapter-default",
+                    "research", 11, 102,
+                ).to_payload()
+                data.update({"revision": 2})
+                return {"request_id": request_id, "success": True, "data": data}
+            raise AssertionError(command)
+
+    client = ActiveRacingClient()
+
+    opened = await client.open_session(
+        "research",
+        "调研",
+        initial_url="https://example.com/concurrent",
+    )
+
+    assert opened["tabId"] == 103
+    assert [message["command"] for message in client.messages] == [
+        "__session_create__",
+        "__session_create_tab__",
+        "__session_get__",
+        "__session_create_tab__",
+    ]
+    assert client.messages[-1]["params"]["expectedRevision"] == 2
 
 
 def test_v1_compatibility_scope_remains_available_only_for_legacy_path():
@@ -337,7 +487,7 @@ async def test_main_v2_scoped_send_resolves_handle_and_never_reads_local_scope(m
 
 
 @pytest.mark.asyncio
-async def test_main_v2_browser_session_create_and_new_tab_use_hub_lifecycle(monkeypatch):
+async def test_main_v2_new_tab_creates_or_adds_session_in_one_hub_workflow(monkeypatch):
     install_mcp_stubs()
     import server.main as main
 
@@ -349,17 +499,9 @@ async def test_main_v2_browser_session_create_and_new_tab_use_hub_lifecycle(monk
         def __init__(self):
             self.calls = []
 
-        async def open_session(self, alias, group_title=None):
-            self.calls.append(("open", alias, group_title))
-            return dict(active)
-
-        async def get_session(self, alias):
-            self.calls.append(("get", alias))
-            return dict(active)
-
-        async def create_session_tab(self, session_handle, url):
-            self.calls.append(("new_tab", session_handle["sessionId"], url))
-            return {**active, "revision": 2, "targetTabId": 102, "tabId": 102}
+        async def open_session(self, alias, group_title=None, initial_url=None):
+            self.calls.append(("open", alias, group_title, initial_url))
+            return {**active, "targetTabId": 101, "tabId": 101}
 
     class ForbiddenLocalManager:
         async def ensure_session(self, *args, **kwargs):
@@ -369,27 +511,59 @@ async def test_main_v2_browser_session_create_and_new_tab_use_hub_lifecycle(monk
     monkeypatch.setattr(main, "ws_manager", fake_hub)
     monkeypatch.setattr(main, "session_manager", ForbiddenLocalManager())
 
-    created = await main.tool_agent_first(
-        "browser_session",
-        {"action": "create", "session": "research", "group_title": "调研"},
-    )
     new_tab = await main.tool_agent_first(
         "browser_session",
-        {"action": "new_tab", "session": "research", "url": "example.com"},
+        {
+            "action": "new_tab",
+            "session": "research",
+            "group_title": "调研",
+            "url": "example.com/search?q=Link2Chrome",
+        },
     )
 
-    created_payload = __import__("json").loads(created[0].text)
     tab_payload = __import__("json").loads(new_tab[0].text)
-    assert created_payload["ok"] is True
-    assert created_payload["sessionId"] == "session-a"
-    assert created_payload["groupId"] == 11
-    assert created_payload["protocolVersion"] == 2
-    assert tab_payload["tabId"] == 102
-    assert tab_payload["url"] == "https://example.com"
+    assert tab_payload["tabId"] == 101
+    assert tab_payload["url"] == "https://example.com/search?q=Link2Chrome"
     assert fake_hub.calls == [
-        ("open", "research", "调研"),
-        ("get", "research"),
-        ("new_tab", "session-a", "https://example.com"),
+        ("open", "research", "调研", "https://example.com/search?q=Link2Chrome"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_main_v2_create_accepts_url_and_returns_initial_tab(monkeypatch):
+    install_mcp_stubs()
+    import server.main as main
+
+    active = handle("session-a", "owner-a", "adapter-a", "search", 11, 101).to_payload()
+
+    class FakeHub:
+        protocol_mode = "v2"
+
+        def __init__(self):
+            self.calls = []
+
+        async def open_session(self, alias, group_title=None, initial_url=None):
+            self.calls.append(("open", alias, group_title, initial_url))
+            return {**active, "targetTabId": 101, "tabId": 101}
+
+    fake_hub = FakeHub()
+    monkeypatch.setattr(main, "ws_manager", fake_hub)
+
+    created = await main.tool_agent_first(
+        "browser_session",
+        {
+            "action": "create",
+            "session": "search",
+            "group_title": "Google 搜索",
+            "url": "google.com/search?q=Link2Chrome",
+        },
+    )
+
+    payload = __import__("json").loads(created[0].text)
+    assert payload["tabId"] == 101
+    assert payload["url"] == "https://google.com/search?q=Link2Chrome"
+    assert fake_hub.calls == [
+        ("open", "search", "Google 搜索", "https://google.com/search?q=Link2Chrome"),
     ]
 
 

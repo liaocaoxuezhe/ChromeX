@@ -103,7 +103,7 @@ interface Tabs {
 - `await browser.tabs.list()` — 获取所有打开的标签页列表。
 - `await browser.tabs.selected()` — 获取当前选中的标签页。
 - `await browser.tabs.get(id)` — 根据 id 获取特定标签页。
-- `await browser.tabs.new(url)` — 新建标签页并可选导航到指定 URL。
+- `await browser.tabs.new(url)` — 新建标签页并导航到指定 URL。搜索、筛选或详情任务能构造可靠的参数化结果 URL 时，直接传该 URL，不要先打开首页再填写相同条件。
 - `await browser.tabs.finalize({ keep })` — 结束会话时清理标签页。未在 `keep` 中声明的标签页将被关闭。
 
 ---

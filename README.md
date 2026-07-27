@@ -147,13 +147,19 @@ return rows;
 每个任务可以绑定一个命名 Session，对应 Chrome 中的一个标签组。Session 同时也是浏览器控制权限边界；页面读取、点击、输入、截图、脚本执行、切换和关闭标签页都必须传同一个 `session`：
 
 ```
-browser_session(action="create", session="research", group_title="调研")
-browser_session(action="new_tab", session="research", url="https://example.com")
+browser_session(
+    action="new_tab",
+    session="research",
+    group_title="调研",
+    url="https://example.com"
+)
 browser_dom_overview(session="research")
 browser_screenshot(session="research")
 browser_session(action="finalize", session="research", keep=[])
 browser_session(action="list")
 ```
+
+当任务已有明确 URL 时，`new_tab` 会直接用该 URL 创建首个分组标签页，不需要先创建空白 Session。搜索、筛选和详情查询应优先直接打开可验证的参数化结果 URL，例如 Google 的 `?q=` 结果页；只有 URL 规则不确定时才回退到网站 UI。
 
 如需接管用户已有标签页，先通过 runtime 的 `browser.user.openTabs()` 获取候选，再把返回对象原样传给 `browser.user.claimTab(tab)`；不要猜测裸 `tabId`。
 

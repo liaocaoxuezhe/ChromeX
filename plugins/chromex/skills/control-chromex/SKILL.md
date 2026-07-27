@@ -17,15 +17,18 @@ Start with:
 
 ```text
 1. browser_diagnose()
-2. browser_session(action='create', session='<task-name>', group_title='<user-language-title>')
-3. browser_session(action='new_tab', session='<task-name>', url='<target-url>')
-4. pass session='<task-name>' to all subsequent tools
+2. browser_session(action='new_tab', session='<task-name>', group_title='<user-language-title>', url='<target-url>')
+3. pass session='<task-name>' to all subsequent tools
 ```
+
+Use `browser_session(action='create')` first only when no target URL is known yet or when preparing to claim an existing user tab.
 
 Rules:
 
 - One task equals one `session` equals one Chrome tab group.
 - Use the user's language for `group_title`; in Chinese conversations, use a Chinese tab-group title.
+- When the session does not exist, `new_tab` creates the tab group around the requested URL. Do not create a blank session before opening the first task page.
+- Prefer a safely derived parameterized result URL for search, filter, detail, and report tasks. Open Google `?q=` results, Douban keyword results, or known and verified Ctrip city/date results directly instead of opening the homepage and typing the same inputs. URL-encode user values; if the route is uncertain, use visible site navigation rather than guessing URL variants.
 - Before navigation, tab creation, page reading, interaction, screenshots, or code execution, create or reuse a session.
 - Browser setup and automation never activate tabs or focus Chrome windows. `active` and `focusWindow` are compatibility no-ops.
 - Before switching session tabs, call `browser_tabs_list(session='<task-name>')`.
@@ -36,7 +39,7 @@ Rules:
 
 Use these tools by intent:
 
-- Setup: `browser_diagnose`, `browser_session(action='create')`, `browser_session(action='new_tab')`.
+- Setup: `browser_diagnose`, then `browser_session(action='new_tab')` when a target URL is known; use `create` only without a URL or before claiming a user tab.
 - Observe: `browser_dom_overview`, `browser_dom_get_text`, `browser_dom_query`, `browser_dom_search`, `browser_screenshot`.
 - Navigate: `browser_navigate`, `browser_tab`, `browser_tabs_list`.
 - Interact: `action_click`, `action_fill`, `action_press_key`, `action_scroll`.

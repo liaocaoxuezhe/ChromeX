@@ -506,6 +506,8 @@ class BrowserHub:
                 "revision": handle.revision + 1,
                 "expectedRevision": expected_revision,
             }
+            if params.get("url"):
+                extension_params["url"] = params["url"]
             if isinstance(params.get("windowId"), int):
                 extension_params["windowId"] = params["windowId"]
             async with self.session_scheduler.session_operation(

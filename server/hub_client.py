@@ -190,6 +190,7 @@ class HubClient:
         group_title: str | None = None,
         operation_id: str | None = None,
         window_id: int | None = None,
+        initial_url: str | None = None,
     ) -> dict[str, Any]:
         creating = await self.create_session(
             alias=alias,
@@ -197,18 +198,55 @@ class HubClient:
             operation_id=operation_id,
         )
         if creating.get("state") == "ACTIVE":
+            if initial_url:
+                return await self._create_session_tab_latest(
+                    creating,
+                    initial_url,
+                )
             return creating
-        return await self.materialize_session(
-            creating,
-            operation_id=str(uuid.uuid4()),
-            window_id=window_id,
-        )
+        try:
+            return await self.materialize_session(
+                creating,
+                operation_id=str(uuid.uuid4()),
+                window_id=window_id,
+                initial_url=initial_url,
+            )
+        except SessionProtocolError as exc:
+            if exc.code != "STALE_SESSION_REVISION":
+                raise
+            current = await self.get_session(alias)
+            if current.get("state") != "ACTIVE":
+                raise
+            if initial_url:
+                return await self._create_session_tab_latest(
+                    current,
+                    initial_url,
+                )
+            return current
+
+    async def _create_session_tab_latest(
+        self,
+        handle: SessionHandle | dict[str, Any],
+        url: str,
+        max_attempts: int = 3,
+    ) -> dict[str, Any]:
+        current = handle
+        alias = self._coerce_handle(handle).alias
+        for attempt in range(max_attempts):
+            try:
+                return await self.create_session_tab(current, url)
+            except SessionProtocolError as exc:
+                if exc.code != "STALE_SESSION_REVISION" or attempt + 1 >= max_attempts:
+                    raise
+                current = await self.get_session(alias)
+        raise RuntimeError("unreachable")
 
     async def materialize_session(
         self,
         handle: SessionHandle | dict[str, Any],
         operation_id: str | None = None,
         window_id: int | None = None,
+        initial_url: str | None = None,
     ) -> dict[str, Any]:
         session = self._coerce_handle(handle)
         params: dict[str, Any] = {
@@ -220,6 +258,8 @@ class HubClient:
         }
         if window_id is not None:
             params["windowId"] = window_id
+        if initial_url:
+            params["url"] = initial_url
         return await self._send_control("__session_materialize__", params)
 
     async def create_session_tab(

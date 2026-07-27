@@ -51,13 +51,14 @@
           );
         }
 
+        const initialUrl = params.url || "about:blank";
         seedTab = await this.createBackgroundTab({
-          url: "about:blank",
+          url: initialUrl,
           windowId,
         });
         this.contextStore.registerTab(params.sessionId, seedTab.id, {
           state: "PENDING_GROUP",
-          ownershipType: "seed",
+          ownershipType: params.url ? "agent" : "seed",
         });
 
         const groupId = await this.chrome.tabs.group({

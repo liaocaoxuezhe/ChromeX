@@ -12,7 +12,7 @@ importScripts("claim-manager.js");
  */
 
 // ==================== 状态管理 ====================
-const BUILD_VERSION = "2026-06-01-plan-c-keepalive";
+const BUILD_VERSION = "2026-07-26-direct-initial-url";
 let ws = null;
 let wsConnected = false;
 let connectionConflict = false;
@@ -3203,7 +3203,7 @@ async function cmdDomGetText(params) {
 
 async function cmdTabGroupCreate(params) {
   const title = params.title || "Link2Chrome Session";
-  const newTab = await createBackgroundTab({ url: "about:blank" });
+  const newTab = await createBackgroundTab({ url: params.url || "about:blank" });
   const tabId = newTab.id;
   targetTabId = tabId;
 
