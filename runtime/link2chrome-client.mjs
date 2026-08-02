@@ -582,7 +582,23 @@ export function createNativeMessagingTransport({
   };
 }
 
-export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocketImpl = globalThis.WebSocket, commandTimeoutMs = 30000 } = {}) {
+export function validateHubProductIdentity(payload, {
+  productId = "chromex",
+  browserKind = "chrome",
+  protocolVersion = 2,
+} = {}) {
+  if (!payload
+    || payload.productId !== productId
+    || payload.browserKind !== browserKind
+    || payload.protocolVersion !== protocolVersion) {
+    const error = new Error("HUB_PRODUCT_MISMATCH");
+    error.code = "HUB_PRODUCT_MISMATCH";
+    throw error;
+  }
+  return payload;
+}
+
+export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocketImpl = globalThis.WebSocket, commandTimeoutMs = 30000, expectedProductId = "chromex", expectedBrowserKind = "chrome" } = {}) {
   let leaseToken = null;
   let sessionHandle = null;
   const sessions = new Map();
@@ -739,9 +755,14 @@ export function createWebSocketTransport({ url = "ws://localhost:8766", WebSocke
     async healthCheck({ timeoutMs = 750 } = {}) {
       if (!WebSocketImpl) return false;
       try {
-        await command("ping_version", {}, { timeoutMs });
+        const status = await command("__hub_status__", {}, { timeoutMs });
+        validateHubProductIdentity(status, {
+          productId: expectedProductId,
+          browserKind: expectedBrowserKind,
+        });
         return true;
-      } catch {
+      } catch (error) {
+        if (error?.code === "HUB_PRODUCT_MISMATCH") throw error;
         return false;
       }
     },

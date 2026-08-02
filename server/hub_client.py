@@ -21,6 +21,7 @@ from typing import Any
 import websockets
 
 from server.logger import get_logger
+from server.product_identity import HubProductMismatchError, validate_hub_identity
 from server.session_protocol import (
     SESSION_PROTOCOL_VERSION,
     SessionHandle,
@@ -86,6 +87,8 @@ class HubClient:
         self._startup_error = None
         if await self._can_connect(timeout=0.5):
             self._started = True
+            return
+        if self._startup_error and "HUB_PRODUCT_MISMATCH" in self._startup_error:
             return
 
         self._spawn_hub()
@@ -430,6 +433,7 @@ class HubClient:
                 registration = json.loads(registration_raw)
                 if registration.get("request_id") != registration_id or not registration.get("success"):
                     raise ConnectionError(registration.get("error", "Browser Hub adapter registration failed"))
+                validate_hub_identity(registration.get("data"))
                 await websocket.send(json.dumps(message, ensure_ascii=False))
                 raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
         except asyncio.TimeoutError as exc:
@@ -508,8 +512,27 @@ class HubClient:
 
     async def _can_connect(self, timeout: float) -> bool:
         try:
-            async with websockets.connect(self.control_url, open_timeout=timeout, proxy=None):
+            async with websockets.connect(
+                self.control_url,
+                open_timeout=timeout,
+                proxy=None,
+            ) as websocket:
+                request_id = f"probe-{str(uuid.uuid4())[:8]}"
+                await websocket.send(json.dumps({
+                    "request_id": request_id,
+                    "command": "__hub_status__",
+                    "params": {},
+                }))
+                raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
+                response = json.loads(raw)
+                if response.get("request_id") != request_id or not response.get("success"):
+                    return False
+                validate_hub_identity(response.get("data"))
+                self._startup_error = None
                 return True
+        except HubProductMismatchError as exc:
+            self._startup_error = str(exc)
+            return False
         except ImportError as exc:
             logger.warning(f"Browser Hub 探活连接失败: {exc}")
             return False

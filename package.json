@@ -1,7 +1,9 @@
 {
   "scripts": {
+    "test": "npm run test:session-scope && npm run test:session-v2 && npm run test:product-isolation",
     "test:session-scope": "node --test test/session-scope-runtime.test.mjs test/extension-session-scope.test.mjs test/runtime-session-binding.test.mjs",
-    "test:session-v2": "node --test test/extension-session-context.test.mjs test/extension-session-transactions.test.mjs test/extension-multi-debugger.test.mjs test/extension-session-popup.test.mjs test/extension-session-claim.test.mjs test/extension-focus-policy.test.mjs test/runtime-session-process-isolation.test.mjs"
+    "test:session-v2": "node --test test/extension-session-context.test.mjs test/extension-session-transactions.test.mjs test/extension-multi-debugger.test.mjs test/extension-session-popup.test.mjs test/extension-session-claim.test.mjs test/extension-focus-policy.test.mjs test/runtime-session-process-isolation.test.mjs",
+    "test:product-isolation": "node --test test/extension-product-handshake.test.cjs test/runtime-product-identity.test.mjs"
   },
   "dependencies": {
     "ws": "^8.21.0"

@@ -266,7 +266,12 @@ async function setupClient() {
   await resolveWebSocketImpl();
 
   try {
-    transport = createWebSocketTransport({ url: WS_URL, WebSocketImpl });
+    transport = createWebSocketTransport({
+      url: WS_URL,
+      WebSocketImpl,
+      expectedProductId: "chromex",
+      expectedBrowserKind: "chrome",
+    });
     link2chrome = createLink2ChromeClient({ transport });
     // browsers.get("extension") 是同步的（仅构造对象，不触发网络请求）
     browser = await link2chrome.browsers.get("extension");
