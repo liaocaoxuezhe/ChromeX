@@ -45,6 +45,9 @@ test("chromex mcp config declares local-browser server", async () => {
   const config = JSON.parse(raw);
   assert.equal(config.mcpServers["local-browser"].command, "node");
   assert.deepEqual(config.mcpServers["local-browser"].args, ["./scripts/mcp-server.mjs"]);
+  assert.equal(config.mcpServers["local-browser"].env.LINK2CHROME_EXTENSION_PORT, "8765");
+  assert.equal(config.mcpServers["local-browser"].env.LINK2CHROME_HUB_CONTROL_PORT, "8766");
+  assert.equal(config.mcpServers["local-browser"].env.LINK2CHROME_WS_URL, "ws://localhost:8766");
   assert.equal(config.mcpServers["local-browser"].env.LOG_LEVEL, "INFO");
   assert.equal(config.mcpServers["local-browser"].env.LOG_CONSOLE, "false");
 });

@@ -15,6 +15,13 @@ import websockets
 from websockets.asyncio.server import ServerConnection
 
 from server.logger import get_logger, get_operation_logger
+from server.product_identity import (
+    BROWSER_KIND,
+    PRODUCT_ID,
+    PROTOCOL_VERSION,
+    ExtensionHandshakeError,
+    validate_extension_hello,
+)
 
 logger = get_logger("ws")
 op_logger = get_operation_logger()
@@ -25,6 +32,7 @@ HEARTBEAT_TIMEOUT = 60
 REQUEST_TIMEOUT = 30
 # 未连接时等待 Extension 的最长时间(秒)
 CONNECTION_WAIT_TIMEOUT = 10
+EXTENSION_HANDSHAKE_TIMEOUT = 5.0
 READONLY_RETRY_COMMANDS = {
     "ping_version",
     "get_info",
@@ -46,7 +54,13 @@ READONLY_RETRY_COMMANDS = {
 class WSManager:
     """WebSocket 服务端管理器，维护与 Chrome Extension 的单一连接"""
 
-    def __init__(self, host: str = "localhost", port: int = 8765):
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 8765,
+        *,
+        handshake_timeout: float = EXTENSION_HANDSHAKE_TIMEOUT,
+    ):
         self.host = host
         self.port = port
         self._connection: Optional[ServerConnection] = None
@@ -58,6 +72,9 @@ class WSManager:
         self._event_handlers = []
         self._event_tasks: set[asyncio.Task] = set()
         self._connection_generation = 0
+        self._handshake_timeout = handshake_timeout
+        self._extension_handshake: dict[str, Any] | None = None
+        self._last_handshake_error: str | None = None
 
     def add_event_handler(self, handler):
         self._event_handlers.append(handler)
@@ -73,6 +90,51 @@ class WSManager:
     @property
     def connection_generation(self) -> int:
         return self._connection_generation
+
+    def connection_status(self) -> dict[str, Any]:
+        return {
+            "connected": self.is_connected,
+            "connectionGeneration": self._connection_generation,
+            "pendingRequests": len(self._pending_requests),
+            "startupError": self._startup_error,
+            "handshake": dict(self._extension_handshake) if self._extension_handshake else None,
+            "lastHandshakeError": self._last_handshake_error,
+        }
+
+    async def _perform_handshake(self, websocket: ServerConnection) -> bool:
+        try:
+            raw_message = await asyncio.wait_for(
+                websocket.recv(),
+                timeout=self._handshake_timeout,
+            )
+        except asyncio.TimeoutError:
+            code = "EXTENSION_HANDSHAKE_TIMEOUT"
+            self._last_handshake_error = code
+            await websocket.close(code=1008, reason=code)
+            return False
+
+        try:
+            message = json.loads(raw_message)
+        except (TypeError, json.JSONDecodeError):
+            message = None
+
+        try:
+            identity = validate_extension_hello(message)
+        except ExtensionHandshakeError as error:
+            self._last_handshake_error = error.code
+            await websocket.close(code=1008, reason=error.code)
+            return False
+
+        await websocket.send(json.dumps({
+            "type": "hello_ack",
+            "accepted": True,
+            "productId": PRODUCT_ID,
+            "browserKind": BROWSER_KIND,
+            "protocolVersion": PROTOCOL_VERSION,
+        }))
+        self._extension_handshake = identity
+        self._last_handshake_error = None
+        return True
 
     async def start(self):
         """启动 WebSocket 服务器（非阻塞，在后台运行）"""
@@ -269,6 +331,9 @@ class WSManager:
                 pass
             return
 
+        if not await self._perform_handshake(websocket):
+            return
+
         self._connection = websocket
         self._connection_generation += 1
         self._connected_event.set()
@@ -316,6 +381,7 @@ class WSManager:
         finally:
             if self._connection == websocket:
                 self._connection = None
+                self._extension_handshake = None
                 self._connected_event.clear()
                 # 取消所有待处理的请求
                 pending_count = len(self._pending_requests)

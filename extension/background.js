@@ -1,4 +1,5 @@
 importScripts("connection-policy.js");
+importScripts("product-handshake.js");
 importScripts("focus-policy.js");
 importScripts("session-context.js");
 importScripts("session-transactions.js");
@@ -30,6 +31,7 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const WS_URL = "ws://localhost:8765";
 const NATIVE_HOST_NAME = "com.link2chrome.nativehost";
 const EXPECTED_EXTENSION_ID = "gfmbcnhkhgdlpcdhmolaefigfapbamcg";
+const productHandshake = globalThis.ChromeXProductHandshake;
 const HEARTBEAT_INTERVAL = 30000;
 const KEEPALIVE_ALARM = "link2chrome.keepalive";
 const KEEPALIVE_PERIOD_MINUTES = 0.5;
@@ -360,22 +362,34 @@ function connectWebSocket() {
         try { socket.close(); } catch (_) {}
         return;
       }
-      console.log("[Link2Chrome] WebSocket 已连接");
-      wsConnected = true;
-      connectionConflict = false;
-      chrome.storage.local.set({ connectionConflict: false });
-      reconnectAttempts = 0;
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      broadcastStatus();
-      startHeartbeat();
+      socket.send(JSON.stringify(productHandshake.buildExtensionHello({
+        extensionId: chrome.runtime.id,
+        buildVersion: BUILD_VERSION,
+      })));
+      console.log("[Link2Chrome] WebSocket 已连接，等待产品握手");
     };
 
     socket.onmessage = async (event) => {
       try {
         const message = JSON.parse(event.data);
+        if (!wsConnected) {
+          if (!productHandshake.isAcceptedHelloAck(message)) {
+            socket.close(1008, "HUB_PRODUCT_MISMATCH");
+            return;
+          }
+          wsConnected = true;
+          connectionConflict = false;
+          chrome.storage.local.set({ connectionConflict: false });
+          reconnectAttempts = 0;
+          if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+          }
+          broadcastStatus();
+          startHeartbeat();
+          console.log("[Link2Chrome] 产品握手完成");
+          return;
+        }
         if (message.type === "pong") return;
         const result = await handleCommand(message);
         if (socket.readyState === WebSocket.OPEN) {

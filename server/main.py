@@ -79,6 +79,9 @@ else:
 _SESSION_TMPDIR = tempfile.mkdtemp(prefix="link2chrome_")
 atexit.register(shutil.rmtree, _SESSION_TMPDIR, True)
 _URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+CHROMEX_TOOL_DESCRIPTION_PREFIX = (
+    "ChromeX only: controls the Chrome channel; never use for TabbitDance. "
+)
 
 app = Server("local-browser")
 
@@ -89,7 +92,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name=td["name"],
-            description=td["description"],
+            description=f"{CHROMEX_TOOL_DESCRIPTION_PREFIX}{td['description']}",
             inputSchema=td["inputSchema"],
         )
         for td in TOOL_DEFINITIONS

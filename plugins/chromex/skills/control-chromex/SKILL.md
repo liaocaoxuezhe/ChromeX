@@ -5,9 +5,9 @@ description: Control the user's real Chrome through ChromeX/Link2Chrome MCP when
 
 # ChromeX
 
-Use ChromeX when the user mentions `@chromex`, asks to use ChromeX or Link2Chrome, or needs browser automation that depends on the user's real Chrome state.
+Use ChromeX when the user mentions `@chromex`, asks to use ChromeX, Link2Chrome, `local-browser`, or Chrome, or needs browser automation that explicitly depends on the user's real Chrome state.
 
-Prefer purpose-built connectors, APIs, or CLIs before browser work. Use ChromeX when the user explicitly requests Chrome/ChromeX/Link2Chrome, when the task needs open tabs or login state, or when local page inspection is the requested goal.
+Prefer purpose-built connectors, APIs, or CLIs before browser work. Use ChromeX only when the user explicitly requests Chrome/ChromeX/Link2Chrome/`local-browser` or when the task explicitly depends on the user's real Chrome state. Do not select ChromeX for Tabbit or TabbitDance.
 
 ## Standard Flow
 

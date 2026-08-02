@@ -26,6 +26,7 @@ from server.session_registry import SessionRegistry, SessionState
 from server.session_scheduler import SessionScheduler
 from server.session_store import SessionStore
 from server.ws_manager import WSManager
+from server.product_identity import hub_identity_payload
 
 _current_file = os.path.abspath(__file__)
 _project_root = os.path.dirname(os.path.dirname(_current_file))
@@ -195,7 +196,10 @@ class BrowserHub:
                 }
                 if connection_identity is not None:
                     connection_identity.update({"adapterId": adapter_id, "ownerId": owner_id})
-                return self._ok(request_id, self._registered_adapters[adapter_id])
+                return self._ok(request_id, {
+                    **self._registered_adapters[adapter_id],
+                    **hub_identity_payload(),
+                })
             if command.startswith("__session_"):
                 if self.protocol_mode == "v1":
                     raise SessionProtocolError(
@@ -266,6 +270,11 @@ class BrowserHub:
             }
 
     def _status(self) -> dict[str, Any]:
+        extension_transport = (
+            self.extension_ws.connection_status()
+            if hasattr(self.extension_ws, "connection_status")
+            else {"handshake": None, "lastHandshakeError": None}
+        )
         lease_age = None
         if self._lease_started_at is not None:
             lease_age = round(time.monotonic() - self._lease_started_at, 3)
@@ -274,10 +283,13 @@ class BrowserHub:
             lease_idle = round(time.monotonic() - self._lease_last_seen_at, 3)
         registry_snapshot = self.session_registry.snapshot()
         return {
+            **hub_identity_payload(),
             "hub_id": self._hub_id,
             "adapter_connections": len(self._adapter_connections),
             "extension_connected": self.extension_ws.is_connected,
             "extension_startup_error": self.extension_ws.startup_error,
+            "extension_handshake": extension_transport.get("handshake"),
+            "extension_handshake_error": extension_transport.get("lastHandshakeError"),
             "queue_locked": self._operation_lock.locked(),
             "lease_name": self._lease_name,
             "lease_scope": self._lease_scope,

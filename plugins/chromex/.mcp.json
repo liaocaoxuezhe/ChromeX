@@ -4,6 +4,9 @@
       "command": "node",
       "args": ["./scripts/mcp-server.mjs"],
       "env": {
+        "LINK2CHROME_EXTENSION_PORT": "8765",
+        "LINK2CHROME_HUB_CONTROL_PORT": "8766",
+        "LINK2CHROME_WS_URL": "ws://localhost:8766",
         "LOG_LEVEL": "INFO",
         "LOG_CONSOLE": "false"
       }
