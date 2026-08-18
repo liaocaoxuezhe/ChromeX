@@ -18,7 +18,7 @@
 
 **方法 B: 仅重启 MCP Server(调试用)**
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
+cd ..
 source server/venv/bin/activate
 python -m server.main
 ```
@@ -204,7 +204,7 @@ python server/view_logs.py -t operations -f  # 实时追踪
 
 ### 1. Git 回滚
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
+cd ..
 git stash  # 保存当前修改
 git checkout 113592b  # 回到上一个版本
 ```

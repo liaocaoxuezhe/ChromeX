@@ -113,7 +113,7 @@ LOG_OPERATIONS=true
 ```bash
 # 方式 1: 重启 Claude Code 应用
 # 方式 2: 运行测试脚本
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
+cd ..
 python test/test_phase1_features.py
 ```
 

@@ -11,4 +11,4 @@ Core workflow:
 - `action_click`, `action_fill`, `action_press_key`, `action_scroll`: simple actions.
 - `browser_code_run`: multi-step Playwright-style automation.
 
-Runtime docs live in `/Users/zhangyu/PycharmProjects/Link2Chrome/runtime/docs`.
+Runtime docs live in `../runtime/docs`.

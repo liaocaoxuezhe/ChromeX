@@ -308,3 +308,90 @@ def test_restore_snapshot_requires_exact_epoch_and_rebuilds_reverse_indexes():
     with pytest.raises(SessionProtocolError) as exc:
         SessionRegistry().restore_snapshot(snapshot, "epoch-b")
     assert exc.value.code == "BROWSER_EPOCH_MISMATCH"
+
+
+def test_unregister_last_tab_vacates_session_to_orphaned():
+    registry = SessionRegistry(id_factory=iter(["session-a"]).__next__)
+    created = create_session(registry)
+    bound = bind_session(registry, created.session_id, 1588304773, 101, "bind-a")
+    assert bound.state == SessionState.ACTIVE.value
+
+    updated = run(
+        registry.unregister_tab(
+            session_id=created.session_id,
+            tab_id=101,
+            expected_revision=bound.revision,
+            operation_id="unregister-a",
+        )
+    )
+    assert updated.state == SessionState.ORPHANED.value
+    assert updated.group_id is None
+    assert updated.window_id is None
+    assert updated.target_tab_id is None
+
+    snapshot = registry.snapshot()
+    assert snapshot["groupOwners"] == {}
+    assert snapshot["tabOwners"] == {}
+    session = snapshot["sessions"][0]
+    assert session["state"] == "ORPHANED"
+    assert session["groupId"] is None
+    assert session["tabIds"] == []
+
+
+def test_release_last_tab_vacates_session_to_orphaned():
+    registry = SessionRegistry(id_factory=iter(["session-a"]).__next__)
+    created = create_session(registry)
+    bound = bind_session(registry, created.session_id, 42, 101, "bind-a")
+    claimed = run(
+        registry.claim_tab(
+            session_id=created.session_id,
+            tab_id=202,
+            expected_revision=bound.revision,
+            operation_id="claim-a",
+        )
+    )
+    without_seed = run(
+        registry.unregister_tab(
+            session_id=created.session_id,
+            tab_id=101,
+            expected_revision=claimed.revision,
+            operation_id="unregister-a",
+        )
+    )
+    updated = run(
+        registry.release_tab(
+            session_id=created.session_id,
+            tab_id=202,
+            expected_revision=without_seed.revision,
+            operation_id="release-a",
+        )
+    )
+    assert updated.state == SessionState.ORPHANED.value
+    assert updated.group_id is None
+    assert updated.target_tab_id is None
+    assert registry.snapshot()["groupOwners"] == {}
+
+
+def test_unregister_penultimate_tab_keeps_session_active():
+    registry = SessionRegistry(id_factory=iter(["session-a"]).__next__)
+    created = create_session(registry)
+    bound = bind_session(registry, created.session_id, 42, 101, "bind-a")
+    with_second = run(
+        registry.register_tab(
+            session_id=created.session_id,
+            tab_id=102,
+            expected_revision=bound.revision,
+            operation_id="register-b",
+        )
+    )
+    updated = run(
+        registry.unregister_tab(
+            session_id=created.session_id,
+            tab_id=101,
+            expected_revision=with_second.revision,
+            operation_id="unregister-a",
+        )
+    )
+    assert updated.state == SessionState.ACTIVE.value
+    assert updated.group_id == 42
+    assert updated.target_tab_id == 102

@@ -286,6 +286,8 @@ class SessionRegistry:
                 self._session_by_tab.pop(tab_id, None)
             if record.target_tab_id == tab_id:
                 record.target_tab_id = min(record.tab_ids) if record.tab_ids else None
+            if not record.tab_ids:
+                self._vacate_empty_session(record)
             self._touch(record)
             handle = record.to_handle()
             self._record_operation(operation_id, fingerprint, handle)
@@ -309,6 +311,8 @@ class SessionRegistry:
                     self._session_by_tab.pop(tab_id, None)
                 if record.target_tab_id == tab_id:
                     record.target_tab_id = min(record.tab_ids) if record.tab_ids else None
+                if not record.tab_ids:
+                    self._vacate_empty_session(record)
                 self._touch(record)
             handle = record.to_handle()
             self._record_operation(operation_id, fingerprint, handle)
@@ -598,6 +602,24 @@ class SessionRegistry:
         record.group_id = None
         record.window_id = None
         record.target_tab_id = None
+
+    def _vacate_empty_session(self, record: SessionRecord) -> None:
+        """Release group binding when a Session loses its last tab.
+
+        Chrome recycles an empty tab group, so a group_id held past the last
+        tab becomes a dangling reference that breaks reconciliation. An ACTIVE
+        session with no tabs is an empty shell - mark it ORPHANED so it is
+        never re-attached to a dead group; a FINALIZING session only drops the
+        binding and keeps walking toward CLOSED.
+        """
+        if record.group_id is not None:
+            if self._session_by_group.get(record.group_id) == record.session_id:
+                self._session_by_group.pop(record.group_id, None)
+            record.group_id = None
+            record.window_id = None
+            record.target_tab_id = None
+        if record.state == SessionState.ACTIVE:
+            record.state = SessionState.ORPHANED
 
     def _require_session(self, session_id: str) -> SessionRecord:
         record = self._sessions.get(session_id)

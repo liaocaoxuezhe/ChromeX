@@ -25,7 +25,7 @@ ModuleNotFoundError: No module named 'server'
   "mcpServers": {
     "local-browser": {
       "type": "stdio",
-      "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/start_mcp_server.sh",
+      "command": "../start_mcp_server.sh",
       "args": []
     }
   }
@@ -138,7 +138,7 @@ Extension 版本: 2025-02-03-v4
 
 **解决：**
 ```bash
-chmod +x /Users/zhangyu/PycharmProjects/Link2Chrome/start_mcp_server.sh
+chmod +x ../start_mcp_server.sh
 ```
 
 ### 问题 2: "command not found: python"
@@ -151,7 +151,7 @@ server/venv/bin/python: command not found
 **解决：**
 虚拟环境不存在，运行：
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
+cd ..
 ./setup.sh
 ```
 
@@ -185,7 +185,7 @@ pkill -f "python.*server.main"
 
 3. **手动测试启动脚本：**
    ```bash
-   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | /Users/zhangyu/PycharmProjects/Link2Chrome/start_mcp_server.sh
+   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | ../start_mcp_server.sh
    ```
    应该看到 JSON 响应。
 
@@ -227,7 +227,7 @@ Cline 也可能有类似问题，推荐使用启动脚本。
 完全重启 Cursor 后，运行：
 
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
+cd ..
 python test/quick_test.py
 ```
 

@@ -55,7 +55,7 @@ export async function discoverLocalBrowserEnvironment(options = {}) {
   const platform = options.platform || process.platform;
   const candidates = options.candidates || defaultBrowserCandidates(platform);
   const processes = options.processes || await listProcesses(platform);
-  const extensionDir = options.extensionDir || join(PROJECT_ROOT, "extension");
+  const extensionDir = options.extensionDir || process.env.LINK2CHROME_EXTENSION_DIR || join(PROJECT_ROOT, "extension");
   const extensionPackage = await diagnoseExtensionPackage(extensionDir);
   const browsers = [];
 

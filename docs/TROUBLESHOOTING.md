@@ -1,5 +1,7 @@
 # Link2Chrome 故障排查指南
 
+> **路径约定**：以下命令中的相对路径均基于**项目根目录**（即本 `docs/` 目录的上一级）。执行前请先进入项目根目录（例如 `cd "$(git rev-parse --show-toplevel)"`）。
+
 ## 常见问题
 
 ### 1. MCP 服务器无法启动
@@ -8,8 +10,6 @@
 
 **解决方案**:
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
-
 # 检查 Python 虚拟环境
 test -f server/venv/bin/python && echo "✓ 虚拟环境正常" || echo "✗ 需要运行 ./setup.sh"
 
@@ -69,7 +69,7 @@ lsof -t -i :8765 | xargs kill -9
 **解决方案**:
 ```bash
 # 检查 .env 文件
-cat /Users/zhangyu/PycharmProjects/Link2Chrome/.env
+cat ../.env
 
 # 确保包含有效的配置:
 # DOUBAO_API_KEY=your-api-key-here
@@ -77,12 +77,12 @@ cat /Users/zhangyu/PycharmProjects/Link2Chrome/.env
 # DOUBAO_MODEL=doubao-seed-1-8-251228
 ```
 
-**注意**: `.env` 文件应在项目根目录（`/Users/zhangyu/PycharmProjects/Link2Chrome/.env`）
+**注意**: `.env` 文件应在项目根目录（`../.env`）
 
 ### 5. 查看日志
 
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome/server
+cd server
 
 # 查看最新日志
 python view_logs.py -t main -n 100
@@ -93,6 +93,34 @@ python view_logs.py -t error -n 50
 # 实时监控操作日志
 python view_logs.py -t operations -f
 ```
+
+### 6. Session 注册表损坏（所有 Session 操作失败）
+
+**症状**:
+- 所有涉及 Session 的操作失败，报 `SESSION_RECOVERY_REQUIRED` 或 `No group with id ...`
+- `browser_diagnose` 的 Session Registry 显示存在「ACTIVE 但无有效 tab group 绑定」的 session（如 `sessions=N` 但 `groups=0` / `tabs=0`）
+- 重启整个 MCP server 只能临时恢复，过一阵又复发
+
+**根因**:
+- Session 移除最后一个标签页时，旧版本会保留 group 绑定、状态仍为 `ACTIVE`，形成「ACTIVE 空壳」
+- Chrome 回收空 tab group 后，reconcile 恢复该空壳时 `chrome.tabGroups.get(deadGroupId)` 抛错，导致整个 reconcile 崩溃，注册表进入 FAILED 状态
+- 已通过三层代码修复防复发（`session_registry.py` 空壳置为 `ORPHANED` + `browser_hub.py` 隔离死 session + `background.js` 跳过失效 group）
+
+**快速修复**（无需重启 Claude Code / MCP server）:
+
+```bash
+# 1. 重启 Browser Hub 进程；MCP server 检测到后会自动拉起新 hub
+pkill -f server.browser_hub
+
+# 2. 等 1-2 秒，在 Claude Code 中运行 browser_diagnose 确认 Hub 已重连
+# 3. 运行 browser_session(action="list")，期望返回 {ok: true, sessions: [], protocolVersion: 2}
+#    （sessions 里的历史 CLOSED 记录不影响使用，可忽略）
+```
+
+**关键提醒**:
+- 若刚改过扩展代码（`extension/background.js`），必须在 `chrome://extensions/` 点击「重新加载」使修复生效，否则症状会重现。
+- 只改服务端代码时无需重载扩展，重启 hub 进程即可。
+- 彻底清理历史坏快照（可选）：Hub 从 `~/Library/Application Support/Link2Chrome/session-v2.sqlite3` 恢复快照，重启后 `_reconcile` 会把无法恢复的死 session 自动隔离为 `ORPHANED`，无需手动删库。
 
 ## 测试命令
 
@@ -140,7 +168,7 @@ python view_logs.py -t operations -f
 
 ### 查看日志命令
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome/server
+cd server
 
 # 查看最新日志（最后 50 行）
 python view_logs.py -t main -n 50

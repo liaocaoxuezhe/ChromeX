@@ -98,7 +98,7 @@ node scripts/dev-extension/install.mjs
 
 ## 配置 Claude Code
 
-将 `claude_config_snippet.json` 中的配置合并到 Claude Code 的配置文件中，并根据本机路径调整 `command`、`args` 和 `cwd`。
+将 `claude_config_snippet.json` 中的配置合并到 Claude Code 的配置文件中。示例中的 `command`、`args`、`cwd` 均为相对路径，以**项目根目录**为基准（Claude Code 在项目根启动时可直接使用）；若工作目录不同，请调整这三项指向项目根。
 
 ## Codex Plugin
 
@@ -107,7 +107,7 @@ This repository includes a local Codex plugin at `plugins/chromex`.
 After restarting Codex, install `ChromeX` from the `ChromeX Local Plugins` marketplace. Then run:
 
 ```bash
-codex plugin marketplace add /Users/zhangyu/PycharmProjects/Link2Chrome
+codex plugin marketplace add .
 codex plugin add chromex@chromex-local
 node plugins/chromex/scripts/install.mjs
 node plugins/chromex/scripts/diagnose.mjs
@@ -162,6 +162,18 @@ browser_session(action="list")
 当任务已有明确 URL 时，`new_tab` 会直接用该 URL 创建首个分组标签页，不需要先创建空白 Session。搜索、筛选和详情查询应优先直接打开可验证的参数化结果 URL，例如 Google 的 `?q=` 结果页；只有 URL 规则不确定时才回退到网站 UI。
 
 如需接管用户已有标签页，先通过 runtime 的 `browser.user.openTabs()` 获取候选，再把返回对象原样传给 `browser.user.claimTab(tab)`；不要猜测裸 `tabId`。
+
+## 故障排查
+
+常见问题的完整处理步骤见 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)。
+
+**Session 注册表损坏（所有 Session 操作失败）** 的快速恢复——无需重启 Claude Code / MCP server，只需重启 Browser Hub 进程，MCP server 会自动拉起新 hub：
+
+```bash
+pkill -f server.browser_hub
+```
+
+然后运行 `browser_diagnose` 确认 Hub 已重连，`browser_session(action="list")` 应返回 `sessions: []`（历史 CLOSED 记录不影响使用）。若刚改过扩展代码，需在 `chrome://extensions/` 点击「重新加载」；若仍未恢复，详见 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#6-session-注册表损坏所有-session-操作失败)。
 
 ## 开发与测试
 

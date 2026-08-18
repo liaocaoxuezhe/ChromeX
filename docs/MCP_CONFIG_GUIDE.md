@@ -10,9 +10,9 @@ Link2Chrome 通过 MCP (Model Context Protocol) 与 Claude Code 通信。配置�
 {
   "mcpServers": {
     "local-browser": {
-      "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
-      "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
-      "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+      "command": "../server/venv/bin/python",
+      "args": ["../server/main.py"],
+      "cwd": "..",
       "env": {
         "LOG_LEVEL": "INFO",
         "LOG_CONSOLE": "false"
@@ -32,9 +32,9 @@ Link2Chrome 通过 MCP (Model Context Protocol) 与 Claude Code 通信。配置�
 {
   "mcpServers": {
     "local-browser": {
-      "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
-      "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
-      "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+      "command": "../server/venv/bin/python",
+      "args": ["../server/main.py"],
+      "cwd": "..",
       "env": {
         "LOG_LEVEL": "INFO",
         "LOG_CONSOLE": "false"
@@ -52,9 +52,9 @@ Link2Chrome 通过 MCP (Model Context Protocol) 与 Claude Code 通信。配置�
 {
   "mcpServers": {
     "local-browser": {
-      "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
-      "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
-      "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+      "command": "../server/venv/bin/python",
+      "args": ["../server/main.py"],
+      "cwd": "..",
       "env": {
         "LOG_LEVEL": "INFO",
         "LOG_CONSOLE": "false"
@@ -77,9 +77,9 @@ Link2Chrome 通过 MCP (Model Context Protocol) 与 Claude Code 通信。配置�
 {
   "mcpServers": {
     "local-browser": {
-      "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
-      "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
-      "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+      "command": "../server/venv/bin/python",
+      "args": ["../server/main.py"],
+      "cwd": "..",
       "env": {
         "LOG_LEVEL": "INFO",
         "LOG_CONSOLE": "false"
@@ -121,9 +121,9 @@ cat ~/.cursor/mcp.json | jq '.mcpServers."local-browser"'
 应该看到：
 ```json
 {
-  "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
-  "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
-  "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+  "command": "../server/venv/bin/python",
+  "args": ["../server/main.py"],
+  "cwd": "..",
   "env": {
     "LOG_LEVEL": "INFO",
     "LOG_CONSOLE": "false"
@@ -134,7 +134,7 @@ cat ~/.cursor/mcp.json | jq '.mcpServers."local-browser"'
 ### 2. 测试 MCP Server
 
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
+cd ..
 server/venv/bin/python server/main.py < /dev/null
 ```
 
@@ -209,7 +209,7 @@ Extension 版本: 2025-02-03-v4
 使用直接运行脚本的方式：
 ```json
 {
-  "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"]
+  "args": ["../server/main.py"]
 }
 ```
 
@@ -231,7 +231,7 @@ lsof -t -i :8765 | xargs kill -9
 **解决：**
 1. 验证 Python 路径：
    ```bash
-   ls -la /Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python
+   ls -la ../server/venv/bin/python
    ```
 2. 如果不存在，运行 `./setup.sh` 重新创建虚拟环境
 
@@ -264,9 +264,9 @@ with open(config_path, "r") as f:
     config = json.load(f)
 
 config["mcpServers"]["local-browser"] = {
-    "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
-    "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
-    "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+    "command": "../server/venv/bin/python",
+    "args": ["../server/main.py"],
+    "cwd": "..",
     "env": {
         "LOG_LEVEL": "INFO",
         "LOG_CONSOLE": "false"
@@ -286,9 +286,9 @@ cat > ~/.cursor/mcp.json << 'EOF'
 {
   "mcpServers": {
     "local-browser": {
-      "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
-      "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
-      "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+      "command": "../server/venv/bin/python",
+      "args": ["../server/main.py"],
+      "cwd": "..",
       "env": {
         "LOG_LEVEL": "INFO",
         "LOG_CONSOLE": "false"
@@ -366,7 +366,7 @@ Link2Chrome 使用 **stdio** 类型，因为：
 运行完整测试验证所有功能：
 
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
+cd ..
 python test/quick_test.py
 ```
 
@@ -403,9 +403,9 @@ Link2Chrome 现在暴露三组同时存在的命名空间工具，任意 MCP 客
 {
   "mcpServers": {
     "link2chrome": {
-      "command": "/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python",
-      "args": ["/Users/zhangyu/PycharmProjects/Link2Chrome/server/main.py"],
-      "cwd": "/Users/zhangyu/PycharmProjects/Link2Chrome",
+      "command": "../server/venv/bin/python",
+      "args": ["../server/main.py"],
+      "cwd": "..",
       "env": {
         "LOG_LEVEL": "INFO",
         "LOG_CONSOLE": "false"

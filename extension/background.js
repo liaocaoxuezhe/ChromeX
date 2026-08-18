@@ -1218,30 +1218,37 @@ async function handleCommand(message) {
         const restored = [];
         for (const raw of guardedParams.sessions || []) {
           if (raw.state !== "ACTIVE") continue;
-          const group = await chrome.tabGroups.get(raw.groupId);
-          if (group.windowId !== raw.windowId) throw new Error(`group ${raw.groupId} window mismatch`);
-          const tabs = await Promise.all((raw.tabIds || []).map((tabId) => chrome.tabs.get(tabId)));
-          if (tabs.some((tab) => tab.groupId !== raw.groupId || tab.windowId !== raw.windowId)) {
-            throw new Error(`Session ${raw.sessionId} tab ownership mismatch`);
-          }
-          sessionContextStore.registerSession({
-            sessionId: raw.sessionId,
-            ownerId: raw.ownerId,
-            alias: raw.session,
-            groupId: raw.groupId,
-            windowId: raw.windowId,
-            targetTabId: raw.targetTabId,
-            revision: raw.revision,
-            state: "ACTIVE",
-          });
-          for (const tab of tabs) {
-            sessionContextStore.registerTab(raw.sessionId, tab.id, {
+          try {
+            const group = await chrome.tabGroups.get(raw.groupId);
+            if (group.windowId !== raw.windowId) throw new Error(`group ${raw.groupId} window mismatch`);
+            const tabs = await Promise.all((raw.tabIds || []).map((tabId) => chrome.tabs.get(tabId)));
+            if (tabs.some((tab) => tab.groupId !== raw.groupId || tab.windowId !== raw.windowId)) {
+              throw new Error(`Session ${raw.sessionId} tab ownership mismatch`);
+            }
+            sessionContextStore.registerSession({
+              sessionId: raw.sessionId,
+              ownerId: raw.ownerId,
+              alias: raw.session,
+              groupId: raw.groupId,
+              windowId: raw.windowId,
+              targetTabId: raw.targetTabId,
+              revision: raw.revision,
               state: "ACTIVE",
-              ownershipType: (raw.claimedTabIds || []).includes(tab.id) ? "claimed" : "agent",
-              claimRestore: raw.claimRestore?.[String(tab.id)] || null,
             });
+            for (const tab of tabs) {
+              sessionContextStore.registerTab(raw.sessionId, tab.id, {
+                state: "ACTIVE",
+                ownershipType: (raw.claimedTabIds || []).includes(tab.id) ? "claimed" : "agent",
+                claimRestore: raw.claimRestore?.[String(tab.id)] || null,
+              });
+            }
+            restored.push(raw.sessionId);
+          } catch (error) {
+            // The Session's Chrome tab group was recycled mid-epoch and cannot
+            // be restored. Skip it so one dead group does not fail the whole
+            // reconciliation; the hub isolates it from the restored list.
+            console.warn("[Link2Chrome] 跳过恢复已失效的 Session:", raw.sessionId, error?.message || error);
           }
-          restored.push(raw.sessionId);
         }
         response.data = { ok: true, browserEpoch: await browserEpochPromise, restored };
         break;
