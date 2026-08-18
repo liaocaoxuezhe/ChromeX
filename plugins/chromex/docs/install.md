@@ -2,10 +2,10 @@
 
 ChromeX is packaged as a Codex repo plugin at `plugins/chromex`.
 
-1. Register the marketplace root: `codex plugin marketplace add /Users/zhangyu/PycharmProjects/Link2Chrome`.
+1. Register the marketplace root: `codex plugin marketplace add ..`.
 2. Install the plugin: `codex plugin add chromex@chromex-local`.
 3. From the project root, run `node plugins/chromex/scripts/install.mjs`.
-4. Load `/Users/zhangyu/PycharmProjects/Link2Chrome/extension` in `chrome://extensions` with Developer Mode enabled.
+4. Load `../extension` in `chrome://extensions` with Developer Mode enabled.
 5. Run `node plugins/chromex/scripts/diagnose.mjs`.
 6. Restart Codex so the enabled plugin and MCP server are available in new threads.
 

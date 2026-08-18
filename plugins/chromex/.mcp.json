@@ -4,6 +4,7 @@
       "command": "node",
       "args": ["./scripts/mcp-server.mjs"],
       "env": {
+        "CHROMEX_PROJECT_ROOT": "/Users/zhangyu/Documents/Project/ChromeX",
         "LINK2CHROME_EXTENSION_PORT": "8765",
         "LINK2CHROME_HUB_CONTROL_PORT": "8766",
         "LINK2CHROME_WS_URL": "ws://localhost:8766",

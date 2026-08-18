@@ -17,5 +17,5 @@ Check failures in this order:
 If Codex installed the plugin into a cache directory and the scripts cannot find the repository, set:
 
 ```bash
-export CHROMEX_PROJECT_ROOT=/Users/zhangyu/PycharmProjects/Link2Chrome
+export CHROMEX_PROJECT_ROOT=..
 ```

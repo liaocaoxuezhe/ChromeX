@@ -34,7 +34,7 @@ kill -9 68795
 
 ### 2. 重新启动 MCP 服务器
 ```bash
-/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python -m server.main &
+../server/venv/bin/python -m server.main &
 ```
 
 ### 3. 当前状态
@@ -58,7 +58,7 @@ Chrome Extension 可能需要刷新才能连接到新的 WebSocket 服务器:
 
 2. **检查连接日志**:
    ```bash
-   tail -f /Users/zhangyu/PycharmProjects/Link2Chrome/logs/link2chrome_2026-02-06.log
+   tail -f ../logs/link2chrome_2026-02-06.log
    ```
    应该看到: `Chrome Extension 已连接: ('::1', ...)`
 
@@ -90,7 +90,7 @@ Chrome Extension 可能需要刷新才能连接到新的 WebSocket 服务器:
 ## 预防措施
 
 ### 1. 创建启动脚本
-创建 `/Users/zhangyu/PycharmProjects/Link2Chrome/start_mcp_server.sh`:
+创建 `../start_mcp_server.sh`:
 
 ```bash
 #!/bin/bash
@@ -101,8 +101,8 @@ pkill -f "python -m server.main" 2>/dev/null
 sleep 1
 
 # 启动新进程
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
-/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python -m server.main
+cd ..
+../server/venv/bin/python -m server.main
 ```
 
 ### 2. 修改 MCP 配置以处理端口冲突
@@ -152,7 +152,7 @@ A: 可能的原因:
 ### Q: 如何确认 Chrome Extension 已连接?
 A: 查看日志:
 ```bash
-tail -f /Users/zhangyu/PycharmProjects/Link2Chrome/logs/link2chrome_2026-02-06.log | grep "Extension 已连接"
+tail -f ../logs/link2chrome_2026-02-06.log | grep "Extension 已连接"
 ```
 
 ### Q: `claude mcp list` 仍然显示失败怎么办?

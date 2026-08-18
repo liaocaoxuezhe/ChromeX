@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - 写入和编辑文件必须保持 UTF-8 中文兼容。
-- 新增测试文件必须放在 `/Users/zhangyu/PycharmProjects/Link2Chrome/test`。
+- 新增测试文件必须放在 `../test`。
 - 用户本地 Python 基线是 3.9；如果测试依赖不支持 Python 3.9，使用项目内虚拟环境，不向全局 Python 安装依赖。
 - 自动化路径不得调用 `chrome.tabs.update(..., { active: true })` 或 `chrome.windows.update(..., { focused: true })`。
 - 所有扩展主动创建的自动化标签固定 `active: false`。

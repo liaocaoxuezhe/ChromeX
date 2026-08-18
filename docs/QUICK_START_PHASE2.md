@@ -364,7 +364,7 @@ browser_find_text({"text": "评论"})
 ### 查看操作日志
 
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
+cd ..
 
 # 查看主日志
 python server/view_logs.py -t main -n 50

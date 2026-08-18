@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - 中文回复和中文文档必须使用 UTF-8；写入中文文件时避免系统默认编码导致乱码。
-- 专门用于测试的文件统一放在 `/Users/zhangyu/PycharmProjects/Link2Chrome/test`。
+- 专门用于测试的文件统一放在 `../test`。
 - 用户本机 Python 版本可能是 3.9；安装前必须检测依赖是否要求更高版本。当前 `server/requirements.txt` 中 `mcp>=1.0.0` 和 `openai>=1.0.0` 对 Python 3.10+ 生效，项目 README 也声明 MCP Python SDK 需要 Python 3.10+。
 - 本地部署应在虚拟环境中完成；若默认 `python3` 是 3.9，插件安装脚本必须寻找 `python3.10`、`python3.11` 或 `python3.12`，并在 `server/venv` 创建隔离环境。
 - 不提交 `.env`、日志、缓存、虚拟环境、运行输出、浏览器 profile 数据或敏感凭据。
@@ -24,7 +24,7 @@
 
 ### Codex 插件要求
 
-来自 `/Users/zhangyu/PycharmProjects/Link2Chrome/docs/Codex Build plugins Instructions.md`：
+来自 `../docs/Codex Build plugins Instructions.md`：
 
 - 插件入口是 `.codex-plugin/plugin.json`。
 - 插件根目录可包含 `skills/`、`hooks/`、`.mcp.json`、`.app.json`、`assets/`。
@@ -61,7 +61,7 @@
 不要复制整个项目到插件目录。推荐创建一个轻量插件壳：
 
 ```text
-/Users/zhangyu/PycharmProjects/Link2Chrome/
+../
 ├── .agents/
 │   └── plugins/
 │       └── marketplace.json
@@ -90,26 +90,26 @@
 
 ## File Structure
 
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/.agents/plugins/marketplace.json`: repo 级插件目录，向 Codex 暴露 `chromex`。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/.codex-plugin/plugin.json`: 插件 manifest 和安装界面元数据。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/.mcp.json`: 插件绑定 MCP server，command 使用插件脚本解析真实项目根和 Python venv。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/skills/control-chromex/SKILL.md`: 从现有 `skills/link2chrome-browser-mcp/SKILL.md` 收敛为插件入口，补充 Codex plugin 安装/诊断路径。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/resolve-project-root.mjs`: 解析真实项目根目录，支持 `CHROMEX_PROJECT_ROOT` 和从 plugin cache 回溯。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/install.mjs`: 检测 Node/Python，创建或复用 `server/venv`，安装 Python 依赖，安装 Native Host manifest，并提示用户加载扩展。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/diagnose.mjs`: 聚合 `check-node-env.mjs`、extension install、native host manifest、MCP server 可启动性检查。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/docs/install.md`: 插件安装和首次启动流程。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/docs/troubleshooting.md`: 常见失败路径和诊断脚本。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/docs/api-map.md`: 插件能力到现有 MCP 工具/运行时文档的映射。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs`: 验证 manifest、marketplace、`.mcp.json` 路径和 JSON schema 关键字段。
-- Create `/Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs`: 验证 project root 解析、Python 版本选择和诊断输出。
+- Create `../.agents/plugins/marketplace.json`: repo 级插件目录，向 Codex 暴露 `chromex`。
+- Create `../plugins/chromex/.codex-plugin/plugin.json`: 插件 manifest 和安装界面元数据。
+- Create `../plugins/chromex/.mcp.json`: 插件绑定 MCP server，command 使用插件脚本解析真实项目根和 Python venv。
+- Create `../plugins/chromex/skills/control-chromex/SKILL.md`: 从现有 `skills/link2chrome-browser-mcp/SKILL.md` 收敛为插件入口，补充 Codex plugin 安装/诊断路径。
+- Create `../plugins/chromex/scripts/resolve-project-root.mjs`: 解析真实项目根目录，支持 `CHROMEX_PROJECT_ROOT` 和从 plugin cache 回溯。
+- Create `../plugins/chromex/scripts/install.mjs`: 检测 Node/Python，创建或复用 `server/venv`，安装 Python 依赖，安装 Native Host manifest，并提示用户加载扩展。
+- Create `../plugins/chromex/scripts/diagnose.mjs`: 聚合 `check-node-env.mjs`、extension install、native host manifest、MCP server 可启动性检查。
+- Create `../plugins/chromex/docs/install.md`: 插件安装和首次启动流程。
+- Create `../plugins/chromex/docs/troubleshooting.md`: 常见失败路径和诊断脚本。
+- Create `../plugins/chromex/docs/api-map.md`: 插件能力到现有 MCP 工具/运行时文档的映射。
+- Create `../test/chromex-plugin-manifest.test.mjs`: 验证 manifest、marketplace、`.mcp.json` 路径和 JSON schema 关键字段。
+- Create `../test/chromex-plugin-scripts.test.mjs`: 验证 project root 解析、Python 版本选择和诊断输出。
 
 ## Tasks
 
 ### Task 1: Repo Marketplace
 
 **Files:**
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/.agents/plugins/marketplace.json`
-- Test: `/Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs`
+- Create: `../.agents/plugins/marketplace.json`
+- Test: `../test/chromex-plugin-manifest.test.mjs`
 
 **Interfaces:**
 - Consumes: none.
@@ -154,14 +154,14 @@ test("chromex repo marketplace exposes chromex plugin", async () => {
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+node --test ../test/chromex-plugin-manifest.test.mjs
 ```
 
 Expected: fails with `ENOENT` for `.agents/plugins/marketplace.json`.
 
 - [ ] **Step 3: Create marketplace**
 
-Create `/Users/zhangyu/PycharmProjects/Link2Chrome/.agents/plugins/marketplace.json`:
+Create `../.agents/plugins/marketplace.json`:
 
 ```json
 {
@@ -191,7 +191,7 @@ Create `/Users/zhangyu/PycharmProjects/Link2Chrome/.agents/plugins/marketplace.j
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+node --test ../test/chromex-plugin-manifest.test.mjs
 ```
 
 Expected: PASS.
@@ -199,17 +199,17 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add /Users/zhangyu/PycharmProjects/Link2Chrome/.agents/plugins/marketplace.json /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+git add ../.agents/plugins/marketplace.json ../test/chromex-plugin-manifest.test.mjs
 git commit -m "feat: add chromex codex marketplace"
 ```
 
 ### Task 2: Plugin Manifest and Assets
 
 **Files:**
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/.codex-plugin/plugin.json`
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/assets/icon128.png`
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/assets/composer.png`
-- Modify: `/Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs`
+- Create: `../plugins/chromex/.codex-plugin/plugin.json`
+- Create: `../plugins/chromex/assets/icon128.png`
+- Create: `../plugins/chromex/assets/composer.png`
+- Modify: `../test/chromex-plugin-manifest.test.mjs`
 
 **Interfaces:**
 - Consumes: marketplace entry from Task 1.
@@ -240,14 +240,14 @@ test("chromex plugin manifest has install surface metadata", async () => {
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+node --test ../test/chromex-plugin-manifest.test.mjs
 ```
 
 Expected: fails with `ENOENT` for plugin manifest.
 
 - [ ] **Step 3: Create manifest**
 
-Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/.codex-plugin/plugin.json`:
+Create `../plugins/chromex/.codex-plugin/plugin.json`:
 
 ```json
 {
@@ -288,9 +288,9 @@ Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/.codex-plugin
 Copy binary assets without changing image bytes:
 
 ```bash
-mkdir -p /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/assets
-cp /Users/zhangyu/PycharmProjects/Link2Chrome/extension/icons/icon128.png /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/assets/icon128.png
-cp /Users/zhangyu/PycharmProjects/Link2Chrome/extension/icons/icon48.png /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/assets/composer.png
+mkdir -p ../plugins/chromex/assets
+cp ../extension/icons/icon128.png ../plugins/chromex/assets/icon128.png
+cp ../extension/icons/icon48.png ../plugins/chromex/assets/composer.png
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -298,7 +298,7 @@ cp /Users/zhangyu/PycharmProjects/Link2Chrome/extension/icons/icon48.png /Users/
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+node --test ../test/chromex-plugin-manifest.test.mjs
 ```
 
 Expected: PASS.
@@ -306,15 +306,15 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+git add ../plugins/chromex ../test/chromex-plugin-manifest.test.mjs
 git commit -m "feat: add chromex plugin manifest"
 ```
 
 ### Task 3: Project Root Resolver
 
 **Files:**
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/resolve-project-root.mjs`
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs`
+- Create: `../plugins/chromex/scripts/resolve-project-root.mjs`
+- Create: `../test/chromex-plugin-scripts.test.mjs`
 
 **Interfaces:**
 - Consumes: optional env var `CHROMEX_PROJECT_ROOT`.
@@ -322,7 +322,7 @@ git commit -m "feat: add chromex plugin manifest"
 
 - [ ] **Step 1: Write failing resolver tests**
 
-Create `/Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs`:
+Create `../test/chromex-plugin-scripts.test.mjs`:
 
 ```js
 import assert from "node:assert/strict";
@@ -367,14 +367,14 @@ test("resolveProjectRoot walks upward to package marker", async () => {
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs
+node --test ../test/chromex-plugin-scripts.test.mjs
 ```
 
 Expected: fails with `ERR_MODULE_NOT_FOUND`.
 
 - [ ] **Step 3: Implement resolver**
 
-Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/resolve-project-root.mjs`:
+Create `../plugins/chromex/scripts/resolve-project-root.mjs`:
 
 ```js
 import { access } from "node:fs/promises";
@@ -434,7 +434,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs
+node --test ../test/chromex-plugin-scripts.test.mjs
 ```
 
 Expected: PASS.
@@ -442,15 +442,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/resolve-project-root.mjs /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs
+git add ../plugins/chromex/scripts/resolve-project-root.mjs ../test/chromex-plugin-scripts.test.mjs
 git commit -m "feat: resolve chromex project root"
 ```
 
 ### Task 4: Plugin MCP Configuration
 
 **Files:**
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/.mcp.json`
-- Modify: `/Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs`
+- Create: `../plugins/chromex/.mcp.json`
+- Modify: `../test/chromex-plugin-manifest.test.mjs`
 
 **Interfaces:**
 - Consumes: `scripts/resolve-project-root.mjs` from Task 3.
@@ -478,7 +478,7 @@ test("chromex mcp config declares local-browser server", async () => {
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+node --test ../test/chromex-plugin-manifest.test.mjs
 ```
 
 Expected: fails with `ENOENT` for `.mcp.json`.
@@ -511,7 +511,7 @@ Do not point `.mcp.json` directly at `server/venv/bin/python` because Codex runs
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+node --test ../test/chromex-plugin-manifest.test.mjs
 ```
 
 Expected: PASS.
@@ -519,15 +519,15 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/.mcp.json /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+git add ../plugins/chromex/.mcp.json ../test/chromex-plugin-manifest.test.mjs
 git commit -m "feat: add chromex plugin mcp config"
 ```
 
 ### Task 5: MCP Server Launcher
 
 **Files:**
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/mcp-server.mjs`
-- Modify: `/Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs`
+- Create: `../plugins/chromex/scripts/mcp-server.mjs`
+- Modify: `../test/chromex-plugin-scripts.test.mjs`
 
 **Interfaces:**
 - Consumes: `resolveProjectRoot()`.
@@ -558,14 +558,14 @@ test("createMcpServerLaunchPlan points to project venv python and server main", 
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs
+node --test ../test/chromex-plugin-scripts.test.mjs
 ```
 
 Expected: fails with `ERR_MODULE_NOT_FOUND`.
 
 - [ ] **Step 3: Implement launcher**
 
-Create `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/mcp-server.mjs`:
+Create `../plugins/chromex/scripts/mcp-server.mjs`:
 
 ```js
 import { spawn } from "node:child_process";
@@ -615,7 +615,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs
+node --test ../test/chromex-plugin-scripts.test.mjs
 ```
 
 Expected: PASS.
@@ -623,16 +623,16 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/mcp-server.mjs /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs
+git add ../plugins/chromex/scripts/mcp-server.mjs ../test/chromex-plugin-scripts.test.mjs
 git commit -m "feat: add chromex mcp launcher"
 ```
 
 ### Task 6: Install and Diagnose Scripts
 
 **Files:**
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/install.mjs`
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/diagnose.mjs`
-- Modify: `/Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs`
+- Create: `../plugins/chromex/scripts/install.mjs`
+- Create: `../plugins/chromex/scripts/diagnose.mjs`
+- Modify: `../test/chromex-plugin-scripts.test.mjs`
 
 **Interfaces:**
 - Consumes: `resolveProjectRoot()`, existing `scripts/dev-extension/install.mjs`, `server/requirements.txt`.
@@ -659,7 +659,7 @@ test("selectPythonCandidate rejects python 3.9 and accepts python 3.10+", async 
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs
+node --test ../test/chromex-plugin-scripts.test.mjs
 ```
 
 Expected: fails with `ERR_MODULE_NOT_FOUND`.
@@ -758,7 +758,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs
+node --test ../test/chromex-plugin-scripts.test.mjs
 ```
 
 Expected: PASS.
@@ -768,8 +768,8 @@ Expected: PASS.
 Run:
 
 ```bash
-node /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/install.mjs
-node /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts/diagnose.mjs
+node ../plugins/chromex/scripts/install.mjs
+node ../plugins/chromex/scripts/diagnose.mjs
 ```
 
 Expected: installer prints extension load instructions; diagnose returns JSON with per-check status.
@@ -777,18 +777,18 @@ Expected: installer prints extension load instructions; diagnose returns JSON wi
 - [ ] **Step 7: Commit**
 
 ```bash
-git add /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/scripts /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs
+git add ../plugins/chromex/scripts ../test/chromex-plugin-scripts.test.mjs
 git commit -m "feat: add chromex plugin install diagnostics"
 ```
 
 ### Task 7: Plugin Skill and Docs
 
 **Files:**
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/skills/control-chromex/SKILL.md`
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/docs/install.md`
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/docs/troubleshooting.md`
-- Create: `/Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/docs/api-map.md`
-- Modify: `/Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs`
+- Create: `../plugins/chromex/skills/control-chromex/SKILL.md`
+- Create: `../plugins/chromex/docs/install.md`
+- Create: `../plugins/chromex/docs/troubleshooting.md`
+- Create: `../plugins/chromex/docs/api-map.md`
+- Modify: `../test/chromex-plugin-manifest.test.mjs`
 
 **Interfaces:**
 - Consumes: existing `/skills/link2chrome-browser-mcp/SKILL.md`, plugin scripts, `.mcp.json`.
@@ -818,7 +818,7 @@ test("chromex skill and docs are present", async () => {
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+node --test ../test/chromex-plugin-manifest.test.mjs
 ```
 
 Expected: fails with `ENOENT` for `SKILL.md`.
@@ -853,7 +853,7 @@ For multi-step automation, use `browser_code_run` and read `await browser.docume
 For setup or failures, run `node plugins/chromex/scripts/diagnose.mjs` from the project root and read `plugins/chromex/docs/troubleshooting.md`.
 ````
 
-Then copy over the detailed session, cleanup, safety, confirmation, and browser_code_run examples from `/Users/zhangyu/PycharmProjects/Link2Chrome/skills/link2chrome-browser-mcp/SKILL.md`, keeping the Chinese instructions and UTF-8 encoding.
+Then copy over the detailed session, cleanup, safety, confirmation, and browser_code_run examples from `../skills/link2chrome-browser-mcp/SKILL.md`, keeping the Chinese instructions and UTF-8 encoding.
 
 - [ ] **Step 4: Create docs**
 
@@ -867,7 +867,7 @@ ChromeX is packaged as a Codex repo plugin at `plugins/chromex`.
 1. Restart Codex so it discovers `.agents/plugins/marketplace.json`.
 2. Install or enable the `chromex` plugin from the `ChromeX Local Plugins` marketplace.
 3. From the project root, run `node plugins/chromex/scripts/install.mjs`.
-4. Load `/Users/zhangyu/PycharmProjects/Link2Chrome/extension` in `chrome://extensions` with Developer Mode enabled.
+4. Load `../extension` in `chrome://extensions` with Developer Mode enabled.
 5. Run `node plugins/chromex/scripts/diagnose.mjs`.
 
 Python note: ChromeX requires Python 3.10+ for the MCP SDK path. If your default Python is 3.9, create `server/venv` with `python3.10`, `python3.11`, or `python3.12`.
@@ -909,7 +909,7 @@ Core workflow:
 - `action_click`, `action_fill`, `action_press_key`, `action_scroll`: simple actions.
 - `browser_code_run`: multi-step Playwright-style automation.
 
-Runtime docs live in `/Users/zhangyu/PycharmProjects/Link2Chrome/runtime/docs`.
+Runtime docs live in `../runtime/docs`.
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -917,7 +917,7 @@ Runtime docs live in `/Users/zhangyu/PycharmProjects/Link2Chrome/runtime/docs`.
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+node --test ../test/chromex-plugin-manifest.test.mjs
 ```
 
 Expected: PASS.
@@ -925,15 +925,15 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/skills /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex/docs /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs
+git add ../plugins/chromex/skills ../plugins/chromex/docs ../test/chromex-plugin-manifest.test.mjs
 git commit -m "feat: add chromex plugin skill docs"
 ```
 
 ### Task 8: End-to-End Plugin Validation
 
 **Files:**
-- Modify: `/Users/zhangyu/PycharmProjects/Link2Chrome/README.md`
-- Modify: `/Users/zhangyu/PycharmProjects/Link2Chrome/docs/2026-06-22-chromex-codex-plugin-plan.md` only if implementation discoveries change the plan.
+- Modify: `../README.md`
+- Modify: `../docs/2026-06-22-chromex-codex-plugin-plan.md` only if implementation discoveries change the plan.
 
 **Interfaces:**
 - Consumes: all previous tasks.
@@ -944,7 +944,7 @@ git commit -m "feat: add chromex plugin skill docs"
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-manifest.test.mjs /Users/zhangyu/PycharmProjects/Link2Chrome/test/chromex-plugin-scripts.test.mjs
+node --test ../test/chromex-plugin-manifest.test.mjs ../test/chromex-plugin-scripts.test.mjs
 ```
 
 Expected: PASS.
@@ -954,7 +954,7 @@ Expected: PASS.
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/diagnostics.test.mjs /Users/zhangyu/PycharmProjects/Link2Chrome/test/dev-extension-bootstrap.test.mjs /Users/zhangyu/PycharmProjects/Link2Chrome/test/native-host-manifest.test.mjs
+node --test ../test/diagnostics.test.mjs ../test/dev-extension-bootstrap.test.mjs ../test/native-host-manifest.test.mjs
 ```
 
 Expected: PASS.
@@ -964,7 +964,7 @@ Expected: PASS.
 Run:
 
 ```bash
-python3 /Users/zhangyu/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py /Users/zhangyu/PycharmProjects/Link2Chrome/plugins/chromex
+python3 /Users/zhangyu/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ../plugins/chromex
 ```
 
 Expected: PASS or no schema errors. If the validator rejects `hooks` or unsupported manifest fields, remove unsupported fields rather than suppressing validation.
@@ -977,7 +977,7 @@ Run:
 codex plugin marketplace list
 ```
 
-Expected: Codex sees repo or local marketplace entry for `/Users/zhangyu/PycharmProjects/Link2Chrome/.agents/plugins/marketplace.json` after restart. If not listed, restart Codex and confirm `.agents/plugins/marketplace.json` JSON is valid.
+Expected: Codex sees repo or local marketplace entry for `../.agents/plugins/marketplace.json` after restart. If not listed, restart Codex and confirm `.agents/plugins/marketplace.json` JSON is valid.
 
 - [ ] **Step 5: Manual plugin install check**
 
@@ -1015,8 +1015,8 @@ If your default Python is 3.9, create `server/venv` with Python 3.10+ before ins
 Run:
 
 ```bash
-node --test /Users/zhangyu/PycharmProjects/Link2Chrome/test/*.mjs
-/Users/zhangyu/PycharmProjects/Link2Chrome/server/venv/bin/python -m pytest /Users/zhangyu/PycharmProjects/Link2Chrome/test
+node --test ../test/*.mjs
+../server/venv/bin/python -m pytest ../test
 ```
 
 Expected: PASS. If `server/venv` does not exist, create it with Python 3.10+ first.
@@ -1024,7 +1024,7 @@ Expected: PASS. If `server/venv` does not exist, create it with Python 3.10+ fir
 - [ ] **Step 8: Commit**
 
 ```bash
-git add /Users/zhangyu/PycharmProjects/Link2Chrome/README.md /Users/zhangyu/PycharmProjects/Link2Chrome/docs/2026-06-22-chromex-codex-plugin-plan.md
+git add ../README.md ../docs/2026-06-22-chromex-codex-plugin-plan.md
 git commit -m "docs: document chromex codex plugin"
 ```
 

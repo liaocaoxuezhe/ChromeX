@@ -608,6 +608,75 @@ class BrowserHubSessionV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hub._reconcile_state, "SUCCEEDED")
         self.assertEqual(attempts, 2)
 
+    async def test_reconcile_isolates_unrestorable_session_and_succeeds(self):
+        # A persisted ACTIVE session whose Chrome group was recycled mid-epoch
+        # must not fail reconciliation for every session: it is isolated as
+        # ORPHANED and the surviving session still comes back.
+        snapshot = self.registry.snapshot()
+        snapshot["browserEpoch"] = "epoch-a"
+
+        class PartialRecoveryExtension(RecordingExtension):
+            def __init__(self):
+                super().__init__()
+                self.restored = []
+
+            async def send_command(self, command, params):
+                self.calls.append((command, params))
+                if command == "session_snapshot":
+                    return {"browserEpoch": "epoch-a", "sessions": list(self.restored)}
+                if command == "session_restore_snapshot":
+                    # session-a's group is dead; only session-b comes back
+                    self.restored = [
+                        item for item in params["sessions"]
+                        if item["sessionId"] == "session-b"
+                    ]
+                    return {"ok": True, "restored": [item["sessionId"] for item in self.restored]}
+                return await super().send_command(command, params)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SessionStore(Path(directory) / "sessions.sqlite3")
+            store.save_snapshot(snapshot)
+            extension = PartialRecoveryExtension()
+            recovered = BrowserHub(
+                extension_ws=extension,
+                session_registry=SessionRegistry(),
+                session_store=store,
+                protocol_mode="v2",
+            )
+            result = await recovered._reconcile("restore", {"browserEpoch": "epoch-a"})
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["data"]["reason"], "exact-epoch")
+            sessions = {
+                item.session_id: item
+                for item in recovered.session_registry.list_sessions()
+            }
+            self.assertEqual(sessions["session-b"].state, "ACTIVE")
+            self.assertEqual(sessions["session-a"].state, "ORPHANED")
+            self.assertIsNone(sessions["session-a"].group_id)
+            self.assertIsNone(sessions["session-a"].target_tab_id)
+            persisted = store.load_snapshot("epoch-a")
+            by_id = {item["sessionId"]: item for item in persisted["sessions"]}
+            self.assertEqual(by_id["session-a"]["state"], "ORPHANED")
+            self.assertEqual(by_id["session-b"]["state"], "ACTIVE")
+
+    async def test_reconcile_isolates_unrestored_session_in_live_registry(self):
+        # Same as above but the hub Registry is already live (not restored from
+        # the store): the dead session is orphaned through the registry.
+        snapshot = self.registry.snapshot()
+        self.extension.mirror_sessions = [
+            item for item in snapshot["sessions"]
+            if item["sessionId"] != "session-a"
+        ]
+        result = await self.hub._reconcile("worker-restart", {"browserEpoch": "epoch-a"})
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["reason"], "extension-mirror-verified")
+        sessions = {item.session_id: item for item in self.hub.session_registry.list_sessions()}
+        self.assertEqual(sessions["session-b"].state, "ACTIVE")
+        self.assertEqual(sessions["session-a"].state, "ORPHANED")
+        self.assertIsNone(sessions["session-a"].group_id)
+
     async def test_legacy_status_and_v1_commands_remain_available(self):
         status = await self.hub._handle_adapter_message(
             json.dumps({"request_id": "status", "command": "__hub_status__", "params": {}})

@@ -470,7 +470,7 @@ await browser_send_keys({"keys": "Control+V"})
 
 ### Git 回滚
 ```bash
-cd /Users/zhangyu/PycharmProjects/Link2Chrome
+cd ..
 git stash  # 保存当前修改
 git checkout <phase1-tag>  # 回到第一阶段版本
 ```

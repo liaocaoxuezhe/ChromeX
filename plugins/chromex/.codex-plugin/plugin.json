@@ -1,6 +1,6 @@
 {
   "name": "chromex",
-  "version": "0.1.0+codex.20260715115924",
+  "version": "0.1.0+codex.20260812170000",
   "description": "ChromeX browser automation for Codex using Link2Chrome, a local MCP server, a Chrome extension, and a native messaging bridge.",
   "author": {
     "name": "ChromeX"

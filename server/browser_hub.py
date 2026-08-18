@@ -369,18 +369,64 @@ class BrowserHub:
             )
             extension = await self.extension_ws.send_command("session_snapshot", {})
         actual = {item.get("sessionId"): item for item in extension.get("sessions") or []}
-        expected_ids = {item.get("sessionId") for item in expected}
-        if set(actual) != expected_ids or any(
+        surviving = await self._isolate_unrestored(
+            expected, actual, registry_live, snapshot, browser_epoch
+        )
+        if set(actual) != {item["sessionId"] for item in surviving} or any(
             actual[item["sessionId"]].get("groupId") != item.get("groupId")
             or actual[item["sessionId"]].get("windowId") != item.get("windowId")
             or set(actual[item["sessionId"]].get("tabIds") or []) != set(item.get("tabIds") or [])
-            for item in expected
+            for item in surviving
         ):
             return self._ok(request_id, {"restored": 0, "reason": "ownership-ambiguous"})
         if registry_live:
-            return self._ok(request_id, {"restored": len(expected), "reason": "extension-mirror-verified"})
+            return self._ok(request_id, {"restored": len(surviving), "reason": "extension-mirror-verified"})
         restored = self.session_registry.restore_snapshot(snapshot, browser_epoch)
         return self._ok(request_id, {"restored": restored, "reason": "exact-epoch"})
+
+    async def _isolate_unrestored(
+        self,
+        expected: list[dict[str, Any]],
+        actual: dict[str, dict[str, Any]],
+        registry_live: bool,
+        snapshot: dict[str, Any],
+        browser_epoch: str,
+    ) -> list[dict[str, Any]]:
+        """Return expected Sessions the Extension mirrored, marking the rest ORPHANED.
+
+        An ACTIVE Session whose Chrome tab group was recycled mid-epoch cannot
+        be restored by the Extension. Isolating it here means one dead session
+        no longer fails reconciliation (and thus every browser mutation) for
+        the whole hub.
+        """
+        unrestored = [item for item in expected if item["sessionId"] not in actual]
+        if not unrestored:
+            return expected
+        dead_ids = {item["sessionId"] for item in unrestored}
+        if registry_live:
+            for item in unrestored:
+                await self.session_registry.orphan(
+                    session_id=item["sessionId"],
+                    expected_revision=item["revision"],
+                    operation_id=f"reconcile-orphan-{item['sessionId']}",
+                )
+            self._persist_snapshot(browser_epoch)
+        else:
+            for item in snapshot.get("sessions") or []:
+                if item.get("sessionId") not in dead_ids:
+                    continue
+                item["state"] = "ORPHANED"
+                item["groupId"] = None
+                item["windowId"] = None
+                item["targetTabId"] = None
+                item["tabIds"] = []
+                item["claimedTabIds"] = []
+                item["claimRestore"] = {}
+                if isinstance(item.get("revision"), int):
+                    item["revision"] += 1
+            if self.session_store is not None:
+                self.session_store.save_snapshot(snapshot)
+        return [item for item in expected if item["sessionId"] not in dead_ids]
 
     async def _ensure_reconciled(self) -> None:
         if self._reconcile_lock is None:

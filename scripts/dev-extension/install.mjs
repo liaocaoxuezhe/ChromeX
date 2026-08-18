@@ -19,6 +19,7 @@ export function computeExtensionIdFromKey(key) {
 export function createDevExtensionInstallPlan({
   projectRoot,
   manifest,
+  extensionDir = "extension",
   homeDir = os.homedir(),
 } = {}) {
   if (!projectRoot) {
@@ -28,9 +29,12 @@ export function createDevExtensionInstallPlan({
     throw new Error("extension manifest must include a stable key");
   }
   const extensionId = computeExtensionIdFromKey(manifest.key);
+  const resolvedExtensionDir = path.isAbsolute(extensionDir)
+    ? extensionDir
+    : path.join(projectRoot, extensionDir);
   return {
     extensionId,
-    extensionDir: path.join(projectRoot, "extension"),
+    extensionDir: resolvedExtensionDir,
     hostPath: path.join(projectRoot, "scripts", "native-host", "native-host.mjs"),
     manifestPath: getChromeNativeMessagingManifestPath({ homeDir }),
   };
@@ -38,17 +42,25 @@ export function createDevExtensionInstallPlan({
 
 export async function installDevExtensionBootstrap({
   projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+  extensionDir = process.env.LINK2CHROME_EXTENSION_DIR || "extension",
+  extraExtensionIds = (process.env.LINK2CHROME_EXTRA_EXTENSION_IDS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
   homeDir = os.homedir(),
   readFile = fs.promises.readFile,
   chmod = fs.promises.chmod,
 } = {}) {
-  const manifestPath = path.join(projectRoot, "extension", "manifest.json");
+  const resolvedExtensionDir = path.isAbsolute(extensionDir)
+    ? extensionDir
+    : path.join(projectRoot, extensionDir);
+  const manifestPath = path.join(resolvedExtensionDir, "manifest.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-  const plan = createDevExtensionInstallPlan({ projectRoot, manifest, homeDir });
+  const plan = createDevExtensionInstallPlan({ projectRoot, manifest, extensionDir, homeDir });
   await chmod(plan.hostPath, 0o755);
   const nativeHost = await installNativeHostManifest({
     hostPath: plan.hostPath,
-    extensionId: plan.extensionId,
+    extensionIds: [plan.extensionId, ...extraExtensionIds],
     manifestPath: plan.manifestPath,
   });
   return { ok: true, ...plan, nativeHost };

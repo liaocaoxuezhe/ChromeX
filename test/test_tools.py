@@ -5,8 +5,7 @@ Static tests for Link2Chrome MCP tool definitions.
 These tests validate the tool definitions in server.tool_descriptions
 without requiring a live browser or WebSocket connection.
 
-Run with:
-    cd /Users/zhangyu/PycharmProjects/Link2Chrome
+Run with (from the project root):
     server/venv/bin/python -m pytest test/test_tools.py -v
 """
 
