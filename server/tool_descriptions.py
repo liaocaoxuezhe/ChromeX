@@ -2,7 +2,7 @@
 """
 Link2Chrome Tool Descriptions 配置文件
 
-最终工具清单：26 个统一工具（browser_code_run 是唯一代码式浏览器控制入口）
+最终工具清单：29 个统一工具（browser_code_run 是唯一代码式浏览器控制入口）
 所有 MCP Tool 的 name、description、inputSchema 集中定义在此文件。
 """
 
@@ -189,7 +189,7 @@ TOOL_DEFINITIONS = [
         ),
     },
 
-    # ==================== 观测（7 个）====================
+    # ==================== 观测（8 个）====================
     {
         "name": "browser_tabs_list",
         "description": (
@@ -293,29 +293,59 @@ TOOL_DEFINITIONS = [
         ),
     },
     {
-        "name": "browser_dom_diff",
+        "name": "browser_dom_wait_for",
         "description": (
-            "Compare current page state with the previous snapshot.\n"
-            "- Same page: returns a text diff of structural changes\n"
-            "- Different page: returns navigation summary (from URL → to URL)\n\n"
+            "Wait until an element reaches a given state, then return.\n\n"
+            "**States:**\n"
+            "- `visible` (default): element exists, has layout size, and is not hidden by CSS\n"
+            "- `present`: element exists in the DOM (even if invisible)\n"
+            "- `hidden`: element is absent or hidden — use to wait for loaders/spinners to disappear\n"
+            "- `enabled`: visible and not disabled — use before clicking a disabled button\n\n"
             "**When to use:**\n"
-            "- After clicking a button, check what changed on the page\n"
-            "- After form submission, verify the result appeared\n\n"
+            "- After an action, wait for its result to appear: browser_dom_wait_for(selector='#result')\n"
+            "- Wait for a spinner to disappear: browser_dom_wait_for(selector='.spinner', state='hidden')\n"
+            "- Wait for a submit button to become clickable: browser_dom_wait_for(selector='#submit', state='enabled')\n\n"
             "**When NOT to use:**\n"
-            "- No previous dom_overview call in this session → call dom_overview first\n"
-            "- Need full page content → use browser_dom_get_text"
+            "- Pausing for dynamic content with no stable selector → use browser_wait\n"
+            "- Need element details right now → use browser_dom_query"
         ),
         "inputSchema": _obj_schema(
             {
-                "scope": {
+                "selector": {
                     "type": "string",
-                    "description": "CSS selector to limit diff scope. Defaults to full page.",
+                    "description": "CSS selector of the element to wait for.",
                 },
-                "max_chars": {
+                "state": {
+                    "type": "string",
+                    "enum": ["present", "visible", "hidden", "enabled"],
+                    "description": "Target state to wait for. Defaults to 'visible'.",
+                },
+                "timeout": {
                     "type": "integer",
-                    "description": "Maximum diff output length. Defaults to 10000.",
+                    "description": "Max wait in ms, clamped to 1000-25000. Defaults to 10000.",
                 },
-            }
+            },
+            ["selector"],
+        ),
+    },
+    {
+        "name": "browser_wait",
+        "description": (
+            "Pause for a number of seconds. Pure server-side sleep, no browser interaction.\n\n"
+            "**When to use:**\n"
+            "- SPA loading, debounce, or animation with no stable selector to wait on\n"
+            "- Friendly pacing between repeated actions\n\n"
+            "**When NOT to use:**\n"
+            "- A known selector marks the readiness point → use browser_dom_wait_for\n"
+            "- Waiting for a file to download → use wait_for_download"
+        ),
+        "inputSchema": _obj_schema(
+            {
+                "seconds": {
+                    "type": "number",
+                    "description": "Seconds to wait, clamped to 0.1-30. Defaults to 3.",
+                },
+            },
         ),
     },
     {
@@ -356,7 +386,7 @@ TOOL_DEFINITIONS = [
         ),
     },
 
-    # ==================== 交互（9 个）====================
+    # ==================== 交互（10 个）====================
     {
         "name": "action_click",
         "description": (
@@ -545,6 +575,41 @@ TOOL_DEFINITIONS = [
         ),
     },
     {
+        "name": "action_select_option",
+        "description": (
+            "Select an option in a native <select> dropdown by value, label, or index.\n"
+            "Dispatches input+change events so frameworks react.\n\n"
+            "**When to use:**\n"
+            "- Native <select>: action_select_option(target={selector: '#country'}, value='CN')\n"
+            "- Pick by visible text: action_select_option(target={selector: '#country'}, label='Germany')\n\n"
+            "**When NOT to use:**\n"
+            "- Custom dropdowns built with div/ul → use action_click to open, then click the option\n"
+            "- Typing into combobox/autocomplete inputs → use action_fill, then click the suggestion\n\n"
+            "On no match, the error lists all available options with value/label/disabled."
+        ),
+        "inputSchema": _obj_schema(
+            {
+                "target": {
+                    "type": "object",
+                    "description": "Target select: {selector: '...'} or {ariaLabel: '...'}.",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Match option by its value attribute.",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Match option by its visible text.",
+                },
+                "index": {
+                    "type": "integer",
+                    "description": "Match option by its 0-based index.",
+                },
+            },
+            ["target"],
+        ),
+    },
+    {
         "name": "action_press_key",
         "description": (
             "Press a keyboard key or shortcut combo.\n\n"
@@ -712,7 +777,29 @@ TOOL_DEFINITIONS = [
         ),
     },
 
-    # ==================== 导出与调试（5 个）====================
+    # ==================== 导出与调试（6 个）====================
+    {
+        "name": "wait_for_download",
+        "description": (
+            "Wait for a browser download to complete and return its info.\n"
+            "Each call consumes one completed download of the current tab (first in, first out).\n\n"
+            "**When to use:**\n"
+            "- After triggering a download link/button: wait_for_download()\n\n"
+            "**Notes:**\n"
+            "- The file lands in Chrome's default download directory; the returned filename is the suggested name\n"
+            "- Call this BEFORE or right after triggering the download; completed downloads returned by a previous call are consumed\n\n"
+            "**When NOT to use:**\n"
+            "- The click opens a preview tab instead of downloading → use browser_tabs_list to check"
+        ),
+        "inputSchema": _obj_schema(
+            {
+                "timeout": {
+                    "type": "integer",
+                    "description": "Max wait in ms, clamped to 1000-25000. Defaults to 25000.",
+                },
+            },
+        ),
+    },
     {
         "name": "save_as_pdf",
         "description": (
@@ -911,7 +998,7 @@ TOOL_DEFINITIONS = [
 ]
 
 
-# Public tool surface exposed to MCP clients — exactly 26 tools.
+# Public tool surface exposed to MCP clients — exactly 29 tools.
 PUBLIC_TOOL_NAMES = {
     "browser_navigate",
     "browser_tab",
@@ -921,7 +1008,8 @@ PUBLIC_TOOL_NAMES = {
     "browser_dom_query",
     "browser_dom_search",
     "browser_dom_get_text",
-    "browser_dom_diff",
+    "browser_dom_wait_for",
+    "browser_wait",
     "browser_screenshot",
     "action_click",
     "action_double_click",
@@ -929,6 +1017,7 @@ PUBLIC_TOOL_NAMES = {
     "action_scroll",
     "action_drag",
     "action_fill",
+    "action_select_option",
     "action_press_key",
     "upload_file",
     "handle_dialog",
@@ -939,6 +1028,7 @@ PUBLIC_TOOL_NAMES = {
     "network_check",
     "browser_scrape_with_scroll",
     "browser_diagnose",
+    "wait_for_download",
 }
 
 # Filter to ensure only public tools are exposed (defensive).
@@ -948,7 +1038,7 @@ TOOL_DEFINITIONS = [
 ]
 
 
-SESSION_SCOPED_TOOLS = PUBLIC_TOOL_NAMES - {"browser_diagnose", "browser_session"}
+SESSION_SCOPED_TOOLS = PUBLIC_TOOL_NAMES - {"browser_diagnose", "browser_session", "browser_wait"}
 
 for tool in TOOL_DEFINITIONS:
     if tool["name"] in SESSION_SCOPED_TOOLS:

@@ -170,7 +170,9 @@ class BrowserHub:
         request_id = None
         try:
             message = json.loads(raw_message)
-            request_id = message.get("request_id")
+            # V2 envelope 使用 camelCase 的 requestId，兼容两种命名，
+            # 确保异常路径构造的错误响应不丢失关联 ID
+            request_id = message.get("request_id") or message.get("requestId")
             command = message["command"]
             params = message.get("params") or {}
             self._release_expired_lease()

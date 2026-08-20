@@ -184,6 +184,7 @@ const SCOPE_REQUIRED_COMMANDS = new Set([
   "action_drag",
   "action_scroll",
   "action_hover",
+  "action_select_option",
   "upload_file",
   "handle_dialog",
   "wait_for_download",
@@ -1047,6 +1048,9 @@ async function handleCommand(message) {
       case "action_hover":
         response.data = await cmdActionHover(guardedParams);
         break;
+      case "action_select_option":
+        response.data = await cmdActionSelectOption(guardedParams);
+        break;
       case "upload_file":
         response.data = await cmdUploadFile(guardedParams);
         break;
@@ -1571,7 +1575,7 @@ async function waitForTabsNavigation(tabId, url, timeoutMs) {
     }, 100);
 
     chrome.tabs.onUpdated.addListener(listener);
-  }, params.tabId);
+  });
 }
 
 async function navigateWithTabs(url, timeoutMs, requestedTabId = null) {
@@ -2721,27 +2725,34 @@ async function cmdDomElementDetail(params) {
 async function cmdDomWaitFor(params) {
   const started = Date.now();
   const state = params.state || "visible";
-  const result = await evaluatePageFunction((params) => new Promise((resolve) => {
-    const deadline = Date.now() + (params.timeout || 10000);
-    const isOk = () => {
-      const el = document.querySelector(params.selector);
-      if (params.state === "hidden") return !el || getComputedStyle(el).display === "none" || getComputedStyle(el).visibility === "hidden";
-      if (!el) return false;
-      if (params.state === "present") return true;
-      const r = el.getBoundingClientRect();
-      const st = getComputedStyle(el);
-      const visible = r.width > 0 && r.height > 0 && st.display !== "none" && st.visibility !== "hidden" && st.opacity !== "0";
-      if (params.state === "enabled") return visible && !el.disabled && el.getAttribute("aria-disabled") !== "true";
-      return visible;
-    };
-    const tick = () => {
-      if (isOk()) resolve({ ok: true });
-      else if (Date.now() > deadline) resolve({ ok: false, error: "timeout" });
-      else setTimeout(tick, 150);
-    };
-    tick();
-  }), { ...params, state });
-  return { ...result, selector: params.selector, state, elapsed: Date.now() - started };
+  const timeout = params.timeout || 10000;
+  const deadline = started + timeout;
+  // 在扩展侧轮询：每次 Runtime.evaluate 立即返回，避免长等待把单条 CDP 命令拖到超时
+  while (true) {
+    let check = null;
+    try {
+      check = await evaluatePageFunction((p) => {
+        const el = document.querySelector(p.selector);
+        if (p.state === "hidden") return { ok: !el || getComputedStyle(el).display === "none" || getComputedStyle(el).visibility === "hidden" };
+        if (!el) return { ok: false };
+        if (p.state === "present") return { ok: true };
+        const r = el.getBoundingClientRect();
+        const st = getComputedStyle(el);
+        const visible = r.width > 0 && r.height > 0 && st.display !== "none" && st.visibility !== "hidden" && st.opacity !== "0";
+        if (p.state === "enabled") return { ok: visible && !el.disabled && el.getAttribute("aria-disabled") !== "true" };
+        return { ok: visible };
+      }, { selector: params.selector, state, tabId: params.tabId });
+    } catch (_) {
+      // 导航会切换执行上下文；继续轮询直到超时
+    }
+    if (check && check.ok) {
+      return { ok: true, selector: params.selector, state, elapsed: Date.now() - started };
+    }
+    if (Date.now() > deadline) {
+      return { ok: false, error: "timeout", selector: params.selector, state, elapsed: Date.now() - started };
+    }
+    await sleep(150);
+  }
 }
 
 async function cmdActionClick(params) {
@@ -2880,6 +2891,56 @@ async function cmdActionPressKey(params) {
   if (params.target?.selector) await cmdClick({ selector: params.target.selector, tabId: params.tabId });
   await cmdSendKeys({ keys: params.key, tabId: params.tabId });
   return { ok: true, key: params.key };
+}
+
+async function cmdActionSelectOption(params) {
+  const target = params.target || {};
+  let selector = target.selector;
+  if (!selector && target.ariaLabel) selector = `[aria-label*="${cssEscape(target.ariaLabel)}"]`;
+  if (!selector) throw new Error("action_select_option requires target.selector or target.ariaLabel");
+
+  const findMatch =
+    params.value !== undefined
+      ? `options.find(o => o.value === ${JSON.stringify(String(params.value))})`
+      : params.label !== undefined
+        ? `options.find(o => (o.textContent || "").trim() === ${JSON.stringify(String(params.label).trim())})`
+        : Number.isInteger(params.index)
+          ? `options[${params.index}]`
+          : null;
+  if (!findMatch) throw new Error("action_select_option requires one of value / label / index");
+
+  const result = await evalInPage(`(() => {
+    try {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return { ok: false, error: "selector not found" };
+      if (el.tagName !== "SELECT") return { ok: false, error: "element is <" + el.tagName.toLowerCase() + ">, not <select>" };
+      const options = Array.from(el.options);
+      const match = ${findMatch};
+      if (!match) {
+        return {
+          ok: false,
+          error: "no option matched the given value/label/index",
+          options: options.map(o => ({ value: o.value, label: (o.textContent || "").trim(), disabled: o.disabled })),
+        };
+      }
+      el.value = match.value;
+      match.selected = true;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return { ok: true, selected: { value: match.value, label: (match.textContent || "").trim(), index: match.index, disabled: match.disabled } };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  })()`, params.tabId);
+
+  if (!result || result.ok !== true) {
+    return {
+      ok: false,
+      error: (result && result.error) || "action_select_option failed",
+      options: (result && result.options) || undefined,
+    };
+  }
+  return result;
 }
 
 

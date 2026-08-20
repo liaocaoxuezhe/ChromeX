@@ -24,15 +24,15 @@ from server.tool_descriptions import TOOL_DEFINITIONS, PUBLIC_TOOL_NAMES
 
 # ==================== 1. Tool count ====================
 
-def test_tool_definitions_has_exactly_26_tools():
-    assert len(TOOL_DEFINITIONS) == 26, (
-        f"Expected 26 tools in TOOL_DEFINITIONS, got {len(TOOL_DEFINITIONS)}"
+def test_tool_definitions_has_exactly_29_tools():
+    assert len(TOOL_DEFINITIONS) == 29, (
+        f"Expected 29 tools in TOOL_DEFINITIONS, got {len(TOOL_DEFINITIONS)}"
     )
 
 
-def test_public_tool_names_has_exactly_26_entries():
-    assert len(PUBLIC_TOOL_NAMES) == 26, (
-        f"Expected 26 entries in PUBLIC_TOOL_NAMES, got {len(PUBLIC_TOOL_NAMES)}"
+def test_public_tool_names_has_exactly_29_entries():
+    assert len(PUBLIC_TOOL_NAMES) == 29, (
+        f"Expected 29 entries in PUBLIC_TOOL_NAMES, got {len(PUBLIC_TOOL_NAMES)}"
     )
 
 
@@ -55,7 +55,8 @@ REQUIRED_TOOLS = {
     "browser_dom_query",
     "browser_dom_search",
     "browser_dom_get_text",
-    "browser_dom_diff",
+    "browser_dom_wait_for",
+    "browser_wait",
     "browser_screenshot",
     "action_click",
     "action_double_click",
@@ -63,6 +64,7 @@ REQUIRED_TOOLS = {
     "action_scroll",
     "action_drag",
     "action_fill",
+    "action_select_option",
     "action_press_key",
     "upload_file",
     "handle_dialog",
@@ -73,6 +75,7 @@ REQUIRED_TOOLS = {
     "network_check",
     "browser_scrape_with_scroll",
     "browser_diagnose",
+    "wait_for_download",
 }
 
 
