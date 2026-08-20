@@ -33,7 +33,6 @@ from mcp.types import TextContent, ImageContent, Tool
 
 from server.hub_client import HubClient
 from server.dom_compressor import compress_dom
-from server.dom_snapshot_cache import DomSnapshotCache
 from server.logger import setup_logging, get_logger, get_operation_logger
 from server.debugger_manager import DebuggerManager
 from server.session_manager import SessionManager
@@ -63,7 +62,6 @@ op_logger = get_operation_logger()
 ws_manager = HubClient()
 debugger_manager = DebuggerManager(ws_manager=ws_manager)
 session_manager = SessionManager()
-dom_cache = DomSnapshotCache()
 playwright_runtime = PlaywrightRuntime()
 _claim_tokens: dict[str, int] = {}
 _tool_session_scheduler = SessionScheduler(max_concurrent_sessions=64)
@@ -110,6 +108,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
             result = await tool_diagnose(arguments)
             result_summary = _extract_result_summary(result)
             op_logger.log_operation(name, arguments, result_summary=result_summary)
+            return result
+
+        if name == "browser_wait":
+            # Pure server-side sleep: no browser round-trip, do not hold the hub operation lease.
+            try:
+                seconds = float(arguments.get("seconds", 3))
+            except (TypeError, ValueError):
+                seconds = 3.0
+            seconds = max(0.1, min(seconds, 30.0))
+            await asyncio.sleep(seconds)
+            result = _json_content({"ok": True, "waited": seconds})
+            op_logger.log_operation(name, arguments, result_summary=f"waited {seconds}s")
             return result
 
         if getattr(ws_manager, "protocol_mode", "v1") == "v2":
@@ -159,7 +169,7 @@ async def _route_tool_call(name: str, arguments: dict):
         "browser_dom_query",
         "browser_dom_search",
         "browser_dom_get_text",
-        "browser_dom_diff",
+        "browser_dom_wait_for",
         "browser_screenshot",
         "action_click",
         "action_double_click",
@@ -167,9 +177,11 @@ async def _route_tool_call(name: str, arguments: dict):
         "action_scroll",
         "action_drag",
         "action_fill",
+        "action_select_option",
         "action_press_key",
         "upload_file",
         "handle_dialog",
+        "wait_for_download",
         "script_evaluate",
         "console_check",
         "network_check",
@@ -211,6 +223,15 @@ def _require_session_arg(args: dict) -> str:
     if not isinstance(session, str) or not session.strip():
         raise ValueError("session is required for scoped browser control")
     return session.strip()
+
+
+def _clamp_ms(value, default: int, lo: int, hi: int) -> int:
+    """Clamp a millisecond timeout into [lo, hi]; stay below the Hub request timeout."""
+    try:
+        ms = int(value)
+    except (TypeError, ValueError):
+        ms = default
+    return max(lo, min(ms, hi))
 
 
 def _params_with_scope(params: dict, session: str) -> dict:
@@ -812,25 +833,32 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
         try:
             info = await _scoped_send("get_info", {}, session)
             current_url = info.get("url", "")
-            current_tab_id = info.get("tabId")
         except Exception:
             current_url = ""
-            current_tab_id = None
 
         raw_json = json.dumps(raw, ensure_ascii=False)
         markdown = compress_dom(raw_json, max_chars=args.get("max_chars", 30000))
-
-        if current_tab_id is not None:
-            dom_cache.save_snapshot(current_tab_id, current_url, markdown)
 
         return _json_content(
             {
                 "ok": True,
                 "url": current_url,
                 "overview": markdown,
-                "hint": "Use action_click / action_fill to interact. Use browser_dom_diff after actions to verify changes.",
+                "hint": "Use action_click / action_fill to interact. Use browser_dom_overview or browser_screenshot after actions to verify changes.",
             }
         )
+
+    if name == "browser_dom_wait_for":
+        session = _require_session_arg(args)
+        selector = args.get("selector")
+        if not selector:
+            return _json_content({"ok": False, "error": "selector is required"})
+        params = {
+            "selector": selector,
+            "state": args.get("state", "visible"),
+            "timeout": _clamp_ms(args.get("timeout"), 10000, 1000, 25000),
+        }
+        return _json_content(await _scoped_send("dom_wait_for", params, session))
 
     if name == "browser_dom_query":
         session = _require_session_arg(args)
@@ -944,32 +972,6 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                     "truncated": truncated,
                 }
             )
-
-    if name == "browser_dom_diff":
-        session = _require_session_arg(args)
-        try:
-            info = await _scoped_send("get_info", {}, session)
-            current_url = info.get("url", "")
-            current_tab_id = info.get("tabId")
-        except Exception:
-            return _json_content({"ok": False, "error": "无法获取当前页面信息"})
-
-        if current_tab_id is None:
-            return _json_content({"ok": False, "error": "无法确定当前标签页 ID"})
-
-        raw = await _scoped_send("dom_overview", args, session)
-        raw_json = json.dumps(raw, ensure_ascii=False)
-        current_overview = compress_dom(raw_json, max_chars=args.get("max_chars", 30000))
-
-        diff = dom_cache.compute_diff(current_tab_id, current_overview, current_url)
-
-        return _json_content(
-            {
-                "ok": True,
-                "diff": diff,
-                "hint": "Positive diff lines (+) are new content. Negative (-) are removed." if diff.startswith("---") else "",
-            }
-        )
 
     if name == "browser_screenshot":
         session = _require_session_arg(args)
@@ -1087,6 +1089,19 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
                 params["target"] = target
         return _json_content(await _scoped_send("type", params, session))
 
+    if name == "action_select_option":
+        session = _require_session_arg(args)
+        target = args.get("target")
+        if not isinstance(target, dict) or not (target.get("selector") or target.get("ariaLabel")):
+            return _json_content({"ok": False, "error": "target with selector or ariaLabel is required"})
+        params = {"target": target}
+        for key in ("value", "label", "index"):
+            if args.get(key) is not None:
+                params[key] = args[key]
+        if len(params) == 1:
+            return _json_content({"ok": False, "error": "one of value / label / index is required"})
+        return _json_content(await _scoped_send("action_select_option", params, session))
+
     if name == "action_press_key":
         session = _require_session_arg(args)
         return _json_content(await _scoped_send("action_press_key", args, session))
@@ -1098,6 +1113,18 @@ async def tool_agent_first(name: str, args: dict) -> list[TextContent | ImageCon
     if name == "handle_dialog":
         session = _require_session_arg(args)
         return _json_content(await _scoped_send("handle_dialog", args, session))
+
+    if name == "wait_for_download":
+        session = _require_session_arg(args)
+        params = {"timeout": _clamp_ms(args.get("timeout"), 25000, 1000, 25000)}
+        result = await _scoped_send("wait_for_download", params, session)
+        download = result.get("download") if isinstance(result, dict) else None
+        if isinstance(download, dict):
+            result = {
+                **result,
+                "hint": f"File saved to Chrome's default download directory as '{download.get('suggestedFilename') or download.get('filename') or 'unknown'}'.",
+            }
+        return _json_content(result)
 
     if name == "script_evaluate":
         session = _require_session_arg(args)

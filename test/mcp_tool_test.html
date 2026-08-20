@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>local-browser 工具测试页</title>
+</head>
+<body>
+  <h1>local-browser 工具验证页</h1>
+
+  <!-- 下拉框选择测试 -->
+  <label for="country">国家/地区：</label>
+  <select id="country" name="country">
+    <option value="cn">中国</option>
+    <option value="us">美国</option>
+    <option value="de">德国</option>
+    <option value="jp">日本</option>
+  </select>
+  <p>当前选中：<span id="country-label">中国</span></p>
+
+  <!-- 等待元素状态测试：3 秒后才显示 -->
+  <div id="late-element" style="display:none; padding:10px; background:#e8f5e9;">
+    我是延迟 3 秒出现的元素（用于 wait_for visible 测试）
+  </div>
+
+  <!-- 等待隐藏测试：5 秒后消失 -->
+  <div id="temp-spinner" style="padding:10px; background:#fff3e0;">
+    我是临时加载指示器，5 秒后消失（用于 wait_for hidden 测试）
+  </div>
+
+  <!-- 下载测试 -->
+  <p>
+    <a id="dl-link" href="mcp_download_sample.txt" download>点击下载测试文件</a>
+  </p>
+
+  <script>
+    // 3 秒后显示 late-element
+    setTimeout(function () {
+      document.getElementById('late-element').style.display = 'block';
+    }, 3000);
+
+    // 5 秒后隐藏 spinner
+    setTimeout(function () {
+      var s = document.getElementById('temp-spinner');
+      if (s) { s.remove(); }
+    }, 5000);
+
+    // select 变化时同步显示文案，便于验证
+    document.getElementById('country').addEventListener('change', function () {
+      document.getElementById('country-label').textContent =
+        this.options[this.selectedIndex].text;
+    });
+  </script>
+</body>
+</html>

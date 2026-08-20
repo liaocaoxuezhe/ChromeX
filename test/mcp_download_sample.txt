@@ -1,0 +1,3 @@
+这是 local-browser wait_for_download 工具的下载验证文件。
+Download test file for the local-browser MCP wait_for_download tool.
+生成时间：2026-08-20

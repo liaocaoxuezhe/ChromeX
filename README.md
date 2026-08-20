@@ -18,14 +18,15 @@ Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome 扩
 - **save_as_pdf**：通过 CDP `Page.printToPDF` 将当前页面保存为 PDF 文件。
 - **控制台 & 网络监控**：统一的 `console_check` 和 `network_check` 工具，支持捕获、查询、重放。
 
-## 工具列表（26 个）
+## 工具列表（29 个）
 
 | 类别 | 工具 |
 |------|------|
 | 导航 & 标签 | `browser_navigate`, `browser_tab`, `browser_tabs_list`, `browser_session` |
-| DOM 观察 | `browser_dom_overview`, `browser_dom_query`, `browser_dom_search`, `browser_dom_get_text`, `browser_dom_diff` |
+| DOM 观察 | `browser_dom_overview`, `browser_dom_query`, `browser_dom_search`, `browser_dom_get_text`, `browser_dom_wait_for` |
+| 等待 & 下载 | `browser_wait`, `wait_for_download` |
 | 截图 & 内容 | `browser_screenshot`, `browser_scrape_with_scroll` |
-| 动作 | `action_click`, `action_double_click`, `action_hover`, `action_scroll`, `action_drag`, `action_fill`, `action_press_key` |
+| 动作 | `action_click`, `action_double_click`, `action_hover`, `action_scroll`, `action_drag`, `action_fill`, `action_select_option`, `action_press_key` |
 | 文件 & 对话框 | `upload_file`, `handle_dialog` |
 | 脚本 & 自动化 | `browser_code_run`, `script_evaluate`, `save_as_pdf` |
 | 监控 & 诊断 | `console_check`, `network_check`, `browser_diagnose` |
@@ -37,9 +38,8 @@ Link2Chrome 是一个本地优先的浏览器自动化项目，通过 Chrome 扩
 ├── extension/                  # Chrome 扩展源码
 ├── server/                     # Python MCP Server
 │   ├── main.py                 # MCP 入口，call_tool 路由
-│   ├── tool_descriptions.py    # 26 个工具定义
+│   ├── tool_descriptions.py    # 29 个工具定义
 │   ├── session_manager.py      # Session → Chrome 标签组映射
-│   ├── dom_snapshot_cache.py   # DOM 快照与 diff 计算
 │   ├── dom_compressor.py       # DOM → Markdown 压缩
 │   └── playwright_runtime.py  # 旧 Extension 端运行时兼容代码
 ├── docs/                       # 使用说明和设计文档
